@@ -11,11 +11,12 @@ using BgMoveGen;
 /// ends, callers construct a fresh <see cref="GameState"/> against the same
 /// <see cref="Match"/> for the next game.
 ///
-/// On-roll-relative perspective: <see cref="Board"/> follows BgMoveGen's
-/// convention (positive = on-roll's checkers); <see cref="CubeOwner"/> values
+/// On-roll-relative perspective: <see cref="Board"/> follows BgDataTypes_Lib's
+/// "Mop" convention (positive = on-roll's checkers); <see cref="CubeOwner"/> values
 /// <see cref="BgDataTypes_Lib.CubeOwner.OnRoll"/> / <see cref="BgDataTypes_Lib.CubeOwner.Opponent"/>
-/// likewise label the current on-roll perspective. Both flip together when the
-/// turn passes — see <see cref="Referee.ApplyPlay"/>.
+/// likewise label the current on-roll perspective. Board, match scores, and
+/// cube ownership all flip together at a turn boundary — see
+/// <see cref="ApplyPlay(Play, int, int)"/>.
 /// </summary>
 public sealed class GameState
 {
@@ -83,13 +84,31 @@ public sealed class GameState
     }
 
     /// <summary>
-    /// Flip board points, swap match scores, and flip cube ownership labels.
-    /// Internal — invoked by <see cref="Referee.ApplyPlay"/> after move application
-    /// to maintain the on-roll-relative invariant. Not part of the public surface.
+    /// Apply a chosen play and transition the turn boundary: the board is
+    /// validated-and-applied (with perspective flip) via
+    /// <see cref="MoveGenerator.ApplyPlay(BoardState, Play, int, int)"/>, then
+    /// match score labels and cube-owner label flip to the new on-roll player.
+    /// After this call, <see cref="Board"/>, <see cref="Match"/>, and
+    /// <see cref="CubeOwner"/> are all expressed from the next mover's POV.
+    ///
+    /// <para>
+    /// This is the unified turn-transition primitive. Callers reasoning in
+    /// on-roll POV never need to flip explicitly. Bypassing this method (e.g.,
+    /// invoking <see cref="BoardState.ApplyPlay"/> on <see cref="Board"/>
+    /// directly) leaves the match scores and cube ownership unflipped — a
+    /// half-flipped, internally inconsistent state.
+    /// </para>
+    ///
+    /// <para>
+    /// Throw-before-mutate: if <paramref name="play"/> is illegal for the
+    /// current board and dice, <see cref="MoveGenerator.ApplyPlay(BoardState, Play, int, int)"/>
+    /// throws and no field on this <see cref="GameState"/> is mutated.
+    /// </para>
     /// </summary>
-    internal void SwapPerspective()
+    /// <exception cref="ArgumentException">The play is not legal from the current state and dice.</exception>
+    public void ApplyPlay(Play play, int die1, int die2)
     {
-        FlipBoardInPlace(Board);
+        MoveGenerator.ApplyPlay(Board, play, die1, die2);
         Match.SwapPerspective();
         CubeOwner = CubeOwner switch
         {
@@ -106,21 +125,6 @@ public sealed class GameState
         var boardCopy = new int[26];
         Array.Copy(Board.Points, boardCopy, 26);
         return new GameSnapshot(boardCopy, CubeSize, CubeOwner, Match.Snapshot());
-    }
-
-    private static void FlipBoardInPlace(BoardState board)
-    {
-        // Negate every value, then reverse the 26-element array. The result has
-        // [0] still meaning "opponent bar" (just relabeled — what was the on-roll
-        // bar at index 25 is now at index 0, and its sign was flipped from positive
-        // to negative, which is the new "opponent" perspective).
-        for (int i = 0; i < 26; i++)
-            board.Points[i] = -board.Points[i];
-
-        for (int lo = 0, hi = 25; lo < hi; lo++, hi--)
-            (board.Points[lo], board.Points[hi]) = (board.Points[hi], board.Points[lo]);
-
-        board.RecalcHighPoint();
     }
 
     private static bool IsPowerOfTwo(int n) => n > 0 && (n & (n - 1)) == 0;

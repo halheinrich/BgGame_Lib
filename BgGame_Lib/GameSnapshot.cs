@@ -10,9 +10,9 @@ using BgDataTypes_Lib;
 /// <see cref="GameState"/> do not affect snapshots already taken.
 ///
 /// All fields are on-roll-relative; the perspective at snapshot time is preserved.
-/// Layout of <see cref="Board"/> matches BgMoveGen.BoardState.Points and
-/// BgDataTypes_Lib's "Mop" convention: 26 elements, [0] = opponent bar,
-/// [1..24] = points, [25] = on-roll bar; positive = on-roll's checkers.
+/// Layout of <see cref="Board"/> matches BgDataTypes_Lib's "Mop" convention:
+/// 26 elements, [0] = opponent bar, [1..24] = points, [25] = on-roll bar;
+/// positive = on-roll's checkers.
 /// </summary>
 /// <param name="Board">26-element on-roll-relative point array (defensive copy).</param>
 /// <param name="CubeSize">Cube size (1, 2, 4, ...).</param>

@@ -1,6 +1,6 @@
 namespace BgGame_Lib;
 
-using BgMoveGen;
+using BgDataTypes_Lib;
 
 /// <summary>
 /// One play submitted by a quiz user, scored against the position's candidate

@@ -1,7 +1,6 @@
 namespace BgGame_Lib.Tests;
 
 using BgDataTypes_Lib;
-using BgMoveGen;
 
 public class RefereeTests
 {
@@ -90,60 +89,6 @@ public class RefereeTests
 
         Assert.NotNull(result);
         Assert.Equal(GameResultKind.WinBackgammon, result.Kind);
-    }
-
-    [Fact]
-    public void ApplyPlay_LegalPlay_AppliesAndFlipsPerspective()
-    {
-        var (game, referee) = NewStandardGame();
-
-        // Build a legal opening play (3-1: 8/5 6/5).
-        var legalPlays = MoveGenerator.GeneratePlays(game.Board, 3, 1);
-        Assert.NotEmpty(legalPlays);
-        var play = legalPlays[0];
-
-        var matchScoresBefore = (game.Match.OnRollScore, game.Match.OpponentScore);
-        // Capture pre-flip board.
-        var before = new int[26];
-        Array.Copy(game.Board.Points, before, 26);
-
-        referee.ApplyPlay(game, play, 3, 1);
-
-        // After flip: each new point = -before[25 - i].
-        for (int i = 0; i < 26; i++)
-        {
-            // We can't know the exact intermediate (post-apply pre-flip) board easily here,
-            // but we can confirm the perspective signed flip property holds: total positive
-            // checkers swap with total negative.
-        }
-
-        int newPositive = 0, newNegative = 0;
-        for (int i = 0; i < 26; i++)
-        {
-            if (game.Board.Points[i] > 0) newPositive += game.Board.Points[i];
-            else if (game.Board.Points[i] < 0) newNegative += -game.Board.Points[i];
-        }
-
-        // After the move + flip, the just-moved player's checkers are now negative;
-        // they had 15. The new on-roll (who hasn't moved) still has 15 positive.
-        Assert.Equal(15, newPositive);
-        Assert.Equal(15, newNegative);
-
-        // Score perspective swapped (both were 0 → still both 0 — assert no exception path).
-        Assert.Equal(matchScoresBefore.OnRollScore, game.Match.OnRollScore);
-        Assert.Equal(matchScoresBefore.OpponentScore, game.Match.OpponentScore);
-    }
-
-    [Fact]
-    public void ApplyPlay_IllegalPlay_Throws()
-    {
-        var (game, referee) = NewStandardGame();
-
-        // Construct a clearly illegal play: a single move that doesn't match dice.
-        var illegal = new Play();
-        illegal.Add(new Move(13, 7));  // 13 → 7 takes a 6, but dice are 3-1 below
-
-        Assert.Throws<ArgumentException>(() => referee.ApplyPlay(game, illegal, 3, 1));
     }
 
     [Fact]

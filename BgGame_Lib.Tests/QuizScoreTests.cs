@@ -1,6 +1,6 @@
 namespace BgGame_Lib.Tests;
 
-using BgMoveGen;
+using BgDataTypes_Lib;
 
 public class QuizScoreTests
 {

@@ -1,6 +1,6 @@
 namespace BgGame_Lib;
 
-using BgMoveGen;
+using BgDataTypes_Lib;
 
 /// <summary>
 /// One entry in a <see cref="Transcript"/> — an immutable record of a single

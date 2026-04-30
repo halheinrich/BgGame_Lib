@@ -21,7 +21,8 @@ public enum GameResultKind
 /// <see cref="OnRollWon"/> is from the perspective of the <see cref="GameState"/>
 /// the result was computed against — true when the on-roll player won, false
 /// when the opponent (typically the player who just moved, after
-/// <see cref="Referee.ApplyPlay"/> has flipped perspective) won.
+/// <see cref="GameState.ApplyPlay(BgDataTypes_Lib.Play, int, int)"/> has flipped
+/// perspective) won.
 /// </summary>
 /// <param name="Kind">Win type (single / gammon / backgammon).</param>
 /// <param name="OnRollWon">True iff the current on-roll player is the winner.</param>

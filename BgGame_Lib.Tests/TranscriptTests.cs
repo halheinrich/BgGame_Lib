@@ -1,7 +1,6 @@
 namespace BgGame_Lib.Tests;
 
 using BgDataTypes_Lib;
-using BgMoveGen;
 
 public class TranscriptTests
 {

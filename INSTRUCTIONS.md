@@ -21,10 +21,11 @@ https://github.com/halheinrich/BgGame_Lib — branch `main`.
 
 ## Depends on
 
-- **BgMoveGen** — `Play`, `Move`, `BoardState`, `MoveGenerator` (legal-play
-  enumeration and apply/undo).
-- **BgDataTypes_Lib** — `BgDecisionData`, `CubeOwner`, plus the enum's string
-  serialization contract.
+- **BgDataTypes_Lib** — `Move`, `Play`, `BoardState` (with public
+  `ApplyPlay` turn-boundary primitive), `BgDecisionData`, `CubeOwner`,
+  plus the enum's string serialization contract.
+- **BgMoveGen** — `MoveGenerator` (legal-play enumeration and the
+  validating turn-boundary `MoveGenerator.ApplyPlay`).
 
 ## Directory tree
 
@@ -42,7 +43,7 @@ BgGame_Lib/
   MatchSnapshot.cs        — immutable record
   MatchState.cs           — mutable: match length, scores, Crawford
   QuizScore.cs            — immutable cumulative score record
-  Referee.cs              — skeletal: end-of-game, ApplyPlay, ApplyCubeResponse
+  Referee.cs              — skeletal: end-of-game, ApplyCubeResponse
   SubmittedPlay.cs        — record: user play + matched candidate + equity loss
   Transcript.cs           — append-only ordered list of TranscriptEntry
   TranscriptEntry.cs      — abstract record + Play / Cube / GameEnded subtypes
@@ -94,7 +95,7 @@ remember which fields reset between games.
 ### On-roll-relative perspective
 
 All state is stored from the on-roll player's perspective, matching
-BgMoveGen's idiom and BgDataTypes_Lib's `Mop` convention:
+BgDataTypes_Lib's `Mop` convention:
 
 - `GameState.Board`: 26-element point array; positive = on-roll's checkers,
   negative = opponent's; `[0]` = opponent bar, `[25]` = on-roll bar.
@@ -103,19 +104,28 @@ BgMoveGen's idiom and BgDataTypes_Lib's `Mop` convention:
 - `GameState.CubeOwner`: `OnRoll` / `Opponent` / `Centered` likewise mean
   the current perspective's labels.
 
-The labels flip together when control passes between players. The flip is
-inlined inside `Referee.ApplyPlay` — there is no public `SwapPerspective`
-method on `MatchState` or `GameState`; both expose internal helpers
-consumed by the Referee, and `InternalsVisibleTo("BgGame_Lib.Tests")` makes
-them reachable from tests but not from external consumers. Holding the
-invariant inside the Referee means callers never see a non-on-roll-relative
-state.
+All three flip together when control passes between players. The single
+public turn-transition primitive is `GameState.ApplyPlay(play, die1, die2)`,
+which:
 
-The point-flip itself (negate every value, reverse the array) is implemented
-inline in `GameState.SwapPerspective`. The longer-term home is a public
-`Flip()` method on `BgMoveGen.BoardState` parallel to `Copy()` and
-`FromMop()`; that's a cross-submodule change deferred to a separate
-BgMoveGen session.
+1. Delegates to `MoveGenerator.ApplyPlay(Board, play, die1, die2)` —
+   validates the play is legal, applies all moves, and flips the board
+   atomically (`MoveGenerator.ApplyPlay` is the validating wrapper around
+   `BoardState.ApplyPlay` introduced in BgDataTypes_Lib / BgMoveGen).
+   Throw-before-mutate: an illegal play raises `ArgumentException` and
+   leaves the substrate untouched.
+2. Calls the internal `MatchState.SwapPerspective()` to swap the score
+   labels.
+3. Inlines the cube-owner switch (`OnRoll ↔ Opponent`, `Centered`
+   stays) on `GameState`.
+
+There is no public `SwapPerspective` / `Flip` surface on `GameState`,
+`MatchState`, or `BoardState`. The board-side `Flip()` is private inside
+`BoardState` (BgDataTypes_Lib); `MatchState.SwapPerspective` is internal
+and reached from tests via `InternalsVisibleTo("BgGame_Lib.Tests")`.
+External consumers reasoning in on-roll POV never need to flip directly —
+`GameState.ApplyPlay` is the only path that crosses a turn boundary, and
+half-flipped intermediate states are unreachable.
 
 ### Mutability decisions
 
@@ -157,17 +167,21 @@ The skeletal Referee covers:
    based on (a) whether the loser borne off any checkers and (b) whether the
    loser has a checker on the bar or in the winner's home board. Cube size
    is folded into the returned result via `GameResult.Points`.
-2. **Play application** — `ApplyPlay(GameState, Play, die1, die2)`. Validates
-   the play is one of `MoveGenerator.GeneratePlays`'s outputs (full
-   regenerate-and-compare, not a structural check). Applies each move via
-   `MoveGenerator.ApplyMove`. Flips perspective on the substrate
-   (board points, match scores, cube ownership).
-3. **Cube response application** —
+2. **Cube response application** —
    `ApplyCubeResponse(GameState, CubeAction) → GameResult?`. `Take` doubles
    the cube and transfers ownership to the responder; returns null. `Pass`
    returns a single-win `GameResult` at the pre-double cube value (state
    unchanged so the caller decides how to dispose of the game). Throws on
    `NoDouble` / `Double` — those are offer-side values.
+
+Play application is **not** on the Referee — it lives on
+`GameState.ApplyPlay(play, die1, die2)` (see "On-roll-relative
+perspective"). Turn-boundary mutation is a property of the game state
+itself; the validated apply primitive lives in BgMoveGen
+(`MoveGenerator.ApplyPlay`). Routing it through Referee would have
+re-implemented legality checking outside the move generator — an
+encapsulation leak — so the Referee owns only what is genuinely
+arbitration logic (game-end classification and cube-response handling).
 
 Out of skeletal scope (Phase 2+): driver loop / coroutine, time controls,
 post-Crawford automatic-doubling rules, match-end detection (which lives on
@@ -252,6 +266,7 @@ public sealed class GameState
     public CubeOwner CubeOwner { get; }
     public static GameState NewGame(MatchState match);
     public static GameState FromPosition(MatchState match, BoardState board, int cubeSize, CubeOwner cubeOwner);
+    public void ApplyPlay(Play play, int die1, int die2);   // unified turn-transition primitive
     public void DoubleCube();
     public GameSnapshot Snapshot();
 }
@@ -280,7 +295,6 @@ public interface ICubeAgent
 public sealed class Referee
 {
     public GameResult? IsGameOver(GameState state);
-    public void ApplyPlay(GameState state, Play play, int die1, int die2);
     public GameResult? ApplyCubeResponse(GameState state, CubeAction response);
 }
 
@@ -316,12 +330,16 @@ public sealed record QuizScore(int Submitted, int Correct, double TotalEquityLos
 
 ## Pitfalls
 
-- **Perspective flip happens inside `Referee.ApplyPlay`.** After a successful
-  `ApplyPlay` call, the new on-roll player is the opposite of the player
-  whose move was just applied. Callers that read `state.Board.Points` or
-  `state.Match.OnRollScore` immediately afterward see the new perspective.
-  Skipping the Referee — applying moves directly via `MoveGenerator.ApplyMove`
-  — leaves the substrate in a half-flipped, internally inconsistent state.
+- **`GameState.ApplyPlay` is the only turn-boundary primitive.** After a
+  successful call, the new on-roll player is the opposite of the player
+  whose move was just applied. Callers that read `state.Board.Points`,
+  `state.Match.OnRollScore`, or `state.CubeOwner` immediately afterward
+  see the new perspective. Bypassing it — invoking `state.Board.ApplyPlay`
+  directly — leaves match scores and cube ownership unflipped, producing a
+  half-flipped, internally inconsistent substrate. Validation
+  (throw-before-mutate) lives inside `MoveGenerator.ApplyPlay`, not in
+  `GameState`; an illegal play raises `ArgumentException` and leaves
+  every field untouched.
 - **`GameSnapshot.Board` is a defensive copy; live `Board` is not.**
   `GameState.Board` aliases the live `BoardState`; consumers that retain it
   alongside a `GameSnapshot` will see live mutations. The snapshot's
@@ -355,5 +373,5 @@ public sealed record QuizScore(int Submitted, int Correct, double TotalEquityLos
 ## Subproject-internal next steps
 
 None — surface complete for Phase 1 needs. Cross-cutting work (Phase 1
-wiring into BgQuiz_Blazor, future Phase 2+ modes, `BoardState.Flip()` on
-BgMoveGen) is tracked in the umbrella `INSTRUCTIONS.md`, not here.
+wiring into BgQuiz_Blazor, future Phase 2+ modes) is tracked in the
+umbrella `INSTRUCTIONS.md`, not here.

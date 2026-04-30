@@ -1,5 +1,6 @@
 namespace BgGame_Lib;
 
+using BgDataTypes_Lib;
 using BgMoveGen;
 
 /// <summary>
@@ -18,7 +19,8 @@ using BgMoveGen;
 ///
 /// Contract: the returned <see cref="Play"/> must be one of the legal plays for
 /// the supplied state and dice (i.e., present in <see cref="MoveGenerator.GeneratePlays"/>'s
-/// output). <see cref="Referee.ApplyPlay"/> validates this.
+/// output). <see cref="GameState.ApplyPlay(Play, int, int)"/> validates this at
+/// turn-boundary application via the BgMoveGen wrapper.
 /// </summary>
 public interface IPlayAgent
 {
