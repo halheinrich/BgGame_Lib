@@ -34,7 +34,7 @@ BgGame_Lib.slnx
 BgGame_Lib/
   BgGame_Lib.csproj
   CubeAction.cs           — enum: NoDouble | Double | Take | Pass
-  GameResult.cs           — record + GameResultKind enum (single/gammon/backgammon)
+  GameResult.cs           — record + GameResultKind enum (single / gammon / backgammon)
   GameSnapshot.cs         — immutable record (transcript-friendly)
   GameState.cs            — mutable: Board + cube state; aggregates a MatchState
   ICubeAgent.cs           — two-method interface (offer / response)
@@ -99,7 +99,7 @@ BgDataTypes_Lib's `Mop` convention:
 
 - `GameState.Board`: 26-element point array; positive = on-roll's checkers,
   negative = opponent's; `[0]` = opponent bar, `[25]` = on-roll bar.
-- `MatchState.OnRollScore` / `OpponentScore`: scores labelled relative to
+- `MatchState.OnRollScore` / `OpponentScore`: scores labeled relative to
   the active perspective.
 - `GameState.CubeOwner`: `OnRoll` / `Opponent` / `Centered` likewise mean
   the current perspective's labels.
@@ -123,7 +123,7 @@ There is no public `SwapPerspective` / `Flip` surface on `GameState`,
 `MatchState`, or `BoardState`. The board-side `Flip()` is private inside
 `BoardState` (BgDataTypes_Lib); `MatchState.SwapPerspective` is internal
 and reached from tests via `InternalsVisibleTo("BgGame_Lib.Tests")`.
-External consumers reasoning in on-roll POV never need to flip directly —
+External consumers reasoning in the on-roll perspective never need to flip directly —
 `GameState.ApplyPlay` is the only path that crosses a turn boundary, and
 half-flipped intermediate states are unreachable.
 
@@ -164,8 +164,8 @@ The skeletal Referee covers:
 
 1. **End-of-game detection** — `IsGameOver(GameState) → GameResult?`. Counts
    on-roll vs. opponent checkers; classifies single / gammon / backgammon
-   based on (a) whether the loser borne off any checkers and (b) whether the
-   loser has a checker on the bar or in the winner's home board. Cube size
+   based on (a) whether the loser has borne off any checkers and (b) whether
+   the loser has a checker on the bar or in the winner's home board. Cube size
    is folded into the returned result via `GameResult.Points`.
 2. **Cube response application** —
    `ApplyCubeResponse(GameState, CubeAction) → GameResult?`. `Take` doubles
@@ -344,27 +344,27 @@ public sealed record QuizScore(int Submitted, int Correct, double TotalEquityLos
   `GameState.Board` aliases the live `BoardState`; consumers that retain it
   alongside a `GameSnapshot` will see live mutations. The snapshot's
   `IReadOnlyList<int>` view is stable.
-- **Cube `DoubleCube` is illegal when opponent owns the cube.** From the
+- **`DoubleCube` is illegal when the opponent owns the cube.** From the
   current perspective, `CubeOwner.Opponent` means the opponent holds the
   cube and only they can offer; calling `DoubleCube` throws
   `InvalidOperationException`. Callers (typically `Referee.ApplyCubeResponse`
-  on a Take) drive this on legal pre-conditions, but external code that
-  constructs scenarios for testing must respect the rule.
+  on a Take) only invoke `DoubleCube` when the preconditions hold, but
+  external code that constructs scenarios for testing must respect the rule.
 - **Pass-side game result has cube size unchanged.** `Referee.ApplyCubeResponse`
   with `CubeAction.Pass` returns a `GameResult` carrying the *pre-double*
   cube size and does not mutate `GameState.CubeSize`. Callers that record
   the result and then continue using the same `GameState` for diagnostics
   or display see the cube at its old value, which is correct — the doubled
   cube would only have applied on Take.
-- **`IsCorrect` on `SubmittedPlay` is denormalised.** It encodes the same
+- **`IsCorrect` on `SubmittedPlay` is denormalized.** It encodes the same
   fact as `EquityLoss == 0.0`, but is stored as an explicit bool to keep
   the record self-describing for downstream display. Producers must keep
   the two consistent; consumers should not derive a different correctness
   rule (e.g., "within 0.001 equity").
 - **`IProblemSetSource.EnumerateAsync` is contractually re-iterable.** Implementations
   that wrap a one-shot resource (consumed upload, exhausted network stream)
-  must throw on second call rather than yielding silently empty — silent
-  empty would look like "no problems" to the consumer.
+  must throw on a second call rather than silently yielding an empty
+  sequence — an empty sequence would look like "no problems" to the consumer.
 - **`Match` aggregation, not ownership.** `GameState.Match` is a reference
   to a `MatchState` that may outlive the `GameState`. Mutations to the
   match (via `AwardGame`) persist into the next game's `GameState`. Do not
