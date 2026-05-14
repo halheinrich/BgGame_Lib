@@ -117,6 +117,7 @@ public class ProblemSetSourceContractTests
 
     private static BgDecisionData Decision(int seed) => new()
     {
+        Id = new XgpDecisionId("test.xgp"),
         Position = new PositionData
         {
             Mop = new int[26],
