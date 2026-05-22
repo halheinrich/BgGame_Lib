@@ -1,5 +1,7 @@
 namespace BgGame_Lib;
 
+using BgDataTypes_Lib;
+
 /// <summary>
 /// Skeletal turn-sequencing and end-of-game arbiter. Phase 1 scope:
 ///

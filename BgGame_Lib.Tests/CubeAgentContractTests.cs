@@ -1,5 +1,7 @@
 namespace BgGame_Lib.Tests;
 
+using BgDataTypes_Lib;
+
 public class CubeAgentContractTests
 {
     private sealed class FixedCubeAgent : ICubeAgent

@@ -1,5 +1,7 @@
 namespace BgGame_Lib;
 
+using BgDataTypes_Lib;
+
 /// <summary>
 /// Decision-maker for cube turns. Two methods, one per decision moment.
 ///

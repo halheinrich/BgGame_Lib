@@ -23,7 +23,7 @@ https://github.com/halheinrich/BgGame_Lib — branch `main`.
 
 - **BgDataTypes_Lib** — `Move`, `Play`, `BoardState` (with public
   `ApplyPlay` turn-boundary primitive), `BgDecisionData`, `CubeOwner`,
-  plus the enum's string serialization contract.
+  `CubeAction`, plus the enums' string serialization contract.
 - **BgMoveGen** — `MoveGenerator` (legal-play enumeration and the
   validating turn-boundary `MoveGenerator.ApplyPlay`).
 
@@ -33,7 +33,6 @@ https://github.com/halheinrich/BgGame_Lib — branch `main`.
 BgGame_Lib.slnx
 BgGame_Lib/
   BgGame_Lib.csproj
-  CubeAction.cs           — enum: NoDouble | Double | Take | Pass
   GameResult.cs           — record + GameResultKind enum (single / gammon / backgammon)
   GameSnapshot.cs         — immutable record (transcript-friendly)
   GameState.cs            — mutable: Board + cube state; aggregates a MatchState
@@ -277,7 +276,8 @@ public sealed record GameSnapshot(IReadOnlyList<int> Board, int CubeSize, CubeOw
 // Result types
 public enum GameResultKind { WinSingle = 1, WinGammon = 2, WinBackgammon = 3 }
 public sealed record GameResult(GameResultKind Kind, bool OnRollWon, int CubeSize) { public int Points { get; } }
-public enum CubeAction { NoDouble, Double, Take, Pass }
+// CubeAction (NoDouble | Double | Take | Pass) is defined in BgDataTypes_Lib;
+// the signatures below consume it.
 
 // Agents
 public interface IPlayAgent
