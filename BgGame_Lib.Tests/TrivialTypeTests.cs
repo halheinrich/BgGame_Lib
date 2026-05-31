@@ -39,4 +39,17 @@ public class TrivialTypeTests
 
         Assert.Equal(a, b);
     }
+
+    [Fact]
+    public void SubmittedCubeAction_RecordEqualityHoldsByValue()
+    {
+        var decision = new CubeDecisionPair(CubeAction.Double, CubeAction.Take);
+
+        var a = new SubmittedCubeAction(decision,
+            DoublerEquityLoss: 0.0, TakerEquityLoss: 0.08, DoublerCorrect: true, TakerCorrect: false);
+        var b = new SubmittedCubeAction(decision,
+            DoublerEquityLoss: 0.0, TakerEquityLoss: 0.08, DoublerCorrect: true, TakerCorrect: false);
+
+        Assert.Equal(a, b);
+    }
 }

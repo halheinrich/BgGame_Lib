@@ -41,8 +41,10 @@ BgGame_Lib/
   IProblemSetSource.cs    — re-iterable IAsyncEnumerable<BgDecisionData>
   MatchSnapshot.cs        — immutable record
   MatchState.cs           — mutable: match length, scores, Crawford
-  QuizScore.cs            — immutable cumulative score record
+  QuizScore.cs            — immutable cumulative score: play / double / take segments + derived total
   Referee.cs              — skeletal: end-of-game, ApplyCubeResponse
+  ScoreSegment.cs         — immutable per-category running tally (submitted / correct / equity loss)
+  SubmittedCubeAction.cs  — record: user cube decision + per-half (doubler/taker) results
   SubmittedPlay.cs        — record: user play + matched candidate + equity loss
   Transcript.cs           — append-only ordered list of TranscriptEntry
   TranscriptEntry.cs      — abstract record + Play / Cube / GameEnded subtypes
@@ -54,6 +56,7 @@ BgGame_Lib.Tests/
   PlayAgentContractTests.cs
   ProblemSetSourceContractTests.cs
   QuizScoreTests.cs
+  ScoreSegmentTests.cs
   RefereeTests.cs
   TranscriptTests.cs
   TrivialTypeTests.cs
@@ -131,7 +134,7 @@ half-flipped intermediate states are unreachable.
 | Type | Mutability | Rationale |
 |---|---|---|
 | `MatchState`, `GameState`, `Transcript` | Mutable, append-only or method-driven transitions | Game and match progression naturally mutate; matches BgMoveGen's apply/undo idiom. |
-| `MatchSnapshot`, `GameSnapshot`, `TranscriptEntry` and subtypes, `GameResult`, `SubmittedPlay`, `QuizScore` | Immutable records, init-only / by-value | Transcript-friendly; safe to share across threads and across history. |
+| `MatchSnapshot`, `GameSnapshot`, `TranscriptEntry` and subtypes, `GameResult`, `SubmittedPlay`, `SubmittedCubeAction`, `ScoreSegment`, `QuizScore` | Immutable records, init-only / by-value | Transcript-friendly; safe to share across threads and across history. |
 
 `Snapshot()` methods on `MatchState` and `GameState` produce immutable
 records. `GameSnapshot.Board` is a defensive copy of `BoardState.Points`,
@@ -219,16 +222,41 @@ consuming quiz controller.
 
 ### Quiz-result records
 
-`SubmittedPlay` captures one user play scored against a position's
+**`SubmittedPlay`** captures one user play scored against a position's
 candidates: the chosen `Play`, the matched-candidate index (nullable for
 analysis omissions), the equity loss vs. best, and an `IsCorrect` flag.
 
-`QuizScore` is an immutable cumulative record (`Submitted`, `Correct`,
-`TotalEquityLoss`, derived `AverageEquityLoss`). `Plus(SubmittedPlay)` folds
-in a new submission and returns a fresh score; this lets consumer state
-machines hold prior scores without aliasing, fitting Razor's
-render-state model. The per-problem history is intentionally not in the
-score — consumers that need it keep an `IReadOnlyList<SubmittedPlay>`
+**`SubmittedCubeAction`** is the cube analog — the scored carrier for one
+cube position. A cube position is two independent atomic decisions (the
+doubler's offer choice and the taker's response choice), so the record holds
+the user's `CubeDecisionPair` plus a per-half result for each side:
+`DoublerEquityLoss` / `TakerEquityLoss` and `DoublerCorrect` / `TakerCorrect`.
+The four result fields are pre-computed consumer-side from the position's
+analysis (`DecisionData.DoublerActionError` / `TakerActionError` against
+`BestDoublerAction` / `BestTakerAction`); this library only carries and
+accumulates them.
+
+**`ScoreSegment`** is the single accumulation primitive: an immutable
+`(Submitted, Correct, TotalEquityLoss)` tally with derived `AverageEquityLoss`
+and `Accuracy` (the correct/submitted fraction in [0, 1] — percentage
+rendering is a display concern left to the consumer). `Add(submitted, correct,
+loss)` and `operator +` both return a fresh segment; `Add` is defined in terms
+of `operator +`, so component-wise combination has one definition.
+`operator +` null-guards both operands (records are reference types).
+
+**`QuizScore`** is an immutable cumulative record holding three independent
+`ScoreSegment`s — `PlayDecisions`, `DoubleDecisions`, `TakeDecisions` — plus a
+derived `Total` (their sum via `operator +`, never stored, so it cannot drift).
+Two overloads fold submissions in and return a fresh score (no aliasing, fitting
+Razor's render-state model):
+
+- `Plus(SubmittedPlay)` adds one submission to `PlayDecisions`.
+- `Plus(SubmittedCubeAction)` adds **one submission to each** of
+  `DoubleDecisions` and `TakeDecisions` — a cube position scores its doubler
+  and taker halves independently; there is no combine rule across the two.
+
+The per-problem history is intentionally not in the score — consumers that
+need it keep an `IReadOnlyList<SubmittedPlay>` / `SubmittedCubeAction`
 alongside.
 
 ### Why these types live here, not in BgDataTypes_Lib
@@ -320,11 +348,26 @@ public interface IProblemSetSource
 
 // Quiz scoring
 public sealed record SubmittedPlay(Play UserPlay, int? MatchedCandidateIndex, double EquityLoss, bool IsCorrect);
-public sealed record QuizScore(int Submitted, int Correct, double TotalEquityLoss)
+public sealed record SubmittedCubeAction(
+    CubeDecisionPair UserDecision,
+    double DoublerEquityLoss, double TakerEquityLoss,
+    bool DoublerCorrect, bool TakerCorrect);
+
+public sealed record ScoreSegment(int Submitted, int Correct, double TotalEquityLoss)
+{
+    public static ScoreSegment Empty { get; }
+    public double AverageEquityLoss { get; }   // 0 when none submitted
+    public double Accuracy { get; }            // Correct / Submitted, in [0, 1]; 0 when none submitted
+    public ScoreSegment Add(int submitted, int correct, double loss);
+    public static ScoreSegment operator +(ScoreSegment a, ScoreSegment b);   // null-guards both operands
+}
+
+public sealed record QuizScore(ScoreSegment PlayDecisions, ScoreSegment DoubleDecisions, ScoreSegment TakeDecisions)
 {
     public static QuizScore Empty { get; }
-    public double AverageEquityLoss { get; }
+    public ScoreSegment Total { get; }         // derived: PlayDecisions + DoubleDecisions + TakeDecisions
     public QuizScore Plus(SubmittedPlay play);
+    public QuizScore Plus(SubmittedCubeAction cube);   // one double + one take decision
 }
 ```
 
