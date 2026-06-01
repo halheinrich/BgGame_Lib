@@ -73,7 +73,7 @@ ships the abstractions; concrete implementations of `IPlayAgent`,
 BgQuiz_Blazor; future: BgRLEngine inference wrapper, online evaluator
 harnesses, problem-set hosting backends). Phase 1 quiz mode exercises only a
 slice (the play-grader as a passive `IPlayAgent`, a server-disk
-`IProblemSetSource`); the rest is built ahead per CLAUDE.md "Best-practice
+`IProblemSetSource`); the rest is built ahead per ../AGENTS.md "Best-practice
 bias" so Phase 2+ modes plug in without rewrite.
 
 ### State composition
