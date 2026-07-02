@@ -37,10 +37,13 @@ BgGame_Lib/
   GameSnapshot.cs         — immutable record (transcript-friendly)
   GameState.cs            — mutable: Board + cube state; aggregates a MatchState
   ICubeAgent.cs           — two-method interface (offer / response)
+  IDiceSource.cs          — dice seam: Roll() → (Die1, Die2); driver-side only
   IPlayAgent.cs           — async Play decision interface
   IProblemSetSource.cs    — re-iterable IAsyncEnumerable<BgDecisionData>
   MatchSnapshot.cs        — immutable record
   MatchState.cs           — mutable: match length, scores, Crawford
+  RecordedDiceSource.cs   — replays a fixed roll sequence; throws when exhausted
+  SeededDiceSource.cs     — Random(seed)-backed reproducible rolls
   QuizScore.cs            — immutable cumulative score: play / double / take segments + derived total
   Referee.cs              — skeletal: end-of-game, ApplyCubeResponse
   ScoreSegment.cs         — immutable per-category running tally (submitted / correct / equity loss)
@@ -51,6 +54,7 @@ BgGame_Lib/
 BgGame_Lib.Tests/
   BgGame_Lib.Tests.csproj
   CubeAgentContractTests.cs
+  DiceSourceTests.cs
   GameStateTests.cs
   MatchStateTests.cs
   PlayAgentContractTests.cs
@@ -140,6 +144,31 @@ half-flipped intermediate states are unreachable.
 records. `GameSnapshot.Board` is a defensive copy of `BoardState.Points`,
 so subsequent mutations of the live board do not retroactively change a
 snapshot already captured.
+
+### Dice abstraction
+
+The library contains no ambient randomness — all dice enter through the
+`IDiceSource` seam, and rolling is strictly a driver/server-side concern:
+agents never roll and never see the source (server-authoritative dice for
+the tournament arcs). `Roll()` returns a named tuple `(int Die1, int Die2)`
+matching the codebase-wide two-int dice convention rather than introducing
+a dice struct.
+
+Two implementations ship here:
+
+- `SeededDiceSource` — `Random(seed)`-backed; the same seed yields the same
+  sequence within a .NET runtime version (seeded `Random` uses the
+  framework's compat algorithm — stable in practice, not contractually
+  guaranteed across major versions). Sufficient for deterministic tests and
+  replayable in-proc matches; audit-grade owned-algorithm dice are a later
+  tournament-fairness arc.
+- `RecordedDiceSource` — replays a fixed sequence (deterministic tests now;
+  duplicate-dice tournament pairings later). Validates eagerly at
+  construction, copies its input, and throws `InvalidOperationException`
+  when exhausted rather than wrapping around — recycled dice would corrupt
+  the determinism the source exists for.
+
+Neither is thread-safe; use one instance per driver.
 
 ### Agent abstractions
 
@@ -306,6 +335,25 @@ public enum GameResultKind { WinSingle = 1, WinGammon = 2, WinBackgammon = 3 }
 public sealed record GameResult(GameResultKind Kind, bool OnRollWon, int CubeSize) { public int Points { get; } }
 // CubeAction (NoDouble | Double | Take | Pass) is defined in BgDataTypes_Lib;
 // the signatures below consume it.
+
+// Dice
+public interface IDiceSource
+{
+    (int Die1, int Die2) Roll();   // each die 1–6
+}
+
+public sealed class SeededDiceSource : IDiceSource
+{
+    public SeededDiceSource(int seed);
+    public (int Die1, int Die2) Roll();
+}
+
+public sealed class RecordedDiceSource : IDiceSource
+{
+    public RecordedDiceSource(IEnumerable<(int Die1, int Die2)> rolls);   // eager validation; copies input
+    public int Remaining { get; }
+    public (int Die1, int Die2) Roll();   // InvalidOperationException when exhausted
+}
 
 // Agents
 public interface IPlayAgent
