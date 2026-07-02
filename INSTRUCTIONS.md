@@ -145,6 +145,32 @@ records. `GameSnapshot.Board` is a defensive copy of `BoardState.Points`,
 so subsequent mutations of the live board do not retroactively change a
 snapshot already captured.
 
+### Substrate-enforced cube legality
+
+Consumers must not need match context to avoid an illegal double — the
+state itself refuses (encapsulation principle). Two distinct predicates,
+deliberately not overloaded onto one flag:
+
+- **Cube availability** — `MatchState.HasCube`: false only for a 1-point
+  match. With a single point at stake there is nothing to double for; the
+  cube never enters play, so no Crawford game exists either. (Some external
+  match-record conventions label 1-point-match games "Crawford"; this
+  library deliberately does not — Crawford is a mid-match suspension of a
+  *live* cube. `FromScores` fails fast on `matchLength: 1, isCrawford:
+  true`; callers importing such records normalize first.)
+- **Crawford suspension** — `MatchState.IsCrawford`: event-triggered, only
+  ever set by the `AwardGame` transition (a side reaching MatchLength − 1
+  in a match of length ≥ 2), cleared when the Crawford game is played.
+
+`GameState.CanDouble` composes them with ownership: has-cube ∧ not-Crawford
+∧ cube centered-or-on-roll-owned. `DoubleCube` enforces the same rule
+(throws `InvalidOperationException` with a reason-specific message);
+`CanDouble` is the queryable form so drivers gate the pre-roll cube window
+without try/catch. The rule and its messages are single-sourced in a
+private `DoubleRefusalReason` helper on `GameState`. Turn-sequencing
+legality (no double before a game's opening roll) is a driver concern, not
+encoded in the state.
+
 ### Dice abstraction
 
 The library contains no ambient randomness — all dice enter through the
@@ -307,9 +333,11 @@ public sealed class MatchState
     public int OnRollScore { get; }
     public int OpponentScore { get; }
     public bool IsCrawford { get; }
+    public bool HasCube { get; }               // false only for 1-point matches
     public bool IsMatchOver { get; }
     public static MatchState NewMatch(int matchLength);
     public static MatchState FromScores(int matchLength, int onRollScore, int opponentScore, bool isCrawford);
+        // throws on isCrawford with matchLength 0 (money) or 1 (no cube to suspend)
     public void AwardGame(GameResult result);
     public MatchSnapshot Snapshot();
 }
@@ -320,10 +348,11 @@ public sealed class GameState
     public MatchState Match { get; }
     public int CubeSize { get; }
     public CubeOwner CubeOwner { get; }
+    public bool CanDouble { get; }             // has-cube ∧ not-Crawford ∧ centered-or-on-roll-owned
     public static GameState NewGame(MatchState match);
     public static GameState FromPosition(MatchState match, BoardState board, int cubeSize, CubeOwner cubeOwner);
     public void ApplyPlay(Play play, int die1, int die2);   // unified turn-transition primitive
-    public void DoubleCube();
+    public void DoubleCube();                  // throws unless CanDouble
     public GameSnapshot Snapshot();
 }
 
@@ -435,12 +464,15 @@ public sealed record QuizScore(ScoreSegment PlayDecisions, ScoreSegment DoubleDe
   `GameState.Board` aliases the live `BoardState`; consumers that retain it
   alongside a `GameSnapshot` will see live mutations. The snapshot's
   `IReadOnlyList<int>` view is stable.
-- **`DoubleCube` is illegal when the opponent owns the cube.** From the
-  current perspective, `CubeOwner.Opponent` means the opponent holds the
-  cube and only they can offer; calling `DoubleCube` throws
-  `InvalidOperationException`. Callers (typically `Referee.ApplyCubeResponse`
-  on a Take) only invoke `DoubleCube` when the preconditions hold, but
-  external code that constructs scenarios for testing must respect the rule.
+- **`DoubleCube` legality is substrate-enforced — three refusal cases.**
+  It throws `InvalidOperationException` when the match has no cube (1-point
+  match), during the Crawford game, or when the opponent owns the cube.
+  Gate on `GameState.CanDouble` instead of catching. Note the model: a
+  1-point match is *cubeless*, not Crawford — `NewMatch(1)` has
+  `HasCube == false` and `IsCrawford` stays false for the whole match, and
+  `FromScores(matchLength: 1, ..., isCrawford: true)` throws. External
+  data that labels 1-point-match games "Crawford" must be normalized
+  before construction.
 - **Pass-side game result has cube size unchanged.** `Referee.ApplyCubeResponse`
   with `CubeAction.Pass` returns a `GameResult` carrying the *pre-double*
   cube size and does not mutate `GameState.CubeSize`. Callers that record

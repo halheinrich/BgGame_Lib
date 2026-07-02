@@ -212,6 +212,95 @@ public class GameStateTests
         Assert.Equal(cubeOwnerBefore, game.CubeOwner);
     }
 
+    // ── Cube legality: substrate-enforced (CanDouble + DoubleCube guards) ──
+
+    [Theory]
+    [InlineData(CubeOwner.Centered, true)]
+    [InlineData(CubeOwner.OnRoll, true)]
+    [InlineData(CubeOwner.Opponent, false)]
+    public void CanDouble_ReflectsCubeOwnership(CubeOwner owner, bool expected)
+    {
+        var match = MatchState.NewMatch(7);
+        var game = GameState.FromPosition(match, BoardState.Standard(), cubeSize: 2, cubeOwner: owner);
+
+        Assert.Equal(expected, game.CanDouble);
+    }
+
+    [Fact]
+    public void CanDouble_MoneyGame_True()
+    {
+        var match = MatchState.NewMatch(0);
+        var game = GameState.NewGame(match);
+
+        Assert.True(game.CanDouble);
+    }
+
+    [Fact]
+    public void CanDouble_CrawfordGame_False()
+    {
+        var match = MatchState.FromScores(matchLength: 5, onRollScore: 4, opponentScore: 2, isCrawford: true);
+        var game = GameState.NewGame(match);
+
+        Assert.False(game.CanDouble);
+    }
+
+    [Fact]
+    public void DoubleCube_CrawfordGame_Throws()
+    {
+        var match = MatchState.FromScores(matchLength: 5, onRollScore: 4, opponentScore: 2, isCrawford: true);
+        var game = GameState.NewGame(match);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => game.DoubleCube());
+        Assert.Contains("Crawford", ex.Message);
+    }
+
+    [Fact]
+    public void CanDouble_OnePointMatch_False()
+    {
+        // No cube in a 1-point match — regardless of nominal ownership.
+        var match = MatchState.NewMatch(1);
+        var game = GameState.NewGame(match);
+
+        Assert.False(game.CanDouble);
+    }
+
+    [Fact]
+    public void DoubleCube_OnePointMatch_Throws()
+    {
+        var match = MatchState.NewMatch(1);
+        var game = GameState.NewGame(match);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => game.DoubleCube());
+        Assert.Contains("1-point match", ex.Message);
+    }
+
+    [Fact]
+    public void OnePointMatch_SnapshotReadsAsCubeless()
+    {
+        // No special casing anywhere: the cube simply never moves off 1/centered,
+        // and the snapshot reports exactly that.
+        var match = MatchState.NewMatch(1);
+        var game = GameState.NewGame(match);
+        var snap = game.Snapshot();
+
+        Assert.Equal(1, snap.CubeSize);
+        Assert.Equal(CubeOwner.Centered, snap.CubeOwner);
+        Assert.False(snap.Match.IsCrawford);
+    }
+
+    [Fact]
+    public void DoubleCube_PostCrawford_Allowed()
+    {
+        // Crawford game played (flag cleared); doubling resumes.
+        var match = MatchState.FromScores(matchLength: 5, onRollScore: 4, opponentScore: 2, isCrawford: false);
+        var game = GameState.NewGame(match);
+
+        game.DoubleCube();
+
+        Assert.Equal(2, game.CubeSize);
+        Assert.Equal(CubeOwner.Opponent, game.CubeOwner);
+    }
+
     private static int SumPositive(BoardState b)
     {
         int s = 0;

@@ -18,8 +18,9 @@ using BgDataTypes_Lib;
 ///
 /// Out of skeletal scope (deferred to Phase 2+): driver loop / coroutine,
 /// time controls, post-Crawford automatic doubling, match-end detection
-/// (which lives on <see cref="MatchState.IsMatchOver"/>), legal-to-offer
-/// validation against full match context.
+/// (which lives on <see cref="MatchState.IsMatchOver"/>). Legal-to-offer
+/// validation is substrate-enforced on the state itself — see
+/// <see cref="GameState.CanDouble"/> / <see cref="GameState.DoubleCube"/>.
 /// </summary>
 public sealed class Referee
 {

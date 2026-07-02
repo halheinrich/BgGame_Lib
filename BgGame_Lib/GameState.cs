@@ -69,15 +69,42 @@ public sealed class GameState
     }
 
     /// <summary>
+    /// True iff the on-roll player may legally offer a double right now:
+    /// the match has a cube at all (<see cref="MatchState.HasCube"/> — false in
+    /// a 1-point match), the current game is not the Crawford game, and the
+    /// cube is centered or owned by the on-roll player.
+    ///
+    /// This is the queryable form of the <see cref="DoubleCube"/> guard —
+    /// drivers gate the pre-roll cube window on it instead of catching the
+    /// exception. Turn-sequencing legality (e.g., no double before a game's
+    /// opening roll) is a driver concern, not encoded here.
+    /// </summary>
+    public bool CanDouble => DoubleRefusalReason is null;
+
+    /// <summary>
+    /// Single source for the cube-legality rule and its diagnostic messages:
+    /// null when doubling is legal, otherwise the reason it is not.
+    /// <see cref="CanDouble"/> and <see cref="DoubleCube"/> both read it.
+    /// </summary>
+    private string? DoubleRefusalReason =>
+        !Match.HasCube ? "a 1-point match has no doubling cube"
+        : Match.IsCrawford ? "doubling is prohibited during the Crawford game"
+        : CubeOwner == CubeOwner.Opponent ? "the cube is currently owned by the opponent"
+        : null;
+
+    /// <summary>
     /// Double the cube and transfer ownership to the responder (the current
     /// opponent). Called by <see cref="Referee"/> on a Take response.
+    ///
+    /// Legality is substrate-enforced (see <see cref="CanDouble"/>): callers
+    /// do not need match context to avoid an illegal double — the state
+    /// itself refuses.
     /// </summary>
-    /// <exception cref="InvalidOperationException">Cube is owned by the opponent (only the owner or a centered-cube holder may offer).</exception>
+    /// <exception cref="InvalidOperationException">Doubling is illegal here: the match has no cube (1-point match), the current game is the Crawford game, or the cube is owned by the opponent.</exception>
     public void DoubleCube()
     {
-        if (CubeOwner == CubeOwner.Opponent)
-            throw new InvalidOperationException(
-                "Cannot double: the cube is currently owned by the opponent.");
+        if (DoubleRefusalReason is string reason)
+            throw new InvalidOperationException($"Cannot double: {reason}.");
 
         CubeSize *= 2;
         CubeOwner = CubeOwner.Opponent;

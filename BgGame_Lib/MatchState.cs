@@ -24,11 +24,31 @@ public sealed class MatchState
     public int OpponentScore { get; private set; }
 
     /// <summary>
-    /// True iff the current game is the Crawford game — the first game in which
-    /// either side reaches <see cref="MatchLength"/> − 1. Doubling is prohibited
-    /// during this game. Always false in money games.
+    /// True iff the current game is the Crawford game — the one game
+    /// immediately after either side reaches <see cref="MatchLength"/> − 1,
+    /// during which an otherwise-live cube is suspended. An event-triggered
+    /// state: it only ever becomes true via the <see cref="AwardGame"/>
+    /// transition (in a match of length ≥ 2). Always false in money games and
+    /// in 1-point matches — a 1-point match has no cube to suspend, so no
+    /// Crawford game exists (see <see cref="HasCube"/>).
     /// </summary>
     public bool IsCrawford { get; private set; }
+
+    /// <summary>
+    /// True iff the doubling cube is in play for this match at all. False only
+    /// for a 1-point match: with a single point at stake there is nothing to
+    /// double for — the cube, and with it the Crawford/post-Crawford
+    /// distinction, simply never enters play. True for money games and all
+    /// matches of length ≥ 2.
+    ///
+    /// Model note: some external match-record conventions label the games of a
+    /// 1-point match "Crawford". This library deliberately does not — Crawford
+    /// is a mid-match suspension of a live cube, and a cube that never existed
+    /// cannot be suspended. Cube availability (this property) and the Crawford
+    /// suspension (<see cref="IsCrawford"/>) are distinct predicates;
+    /// <see cref="GameState.CanDouble"/> composes them.
+    /// </summary>
+    public bool HasCube => MatchLength != 1;
 
     private MatchState() { }
 
@@ -46,6 +66,16 @@ public sealed class MatchState
 
     /// <summary>
     /// Construct from explicit scores — for resume / fixture / mid-match scenarios.
+    ///
+    /// <para>
+    /// <paramref name="isCrawford"/> must be consistent with the model:
+    /// Crawford applies only in matches of length ≥ 2 (a money game has no
+    /// match score to be one-away from; a 1-point match has no cube to
+    /// suspend — see <see cref="HasCube"/>). External data conventions that
+    /// mark 1-point-match games "Crawford" must be normalized by the caller
+    /// before constructing; this method fails fast on the inconsistent
+    /// combination rather than silently reinterpreting it.
+    /// </para>
     /// </summary>
     public static MatchState FromScores(
         int matchLength, int onRollScore, int opponentScore, bool isCrawford)
@@ -58,6 +88,10 @@ public sealed class MatchState
             throw new ArgumentOutOfRangeException(nameof(opponentScore), opponentScore, "Score must be ≥ 0.");
         if (isCrawford && matchLength == 0)
             throw new ArgumentException("Crawford does not apply in money games.", nameof(isCrawford));
+        if (isCrawford && matchLength == 1)
+            throw new ArgumentException(
+                "Crawford does not apply in a 1-point match — it has no cube to suspend.",
+                nameof(isCrawford));
 
         return new MatchState
         {

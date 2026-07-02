@@ -130,4 +130,45 @@ public class MatchStateTests
         Assert.Equal(5, snap.OpponentScore);
         Assert.True(snap.IsCrawford);
     }
+
+    [Theory]
+    [InlineData(0, true)]   // money game: cube in play
+    [InlineData(1, false)]  // 1-point match: no cube, ever
+    [InlineData(2, true)]
+    [InlineData(7, true)]
+    public void HasCube_FalseOnlyForOnePointMatch(int matchLength, bool expected)
+    {
+        Assert.Equal(expected, MatchState.NewMatch(matchLength).HasCube);
+    }
+
+    [Fact]
+    public void NewMatch_OnePoint_CubelessAndNeverCrawford()
+    {
+        // A 1-point match has no cube to suspend, so no Crawford game exists —
+        // the flag stays false for the match's whole (cubeless) life.
+        var match = MatchState.NewMatch(1);
+
+        Assert.False(match.HasCube);
+        Assert.False(match.IsCrawford);
+    }
+
+    [Fact]
+    public void FromScores_CrawfordInOnePointMatch_Throws()
+    {
+        // External conventions that mark 1-point-match games "Crawford" must be
+        // normalized by the caller; the substrate fails fast on the combination.
+        Assert.Throws<ArgumentException>(
+            () => MatchState.FromScores(matchLength: 1, onRollScore: 0, opponentScore: 0, isCrawford: true));
+    }
+
+    [Fact]
+    public void AwardGame_OnePointMatch_EndsWithoutEnteringCrawford()
+    {
+        var match = MatchState.NewMatch(1);
+
+        match.AwardGame(new GameResult(GameResultKind.WinSingle, OnRollWon: true, CubeSize: 1));
+
+        Assert.True(match.IsMatchOver);
+        Assert.False(match.IsCrawford);
+    }
 }
