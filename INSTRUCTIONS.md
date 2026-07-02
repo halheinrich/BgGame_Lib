@@ -33,6 +33,8 @@ https://github.com/halheinrich/BgGame_Lib — branch `main`.
 BgGame_Lib.slnx
 BgGame_Lib/
   BgGame_Lib.csproj
+  AgentContractViolationException.cs — seat + kind + offending value; thrown by MatchRunner
+  GameRecord.cs           — one completed game: winner seat + result + transcript
   GameResult.cs           — record + GameResultKind enum (single / gammon / backgammon)
   GameSnapshot.cs         — immutable record (transcript-friendly)
   GameState.cs            — mutable: Board + cube state; aggregates a MatchState
@@ -40,6 +42,10 @@ BgGame_Lib/
   IDiceSource.cs          — dice seam: Roll() → (Die1, Die2); driver-side only
   IPlayAgent.cs           — async Play decision interface
   IProblemSetSource.cs    — re-iterable IAsyncEnumerable<BgDecisionData>
+  MatchParticipant.cs     — one entrant: IPlayAgent + ICubeAgent bundle
+  MatchResult.cs          — winner seat (nullable) + seat scores + game records
+  MatchRunner.cs          — unattended match loop over two participants
+  MatchSeat.cs            — enum One/Two + Other() extension; seat-keyed results
   MatchSnapshot.cs        — immutable record
   MatchState.cs           — mutable: match length, scores, Crawford
   RecordedDiceSource.cs   — replays a fixed roll sequence; throws when exhausted
@@ -56,7 +62,9 @@ BgGame_Lib.Tests/
   CubeAgentContractTests.cs
   DiceSourceTests.cs
   GameStateTests.cs
+  MatchRunnerTests.cs
   MatchStateTests.cs
+  TestAgents.cs           — in-proc baseline bots (random/first/delegate agents)
   PlayAgentContractTests.cs
   ProblemSetSourceContractTests.cs
   QuizScoreTests.cs
@@ -240,11 +248,57 @@ re-implemented legality checking outside the move generator — an
 encapsulation leak — so the Referee owns only what is genuinely
 arbitration logic (game-end classification and cube-response handling).
 
-Out of skeletal scope (Phase 2+): driver loop / coroutine, time controls,
-post-Crawford automatic-doubling rules, match-end detection (which lives on
-`MatchState.IsMatchOver`), and full legal-to-offer validation against match
-context. The umbrella INSTRUCTIONS.md tracks which features arrive with
-which mode.
+The driver loop lives on `MatchRunner` (see "Match runner"), and
+legal-to-offer validation is substrate-enforced on `GameState` (see
+"Substrate-enforced cube legality") — neither belongs to the Referee. Still
+out of scope (later arcs): time controls and money-session automatic-doubling
+rules. The umbrella INSTRUCTIONS.md tracks which features arrive with which
+mode.
+
+### Match runner
+
+`MatchRunner` is the unattended match loop for bot-vs-bot play (BgTournament
+epic Arc 1): it drives two `MatchParticipant`s from `MatchState.NewMatch` to
+completion. Nothing in it is transport-specific — a tournament server (Arc 2)
+adapts remote engines onto `IPlayAgent`/`ICubeAgent` and hands them to this
+same loop.
+
+**Division of labor.** The runner owns turn *sequencing* — opening roll,
+pre-roll cube window, rolling (via its `IDiceSource`; agents never roll),
+game/match transitions — and delegates all rule *legality* to where it
+already lives: play validation in `GameState.ApplyPlay`, cube legality in
+`GameState.CanDouble`/`DoubleCube`, game end and cube responses in `Referee`.
+
+**Seats.** All substrate state is on-roll-relative, so the runner maintains
+the one fact the substrate deliberately doesn't hold: which `MatchSeat`
+currently owns the on-roll perspective (flipped on every `ApplyPlay`,
+realigned at each opening roll via the internal `MatchState.SwapPerspective` —
+one reason the runner lives in this library). Results (`MatchResult`,
+`GameRecord`) are seat-keyed, never participant-keyed, so mirror matches
+(same agent instances on both seats) stay unambiguous.
+
+**Game protocol.** Opening roll: `Die1` is seat One's die, `Die2` seat Two's;
+ties re-roll (consumed from the source, not transcripted); the winner plays
+the winning pair with no cube window before it. Each later turn: cube window
+gated on `CanDouble` (never opens in Crawford or a 1-point match), then roll
+and play. Dance turns (sole legal play is the empty play) are applied
+automatically without querying the agent — there is no decision to make, and
+agents are stateless by contract — but are transcripted as normal play
+entries with an empty play.
+
+**Termination.** Match play runs to `MatchState.IsMatchOver`; an optional
+`maxGames` caps the run (required for money sessions, which have no match
+end). `MatchResult.Winner` is null when the run ended without a match winner.
+
+**Failure semantics.** An out-of-contract agent value (illegal play,
+wrong-half cube action) aborts the run with
+`AgentContractViolationException` carrying the offending seat, a
+`AgentContractViolationKind`, the offending value, and any inner substrate
+exception. The runner is deliberately policy-free: converting a violation
+into a forfeit is tournament-layer logic (Arc 2's server catches and
+translates). Cancellation propagates as `OperationCanceledException` (token
+passed to every agent call, checked at turn/game boundaries). Substrate
+state is never left half-mutated (throw-before-mutate holds throughout).
 
 ### Transcript model
 
@@ -403,6 +457,44 @@ public sealed class Referee
     public GameResult? ApplyCubeResponse(GameState state, CubeAction response);
 }
 
+// Match runner
+public enum MatchSeat { One = 1, Two = 2 }
+public static class MatchSeatExtensions { public static MatchSeat Other(this MatchSeat seat); }
+
+public sealed record MatchParticipant
+{
+    public IPlayAgent PlayAgent { get; }
+    public ICubeAgent CubeAgent { get; }
+    public MatchParticipant(IPlayAgent playAgent, ICubeAgent cubeAgent);
+    public static MatchParticipant From<TAgent>(TAgent agent) where TAgent : IPlayAgent, ICubeAgent;
+}
+
+public sealed record GameRecord(MatchSeat Winner, GameResult Result, Transcript Transcript);
+public sealed record MatchResult(
+    MatchSeat? Winner,               // null: money session or maxGames cap hit first
+    int SeatOneScore, int SeatTwoScore,
+    IReadOnlyList<GameRecord> Games);
+
+public enum AgentContractViolationKind { IllegalPlay = 1, IllegalCubeOffer = 2, IllegalCubeResponse = 3 }
+public sealed class AgentContractViolationException : Exception
+{
+    public MatchSeat Seat { get; }
+    public AgentContractViolationKind Kind { get; }
+    public Play? OffendingPlay { get; }
+    public CubeAction? OffendingCubeAction { get; }
+    // + public ctors and static factories (ForPlay / ForCubeOffer / ForCubeResponse)
+}
+
+public sealed class MatchRunner
+{
+    public MatchRunner(IDiceSource diceSource);
+    public Task<MatchResult> RunMatchAsync(
+        MatchParticipant seatOne, MatchParticipant seatTwo,
+        int matchLength,                       // ≥ 1, or 0 = money session (then maxGames required)
+        int? maxGames = null,
+        CancellationToken cancellationToken = default);
+}
+
 // Transcript
 public abstract record TranscriptEntry(GameSnapshot State);
 public sealed record PlayTranscriptEntry(GameSnapshot State, int Die1, int Die2, Play ChosenPlay) : TranscriptEntry(State);
@@ -492,6 +584,21 @@ public sealed record QuizScore(ScoreSegment PlayDecisions, ScoreSegment DoubleDe
   to a `MatchState` that may outlive the `GameState`. Mutations to the
   match (via `AwardGame`) persist into the next game's `GameState`. Do not
   treat the `MatchState` as game-scoped state.
+- **Cube responders see the offerer's perspective.** The live `GameState`
+  passed to `ICubeAgent.ChooseResponseAsync` is on-roll-relative to the
+  *offerer* — the responder evaluates a state in which it is "Opponent"
+  (board negatives, `OpponentScore`, `CubeOwner.Opponent` are its own).
+  There is deliberately no public flip surface; agent implementations must
+  reason accordingly.
+- **`GameResult.OnRollWon` is perspective-relative; `GameRecord.Winner` is
+  absolute.** Consumers attributing wins to entrants should read the seat
+  off `GameRecord`/`MatchResult`, not re-derive it from a snapshot's
+  perspective-relative fields.
+- **A scripted match that never plays checkers still hits Crawford.** With
+  double→pass bots, the game before a side reaches match length is the
+  Crawford game — the window doesn't open and the game must be decided by
+  checker play. Exact-transcript scripts should use a money session
+  (`matchLength: 0` + `maxGames`) to stay Crawford-free.
 
 ## Subproject-internal next steps
 

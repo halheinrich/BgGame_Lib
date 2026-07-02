@@ -212,6 +212,38 @@ public class GameStateTests
         Assert.Equal(cubeOwnerBefore, game.CubeOwner);
     }
 
+    [Fact]
+    public void ApplyPlay_Dance_EmptyPlayIsLegal_FlipsPerspectiveOnly()
+    {
+        // On-roll dances: one checker on the bar, both entry points blocked.
+        // GeneratePlays yields exactly the empty play, and ApplyPlay accepts it
+        // as a normal turn transition (zero moves + full perspective flip).
+        var mop = new int[26];
+        mop[25] = 1;    // on-roll checker on the bar
+        mop[6] = 14;    // rest of on-roll's checkers
+        mop[22] = -2;   // blocks bar entry with a 3 (25 − 3)
+        mop[24] = -2;   // blocks bar entry with a 1 (25 − 1)
+        mop[1] = -11;   // rest of opponent's checkers
+        var board = BoardState.FromMop(mop);
+        var match = MatchState.FromScores(matchLength: 7, onRollScore: 3, opponentScore: 1, isCrawford: false);
+        var game = GameState.FromPosition(match, board, cubeSize: 2, cubeOwner: CubeOwner.OnRoll);
+
+        var legal = MoveGenerator.GeneratePlays(game.Board, 3, 1);
+        var dance = Assert.Single(legal);
+        Assert.Equal(0, dance.Count);
+
+        game.ApplyPlay(dance, 3, 1);
+
+        // Full turn transition: scores and cube-owner labels flipped...
+        Assert.Equal(1, match.OnRollScore);
+        Assert.Equal(3, match.OpponentScore);
+        Assert.Equal(CubeOwner.Opponent, game.CubeOwner);
+        // ...and the board flipped with no checkers moved: the dancer's bar
+        // checker now reads as the opponent's bar ([25] → [0], negated).
+        Assert.Equal(-1, game.Board.Points[0]);
+        Assert.Equal(-14, game.Board.Points[19]);
+    }
+
     // ── Cube legality: substrate-enforced (CanDouble + DoubleCube guards) ──
 
     [Theory]
