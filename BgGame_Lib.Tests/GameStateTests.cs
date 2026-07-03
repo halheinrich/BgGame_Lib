@@ -71,6 +71,20 @@ public class GameStateTests
     }
 
     [Fact]
+    public void DoubleCube_WouldOverflow_ThrowsAndLeavesStateUnchanged()
+    {
+        // Doubling 2^30 gives 2^31, one past int.MaxValue; the checked
+        // multiply must fail fast, not wrap negative.
+        var match = MatchState.NewMatch(7);
+        var game = GameState.FromPosition(match, BoardState.Standard(), cubeSize: 1 << 30, cubeOwner: CubeOwner.OnRoll);
+
+        Assert.Throws<OverflowException>(() => game.DoubleCube());
+
+        Assert.Equal(1 << 30, game.CubeSize);
+        Assert.Equal(CubeOwner.OnRoll, game.CubeOwner);
+    }
+
+    [Fact]
     public void DoubleCube_WhenOpponentOwns_Throws()
     {
         // From the on-roll player's POV, the cube is opponent-owned, so on-roll

@@ -76,6 +76,13 @@ public sealed class MatchState
     /// before constructing; this method fails fast on the inconsistent
     /// combination rather than silently reinterpreting it.
     /// </para>
+    ///
+    /// <para>
+    /// In match play (<paramref name="matchLength"/> &gt; 0) each score must be
+    /// strictly below the match length — a score at or over the length is a
+    /// finished match, not a resumable mid-match state. Money games
+    /// (<paramref name="matchLength"/> 0) have no such bound.
+    /// </para>
     /// </summary>
     public static MatchState FromScores(
         int matchLength, int onRollScore, int opponentScore, bool isCrawford)
@@ -86,6 +93,14 @@ public sealed class MatchState
             throw new ArgumentOutOfRangeException(nameof(onRollScore), onRollScore, "Score must be ≥ 0.");
         if (opponentScore < 0)
             throw new ArgumentOutOfRangeException(nameof(opponentScore), opponentScore, "Score must be ≥ 0.");
+        if (matchLength > 0 && onRollScore >= matchLength)
+            throw new ArgumentOutOfRangeException(
+                nameof(onRollScore), onRollScore,
+                "Score must be below the match length — a score at or over it is a finished match, not a resumable state.");
+        if (matchLength > 0 && opponentScore >= matchLength)
+            throw new ArgumentOutOfRangeException(
+                nameof(opponentScore), opponentScore,
+                "Score must be below the match length — a score at or over it is a finished match, not a resumable state.");
         if (isCrawford && matchLength == 0)
             throw new ArgumentException("Crawford does not apply in money games.", nameof(isCrawford));
         if (isCrawford && matchLength == 1)

@@ -103,12 +103,13 @@ public sealed class GameState
     /// itself refuses.
     /// </summary>
     /// <exception cref="InvalidOperationException">Doubling is illegal here: the match has no cube (1-point match), the current game is the Crawford game, or the cube is owned by the opponent.</exception>
+    /// <exception cref="OverflowException">The doubled size would exceed <see cref="int.MaxValue"/>. Throw-before-mutate: the state is untouched.</exception>
     public void DoubleCube()
     {
         if (DoubleRefusalReason is string reason)
             throw new InvalidOperationException($"Cannot double: {reason}.");
 
-        CubeSize *= 2;
+        CubeSize = checked(CubeSize * 2);
         CubeOwner = CubeOwner.Opponent;
     }
 

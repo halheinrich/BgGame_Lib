@@ -410,7 +410,8 @@ public sealed class MatchState
     public bool IsMatchOver { get; }
     public static MatchState NewMatch(int matchLength);
     public static MatchState FromScores(int matchLength, int onRollScore, int opponentScore, bool isCrawford);
-        // throws on isCrawford with matchLength 0 (money) or 1 (no cube to suspend)
+        // throws on isCrawford with matchLength 0 (money) or 1 (no cube to suspend),
+        // and on any score ≥ a nonzero matchLength (a finished match is not a resumable state)
     public void AwardGame(GameResult result);
     public MatchSnapshot Snapshot();
 }
@@ -425,7 +426,7 @@ public sealed class GameState
     public static GameState NewGame(MatchState match);
     public static GameState FromPosition(MatchState match, BoardState board, int cubeSize, CubeOwner cubeOwner);
     public void ApplyPlay(Play play, int die1, int die2);   // unified turn-transition primitive
-    public void DoubleCube();                  // throws unless CanDouble
+    public void DoubleCube();                  // throws unless CanDouble; checked multiply (OverflowException past 2^30)
     public GameState OpponentView();           // detached query view in the opponent's frame
     public GameSnapshot Snapshot();
 }

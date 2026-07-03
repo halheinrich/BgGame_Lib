@@ -38,6 +38,39 @@ public class MatchStateTests
             () => MatchState.FromScores(matchLength: 0, onRollScore: 0, opponentScore: 0, isCrawford: true));
     }
 
+    [Theory]
+    [InlineData(7, 7, 0)]   // on-roll at the length
+    [InlineData(7, 9, 0)]   // on-roll over the length
+    [InlineData(7, 0, 7)]   // opponent at the length
+    [InlineData(7, 0, 9)]   // opponent over the length
+    public void FromScores_ScoreAtOrOverMatchLength_Throws(int matchLength, int onRoll, int opponent)
+    {
+        // A score at/over the length is a finished match, not a resumable
+        // mid-match state.
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => MatchState.FromScores(matchLength, onRoll, opponent, isCrawford: false));
+    }
+
+    [Fact]
+    public void FromScores_BothScoresAtLengthMinusOne_Allowed()
+    {
+        // Boundary: double match point is a legal resumable state.
+        var match = MatchState.FromScores(matchLength: 7, onRollScore: 6, opponentScore: 6, isCrawford: false);
+
+        Assert.False(match.IsMatchOver);
+    }
+
+    [Fact]
+    public void FromScores_MoneyGame_ScoresUnbounded()
+    {
+        // MatchLength 0 has no finish line; accumulated money scores are free.
+        var match = MatchState.FromScores(matchLength: 0, onRollScore: 25, opponentScore: 40, isCrawford: false);
+
+        Assert.Equal(25, match.OnRollScore);
+        Assert.Equal(40, match.OpponentScore);
+        Assert.False(match.IsMatchOver);
+    }
+
     [Fact]
     public void AwardGame_OnRollWin_AddsToOnRollScore()
     {
