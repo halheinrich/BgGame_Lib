@@ -333,6 +333,100 @@ public class GameStateTests
         Assert.Equal(CubeOwner.Opponent, game.CubeOwner);
     }
 
+    // ── OpponentView: detached responder-frame query view ─────────
+
+    /// <summary>
+    /// Deliberately flip-asymmetric position (unlike the standard start, which
+    /// is flip-symmetric and would let a no-op pass the board assertions).
+    /// </summary>
+    private static BoardState AsymmetricBoard()
+    {
+        var mop = new int[26];
+        mop[24] = 2; mop[13] = 4; mop[8] = 4; mop[6] = 5;      // on-roll: 15
+        mop[19] = -5; mop[17] = -3; mop[12] = -5; mop[1] = -2; // opponent: 15
+        return BoardState.FromMop(mop);
+    }
+
+    [Fact]
+    public void OpponentView_FlipsBoard_SwapsScores_PreservesLengthCrawfordAndCubeSize()
+    {
+        var match = MatchState.FromScores(matchLength: 7, onRollScore: 3, opponentScore: 1, isCrawford: false);
+        var game = GameState.FromPosition(match, AsymmetricBoard(), cubeSize: 4, cubeOwner: CubeOwner.OnRoll);
+
+        var view = game.OpponentView();
+
+        for (int i = 0; i < 26; i++)
+            Assert.Equal(-game.Board.Points[25 - i], view.Board.Points[i]);
+        Assert.Equal(1, view.Match.OnRollScore);
+        Assert.Equal(3, view.Match.OpponentScore);
+        Assert.Equal(7, view.Match.MatchLength);
+        Assert.False(view.Match.IsCrawford);
+        Assert.Equal(4, view.CubeSize);
+    }
+
+    [Theory]
+    [InlineData(CubeOwner.Centered, CubeOwner.Centered)]
+    [InlineData(CubeOwner.OnRoll, CubeOwner.Opponent)]
+    [InlineData(CubeOwner.Opponent, CubeOwner.OnRoll)]
+    public void OpponentView_MirrorsCubeOwner(CubeOwner owner, CubeOwner expected)
+    {
+        var match = MatchState.NewMatch(7);
+        var game = GameState.FromPosition(match, AsymmetricBoard(), cubeSize: 2, cubeOwner: owner);
+
+        Assert.Equal(expected, game.OpponentView().CubeOwner);
+    }
+
+    [Fact]
+    public void OpponentView_PreservesCrawford()
+    {
+        var match = MatchState.FromScores(matchLength: 5, onRollScore: 4, opponentScore: 2, isCrawford: true);
+        var game = GameState.NewGame(match);
+
+        var view = game.OpponentView();
+
+        Assert.True(view.Match.IsCrawford);
+        Assert.Equal(2, view.Match.OnRollScore);
+        Assert.Equal(4, view.Match.OpponentScore);
+    }
+
+    [Fact]
+    public void OpponentView_IsDetached_MutationsDoNotCrossOver()
+    {
+        var match = MatchState.FromScores(matchLength: 7, onRollScore: 3, opponentScore: 1, isCrawford: false);
+        var game = GameState.FromPosition(match, AsymmetricBoard(), cubeSize: 1, cubeOwner: CubeOwner.Centered);
+
+        var view = game.OpponentView();
+        Assert.NotSame(game.Board, view.Board);
+        Assert.NotSame(game.Match, view.Match);
+
+        // Mutating the view leaves the live state untouched...
+        view.DoubleCube();
+        view.Board.Points[6] -= 1;
+        Assert.Equal(1, game.CubeSize);
+        Assert.Equal(CubeOwner.Centered, game.CubeOwner);
+        Assert.Equal(5, game.Board.Points[6]);
+
+        // ...and the view does not track subsequent live mutations.
+        game.Board.Points[24] -= 1;
+        Assert.Equal(-2, view.Board.Points[1]);
+    }
+
+    [Fact]
+    public void OpponentView_IsAnInvolution()
+    {
+        var match = MatchState.FromScores(matchLength: 7, onRollScore: 3, opponentScore: 1, isCrawford: false);
+        var game = GameState.FromPosition(match, AsymmetricBoard(), cubeSize: 2, cubeOwner: CubeOwner.OnRoll);
+
+        var back = game.OpponentView().OpponentView();
+
+        for (int i = 0; i < 26; i++)
+            Assert.Equal(game.Board.Points[i], back.Board.Points[i]);
+        Assert.Equal(game.Match.OnRollScore, back.Match.OnRollScore);
+        Assert.Equal(game.Match.OpponentScore, back.Match.OpponentScore);
+        Assert.Equal(game.CubeSize, back.CubeSize);
+        Assert.Equal(game.CubeOwner, back.CubeOwner);
+    }
+
     private static int SumPositive(BoardState b)
     {
         int s = 0;

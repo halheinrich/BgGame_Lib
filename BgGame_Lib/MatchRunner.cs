@@ -38,12 +38,15 @@ using BgMoveGen;
 /// a play entry with no preceding cube entry), and a terminating
 /// <see cref="GameEndedTranscriptEntry"/>. One transcript per game.</para>
 ///
-/// <para><b>Perspective note for cube responders.</b> The live
-/// <see cref="GameState"/> passed to
-/// <see cref="ICubeAgent.ChooseResponseAsync"/> is in the <i>offerer's</i>
-/// (on-roll) perspective — the responder evaluates a state in which it is
-/// "Opponent". This is the substrate's single-perspective model; there is
-/// deliberately no public flip surface.</para>
+/// <para><b>Perspective note for cube responders.</b> The queried player
+/// always sees its own frame — the unified convention across every agent
+/// query, wire transports included. For
+/// <see cref="ICubeAgent.ChooseResponseAsync"/> the runner therefore passes a
+/// detached <see cref="GameState.OpponentView"/> of the live state: the
+/// responder sees itself as the on-roll-labeled player (board positives,
+/// <see cref="MatchState.OnRollScore"/> are its own). The live
+/// <see cref="GameState"/> remains in the offerer's frame throughout and is
+/// what <see cref="Referee.ApplyCubeResponse"/> applies the response to.</para>
 ///
 /// <para><b>Failure semantics.</b> An agent returning an out-of-contract
 /// value aborts the run with <see cref="AgentContractViolationException"/>
@@ -229,9 +232,11 @@ public sealed class MatchRunner
 
             transcript.Append(new CubeTranscriptEntry(game.Snapshot(), CubeAction.Double));
 
+            // The responder is queried in its own frame (detached view); the
+            // live state stays in the offerer's frame for ApplyCubeResponse.
             MatchSeat responderSeat = _onRollSeat.Other();
             CubeAction response = await ParticipantAt(responderSeat).CubeAgent
-                .ChooseResponseAsync(game, cancellationToken).ConfigureAwait(false);
+                .ChooseResponseAsync(game.OpponentView(), cancellationToken).ConfigureAwait(false);
             if (response is not CubeAction.Take and not CubeAction.Pass)
                 throw AgentContractViolationException.ForCubeResponse(responderSeat, response);
 

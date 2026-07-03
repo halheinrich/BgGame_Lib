@@ -133,13 +133,23 @@ which:
 3. Inlines the cube-owner switch (`OnRoll ↔ Opponent`, `Centered`
    stays) on `GameState`.
 
-There is no public `SwapPerspective` / `Flip` surface on `GameState`,
-`MatchState`, or `BoardState`. The board-side `Flip()` is private inside
-`BoardState` (BgDataTypes_Lib); `MatchState.SwapPerspective` is internal
-and reached from tests via `InternalsVisibleTo("BgGame_Lib.Tests")`.
-External consumers reasoning in the on-roll perspective never need to flip directly —
+There is no public *in-place* flip surface on `GameState`, `MatchState`, or
+`BoardState`. The board-side `Flip()` is private inside `BoardState`
+(BgDataTypes_Lib); `MatchState.SwapPerspective` is internal and reached from
+tests via `InternalsVisibleTo("BgGame_Lib.Tests")`. External consumers
+reasoning in the on-roll perspective never need to flip directly —
 `GameState.ApplyPlay` is the only path that crosses a turn boundary, and
 half-flipped intermediate states are unreachable.
+
+Querying is different from advancing: `GameState.OpponentView()` returns a
+**detached** copy of the position re-expressed from the current opponent's
+frame (board via `BoardState.FlippedCopy()`, scores swapped into a fresh
+`MatchState`, cube owner mirrored, cube size / match length / Crawford
+preserved). It is the query-time sibling of `ApplyPlay`'s turn-time flip —
+the two share one cube-owner mirror rule — and exists so the non-on-roll
+player can be queried in its own frame (the `ICubeAgent.ChooseResponseAsync`
+contract) without touching the live state. It is a view, not a fork: do not
+play on from it.
 
 ### Mutability decisions
 
@@ -218,6 +228,12 @@ Neither is thread-safe; use one instance per driver.
   the legal return-set per call: the offer side returns `NoDouble | Double`,
   the response side returns `Take | Pass`. The driver (Referee or its
   consumer) calls the right method at the right time.
+- **One frame rule.** The queried player always sees its own frame: every
+  agent method receives a `GameState` in which the deciding agent is the
+  on-roll-labeled player. Drivers querying the non-on-roll player (the cube
+  response) pass a detached `GameState.OpponentView()`; agents never reason
+  about "which side am I this call". This is the epic-wide perspective
+  unification — the same rule the wire protocol (Arc 2) speaks.
 
 The contract requires agents to produce a valid result; "no opinion" is not
 encoded as a sentinel return value. Resign / timeout exits are deferred to
@@ -281,7 +297,10 @@ one reason the runner lives in this library). Results (`MatchResult`,
 ties re-roll (consumed from the source, not transcripted); the winner plays
 the winning pair with no cube window before it. Each later turn: cube window
 gated on `CanDouble` (never opens in Crawford or a 1-point match), then roll
-and play. Dance turns (sole legal play is the empty play) are applied
+and play. On a double offer the responder is queried with a detached
+`GameState.OpponentView()` — the responder sees its own frame — while the
+live `GameState` stays in the offerer's frame and is what
+`Referee.ApplyCubeResponse` applies the response to. Dance turns (sole legal play is the empty play) are applied
 automatically without querying the agent — there is no decision to make, and
 agents are stateless by contract — but are transcripted as normal play
 entries with an empty play.
@@ -407,6 +426,7 @@ public sealed class GameState
     public static GameState FromPosition(MatchState match, BoardState board, int cubeSize, CubeOwner cubeOwner);
     public void ApplyPlay(Play play, int die1, int die2);   // unified turn-transition primitive
     public void DoubleCube();                  // throws unless CanDouble
+    public GameState OpponentView();           // detached query view in the opponent's frame
     public GameSnapshot Snapshot();
 }
 
@@ -448,6 +468,7 @@ public interface ICubeAgent
 {
     ValueTask<CubeAction> ChooseOfferAsync(GameState state, CancellationToken cancellationToken = default);
     ValueTask<CubeAction> ChooseResponseAsync(GameState state, CancellationToken cancellationToken = default);
+        // state is in the RESPONDER's frame (drivers pass GameState.OpponentView()) — see Pitfalls
 }
 
 // Referee
@@ -584,12 +605,19 @@ public sealed record QuizScore(ScoreSegment PlayDecisions, ScoreSegment DoubleDe
   to a `MatchState` that may outlive the `GameState`. Mutations to the
   match (via `AwardGame`) persist into the next game's `GameState`. Do not
   treat the `MatchState` as game-scoped state.
-- **Cube responders see the offerer's perspective.** The live `GameState`
-  passed to `ICubeAgent.ChooseResponseAsync` is on-roll-relative to the
-  *offerer* — the responder evaluates a state in which it is "Opponent"
-  (board negatives, `OpponentScore`, `CubeOwner.Opponent` are its own).
-  There is deliberately no public flip surface; agent implementations must
-  reason accordingly.
+- **SEMANTIC BREAK (2026-07): cube responders now see their OWN frame.**
+  `ICubeAgent.ChooseResponseAsync` receives a detached responder-frame
+  `GameState.OpponentView()` — the responder is the positive/on-roll-labeled
+  player (board positives, `OnRollScore` are its own; the offerer's cube reads
+  `CubeOwner.Opponent`, a centered cube stays `Centered`). Before this change
+  the responder received the live state in the *offerer's* frame. The signature
+  did not change, so **every pre-existing `ICubeAgent` implementor breaks
+  silently** — no compile error, the state's meaning inverts. Any implementor
+  written against the old convention must drop its mental flip (known external:
+  BgInference's `ThresholdCubeAgent`, adapted in the epic's P2 session; the
+  umbrella gates the coordinated pointer bump on that adapt). The view is a
+  query snapshot: mutating it does not affect the live game, and the live
+  state stays in the offerer's frame for `Referee.ApplyCubeResponse`.
 - **`GameResult.OnRollWon` is perspective-relative; `GameRecord.Winner` is
   absolute.** Consumers attributing wins to entrants should read the seat
   off `GameRecord`/`MatchResult`, not re-derive it from a snapshot's

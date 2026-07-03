@@ -186,6 +186,97 @@ public class MatchRunnerTests
         Assert.Equal(0, result.SeatTwoScore);
     }
 
+    // ── Responder-frame cube query (perspective unification) ──────
+    //
+    // The queried player always sees its own frame: ChooseResponseAsync
+    // receives a detached GameState.OpponentView of the live state. These pins
+    // compare the responder's captured snapshot against the double-offer
+    // transcript entry — which is captured from the live (offerer-frame) state
+    // immediately before the query.
+
+    [Fact]
+    public async Task CubeResponse_QueryStateIsResponderFrame_LiveStateStaysOffererFrame()
+    {
+        // Game 1: (6,5) opening → One plays; turn 2 Two doubles, One passes →
+        // Two leads 1–0, making game 2's scores asymmetric. Game 2, turn 2:
+        // Two doubles again and One's response spy captures its query state.
+        GameSnapshot? captured = null;
+        var dice = new RecordedDiceSource([(6, 5), (6, 5)]);
+        var runner = new MatchRunner(dice);
+        var one = Participant(new FirstPlayAgent(), new DelegateCubeAgent(
+            offer: _ => CubeAction.NoDouble,
+            response: s => { captured = s.Snapshot(); return CubeAction.Pass; }));
+        var two = Participant(new FirstPlayAgent(), CubeAgents.AlwaysDoubleAlwaysPass());
+
+        var result = await runner.RunMatchAsync(one, two, matchLength: 5, maxGames: 2);
+
+        Assert.Equal(2, result.Games.Count);
+        Assert.Equal(0, result.SeatOneScore);
+        Assert.Equal(2, result.SeatTwoScore);
+
+        // The live frame at query time: the offer entry's snapshot (offerer =
+        // seat Two on roll, leading 1–0 in its own labels).
+        var offer = Assert.IsType<CubeTranscriptEntry>(result.Games[1].Transcript.Entries[1]);
+        Assert.Equal(CubeAction.Double, offer.Action);
+        Assert.Equal(1, offer.State.Match.OnRollScore);
+        Assert.Equal(0, offer.State.Match.OpponentScore);
+
+        // The responder saw its own frame: board flipped, scores swapped,
+        // cube size / length / Crawford carried over.
+        Assert.NotNull(captured);
+        for (int i = 0; i < 26; i++)
+            Assert.Equal(-offer.State.Board[25 - i], captured.Board[i]);
+        Assert.Equal(0, captured.Match.OnRollScore);
+        Assert.Equal(1, captured.Match.OpponentScore);
+        Assert.Equal(CubeOwner.Centered, captured.CubeOwner);
+        Assert.Equal(offer.State.CubeSize, captured.CubeSize);
+        Assert.Equal(offer.State.Match.MatchLength, captured.Match.MatchLength);
+        Assert.Equal(offer.State.Match.IsCrawford, captured.Match.IsCrawford);
+
+        // The live state stayed in the offerer's frame across the query: the
+        // response entry (snapshotted after it) matches the offer entry.
+        var response = Assert.IsType<CubeTranscriptEntry>(result.Games[1].Transcript.Entries[2]);
+        Assert.Equal(CubeAction.Pass, response.Action);
+        Assert.Equal(offer.State.Board, response.State.Board);
+        Assert.Equal(offer.State.CubeSize, response.State.CubeSize);
+        Assert.Equal(offer.State.CubeOwner, response.State.CubeOwner);
+        Assert.Equal(offer.State.Match, response.State.Match);
+    }
+
+    [Fact]
+    public async Task CubeResponse_RedoubleQuery_ShowsOffererOwnedCubeAsOpponent()
+    {
+        // Double→take→redouble: turn 2 Two doubles, One takes (cube 2, One
+        // owns); turn 3 One redoubles and Two's response spy captures its
+        // query state — the offerer-owned cube must read as Opponent in the
+        // responder's frame, at the pre-redouble size.
+        GameSnapshot? captured = null;
+        var dice = new RecordedDiceSource([(6, 5), (4, 3)]);
+        var runner = new MatchRunner(dice);
+        var one = Participant(new FirstPlayAgent(), new DelegateCubeAgent(
+            offer: _ => CubeAction.Double, response: _ => CubeAction.Take));
+        var two = Participant(new FirstPlayAgent(), new DelegateCubeAgent(
+            offer: s => s.CubeSize == 1 ? CubeAction.Double : CubeAction.NoDouble,
+            response: s => { captured = s.Snapshot(); return CubeAction.Pass; }));
+
+        var result = await runner.RunMatchAsync(one, two, matchLength: 5, maxGames: 1);
+
+        // Behavioral outcome unchanged from the offerer-frame era: One wins
+        // the pre-redouble value 2.
+        Assert.Equal(2, result.SeatOneScore);
+        Assert.Equal(0, result.SeatTwoScore);
+
+        Assert.NotNull(captured);
+        Assert.Equal(CubeOwner.Opponent, captured.CubeOwner);
+        Assert.Equal(2, captured.CubeSize);
+
+        // Live frame at the same moment: offerer One on roll, owning the cube.
+        var game = Assert.Single(result.Games);
+        var redouble = Assert.IsType<CubeTranscriptEntry>(game.Transcript.Entries[4]);
+        Assert.Equal(CubeAction.Double, redouble.Action);
+        Assert.Equal(CubeOwner.OnRoll, redouble.State.CubeOwner);
+    }
+
     // ── Crawford / post-Crawford (end-to-end through the runner) ──
 
     [Fact]

@@ -16,7 +16,9 @@ using BgMoveGen;
 /// <see cref="BgDataTypes_Lib.CubeOwner.OnRoll"/> / <see cref="BgDataTypes_Lib.CubeOwner.Opponent"/>
 /// likewise label the current on-roll perspective. Board, match scores, and
 /// cube ownership all flip together at a turn boundary — see
-/// <see cref="ApplyPlay(Play, int, int)"/>.
+/// <see cref="ApplyPlay(Play, int, int)"/>. To <em>query</em> the position from
+/// the other player's frame without advancing anything, take a detached
+/// <see cref="OpponentView"/>; there is no in-place flip surface.
 /// </summary>
 public sealed class GameState
 {
@@ -137,14 +139,51 @@ public sealed class GameState
     {
         MoveGenerator.ApplyPlay(Board, play, die1, die2);
         Match.SwapPerspective();
-        CubeOwner = CubeOwner switch
-        {
-            CubeOwner.OnRoll => CubeOwner.Opponent,
-            CubeOwner.Opponent => CubeOwner.OnRoll,
-            CubeOwner.Centered => CubeOwner.Centered,
-            _ => throw new InvalidOperationException($"Unhandled CubeOwner value: {CubeOwner}"),
-        };
+        CubeOwner = MirrorOwner(CubeOwner);
     }
+
+    /// <summary>
+    /// Return a new <see cref="GameState"/> re-expressing this position from the
+    /// current opponent's frame: the board is a <see cref="BoardState.FlippedCopy"/>,
+    /// the score labels swap (its <see cref="MatchState.OnRollScore"/> is this
+    /// state's <see cref="MatchState.OpponentScore"/>), the cube owner mirrors
+    /// (<see cref="BgDataTypes_Lib.CubeOwner.OnRoll"/> ↔
+    /// <see cref="BgDataTypes_Lib.CubeOwner.Opponent"/>, centered stays), and
+    /// <see cref="CubeSize"/>, <see cref="MatchState.MatchLength"/>, and
+    /// <see cref="MatchState.IsCrawford"/> carry over unchanged. The transform is
+    /// an involution: <c>OpponentView().OpponentView()</c> reproduces the position.
+    ///
+    /// <para>
+    /// This is a detached <em>query view</em>, not a fork of the live game: it
+    /// owns a fresh board and a fresh <see cref="MatchState"/>, so nothing done
+    /// to it affects this state (and vice versa), and it does not track
+    /// subsequent live mutations. Use it to let the non-on-roll player evaluate
+    /// a position in its own frame — the state handed to
+    /// <see cref="ICubeAgent.ChooseResponseAsync"/> — without advancing anything.
+    /// To advance past a turn boundary, use <see cref="ApplyPlay(Play, int, int)"/>
+    /// on the live state; do not play on from a view.
+    /// </para>
+    /// </summary>
+    public GameState OpponentView() =>
+        new(
+            Board.FlippedCopy(),
+            MatchState.FromScores(
+                Match.MatchLength, Match.OpponentScore, Match.OnRollScore, Match.IsCrawford),
+            CubeSize,
+            MirrorOwner(CubeOwner));
+
+    /// <summary>
+    /// The cube-owner half of a perspective change, single-sourced for the
+    /// turn-boundary flip (<see cref="ApplyPlay(Play, int, int)"/>) and the
+    /// detached query view (<see cref="OpponentView"/>).
+    /// </summary>
+    private static CubeOwner MirrorOwner(CubeOwner owner) => owner switch
+    {
+        CubeOwner.OnRoll => CubeOwner.Opponent,
+        CubeOwner.Opponent => CubeOwner.OnRoll,
+        CubeOwner.Centered => CubeOwner.Centered,
+        _ => throw new InvalidOperationException($"Unhandled CubeOwner value: {owner}"),
+    };
 
     /// <summary>Take an immutable snapshot of the full game-and-match state.</summary>
     public GameSnapshot Snapshot()
