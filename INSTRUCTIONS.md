@@ -31,6 +31,8 @@ https://github.com/halheinrich/BgGame_Lib — branch `main`.
 
 ```
 BgGame_Lib.slnx
+spec/
+  verifiable-dice-vectors.json — committed cross-language dice vectors (the PROTOCOL.md contract)
 BgGame_Lib/
   BgGame_Lib.csproj
   AgentContractViolationException.cs — seat + kind + offending value; thrown by MatchRunner
@@ -52,6 +54,9 @@ BgGame_Lib/
   MatchState.cs           — mutable: match length, scores, Crawford
   RecordedDiceSource.cs   — replays a fixed roll sequence; throws when exhausted
   SeededDiceSource.cs     — Random(seed)-backed reproducible rolls
+  VerifiableDiceSource.cs — key-derived audit-grade rolls (public HMAC-SHA256 stream + rejection sampling)
+  DiceKey.cs              — immutable 256-bit key: Generate() + Commit(context)
+  DiceCommitment.cs       — immutable SHA-256 commitment: Verifies(key, context)
   QuizScore.cs            — immutable cumulative score: play / double / take segments + derived total
   Referee.cs              — skeletal: end-of-game, ApplyCubeResponse
   ScoreSegment.cs         — immutable per-category running tally (submitted / correct / equity loss)
@@ -63,6 +68,10 @@ BgGame_Lib.Tests/
   BgGame_Lib.Tests.csproj
   CubeAgentContractTests.cs
   DiceSourceTests.cs
+  DiceKeyTests.cs             — key generation / validation / commitment
+  DiceCommitmentTests.cs      — commitment round-trip / reveal verification
+  VerifiableDiceSourceTests.cs — vector pinning / determinism / rejection sampling
+  VerifiableDiceVectors.cs    — loads spec/verifiable-dice-vectors.json (consumed in place)
   GameStateTests.cs
   MatchRunnerTests.cs
   MatchStateTests.cs
@@ -200,21 +209,56 @@ the tournament arcs). `Roll()` returns a named tuple `(int Die1, int Die2)`
 matching the codebase-wide two-int dice convention rather than introducing
 a dice struct.
 
-Two implementations ship here:
+Three implementations ship here:
 
 - `SeededDiceSource` — `Random(seed)`-backed; the same seed yields the same
   sequence within a .NET runtime version (seeded `Random` uses the
   framework's compat algorithm — stable in practice, not contractually
   guaranteed across major versions). Sufficient for deterministic tests and
-  replayable in-proc matches; audit-grade owned-algorithm dice are a later
-  tournament-fairness arc.
+  replayable in-proc matches. An explicit seed means the caller already knows
+  the sequence, so it stays as-is — committing to it would be theater;
+  audit-grade dice are `VerifiableDiceSource`'s job.
 - `RecordedDiceSource` — replays a fixed sequence (deterministic tests now;
   duplicate-dice tournament pairings later). Validates eagerly at
   construction, copies its input, and throws `InvalidOperationException`
   when exhausted rather than wrapping around — recycled dice would corrupt
   the determinism the source exists for.
+- `VerifiableDiceSource` — audit-grade dice for commit-and-reveal fairness
+  (BgTournament Arc 6). Its whole roll sequence is fixed by a secret 256-bit
+  `DiceKey`; the server commits to the key before roll one (publishing
+  `key.Commit(matchId)`) and reveals the key at match end, so either player
+  re-derives every roll and confirms the dice were fixed in advance and never
+  adapted. The derivation is deliberately **public and language-neutral**
+  (Kerckhoffs — verification requires third parties to re-implement it), so it
+  is specified precisely rather than optimized:
+  - **Keystream** = `HMAC-SHA256(key, BE64(blockIndex))` for
+    `blockIndex = 0, 1, 2, …`, 32-byte blocks concatenated.
+  - **Die** = read the next keystream byte `b`; if `b ≥ 252` reject and read
+    the next, else `(b % 6) + 1`. 252 is the largest multiple of 6 ≤ 256, so
+    0–251 map uniformly onto six faces (42 each) and 252–255 are discarded —
+    removing the modulo bias a naïve `(b % 6)` over all 256 values would add.
+  - **Roll** = the next two accepted dice as `(Die1, Die2)`; rejected bytes are
+    consumed but never surface, and the stream stays aligned across them.
+  Unpredictability lives solely in the key: observing rolls yields no
+  predictive power without breaking HMAC-SHA256. The keystream is effectively
+  unbounded (2^64 blocks); the block counter is a checked increment so the
+  astronomically-unreachable wrap fails fast rather than silently repeating the
+  stream.
 
-Neither is thread-safe; use one instance per driver.
+`DiceKey` and `DiceCommitment` are immutable 32-byte value wrappers (hex
+round-trip, by-value equality). They are deliberately **distinct types** even
+though both are 32 bytes: a key must stay secret until reveal and a commitment
+is safe to publish, so the type system refuses to interchange them (publishing a
+key where a commitment is expected would reveal the dice early). `DiceKey.Commit`
+is a pure `key → context → DiceCommitment` function single-sourcing the
+`SHA-256(key ‖ UTF-8(context))` rule; `DiceCommitment.Verifies(key, context)`
+single-sources the reveal check (recompute-and-compare, fixed-time). The
+committed `spec/verifiable-dice-vectors.json` (independent Python reference,
+cross-checked against openssl) pins commitment + first-block + roll stream for
+several keys — including keys whose stream exercises the rejection branch — and
+is the cross-language contract session 2's PROTOCOL.md references.
+
+None is thread-safe; use one instance per driver.
 
 ### Agent abstractions
 
@@ -502,6 +546,34 @@ public sealed class RecordedDiceSource : IDiceSource
     public (int Die1, int Die2) Roll();   // InvalidOperationException when exhausted
 }
 
+// Verifiable dice (commit-and-reveal fairness) — public, language-neutral algorithm
+public sealed class DiceKey : IEquatable<DiceKey>
+{
+    public const int SizeInBytes = 32;
+    public static DiceKey Generate();                    // RandomNumberGenerator
+    public static DiceKey FromBytes(ReadOnlySpan<byte> bytes);   // ArgumentException on wrong length
+    public static DiceKey FromHex(string hex);           // FormatException/ArgumentException on bad input
+    public string ToHex();
+    public byte[] ToBytes();                             // defensive copy
+    public DiceCommitment Commit(string context);        // SHA-256(key ‖ UTF-8(context))
+}
+
+public sealed class DiceCommitment : IEquatable<DiceCommitment>
+{
+    public const int SizeInBytes = 32;
+    public static DiceCommitment FromBytes(ReadOnlySpan<byte> bytes);
+    public static DiceCommitment FromHex(string hex);
+    public string ToHex();
+    public byte[] ToBytes();
+    public bool Verifies(DiceKey key, string context);   // recompute-and-compare, fixed-time
+}
+
+public sealed class VerifiableDiceSource : IDiceSource
+{
+    public VerifiableDiceSource(DiceKey key);
+    public (int Die1, int Die2) Roll();   // HMAC-SHA256 keystream + byte-rejection sampling
+}
+
 // Agents
 public interface IPlayAgent
 {
@@ -718,6 +790,25 @@ public sealed record QuizScore(ScoreSegment PlayDecisions, ScoreSegment DoubleDe
   Crawford game — the window doesn't open and the game must be decided by
   checker play. Exact-transcript scripts should use a money session
   (`matchLength: 0` + `maxGames`) to stay Crawford-free.
+- **A `DiceCommitment` is context-bound; verify under the exact commit
+  context.** `key.Commit(ctx)` and `commitment.Verifies(key, ctx)` must use the
+  same `context` string or verification fails — a mismatch is silent (returns
+  false), not an exception. Session 2 binds the match id; a commitment made for
+  one match is deliberately unusable for another. Keep a `DiceKey` secret until
+  reveal — the derivation algorithm is public, so the key is the only secret;
+  the distinct `DiceKey`/`DiceCommitment` types exist so a key is never
+  published where a commitment is expected.
+- **`SeededDiceSource` is not fair-mode.** Its `Random(seed)` state is
+  recoverable in principle from observed rolls and nothing proves
+  non-adaptation; use it only for tests / seed-replay. Unseeded, audit-grade
+  matches use `VerifiableDiceSource`.
+- **`VerifiableDiceSource` implements a frozen cross-language contract.** The
+  HMAC-SHA256 keystream, `BE64` block counter, and `b ≥ 252` rejection rule are
+  pinned by `spec/verifiable-dice-vectors.json` and re-implemented by third
+  parties; changing any of them breaks every external verifier. If the vectors
+  ever change, regenerate them from the **independent** reference (not by
+  pasting this implementation's output) so the file stays a genuine
+  cross-check, and coordinate with session 2's PROTOCOL.md spec.
 
 ## Subproject-internal next steps
 

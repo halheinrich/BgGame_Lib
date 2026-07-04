@@ -10,6 +10,9 @@ namespace BgGame_Lib;
 ///   • <see cref="SeededDiceSource"/> — seeded pseudo-random rolls, reproducible per seed.
 ///   • <see cref="RecordedDiceSource"/> — replays a fixed pre-recorded sequence
 ///     (deterministic tests; duplicate-dice tournament pairings in a later arc).
+///   • <see cref="VerifiableDiceSource"/> — audit-grade rolls derived from a
+///     secret <see cref="DiceKey"/> via a public algorithm, for the
+///     commit-and-reveal fairness scheme.
 /// </summary>
 public interface IDiceSource
 {

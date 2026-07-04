@@ -9,7 +9,9 @@ namespace BgGame_Lib;
 /// compatibility algorithm, which is stable in practice but not contractually
 /// guaranteed across major .NET versions. That is sufficient for deterministic
 /// tests and replayable in-proc matches; audit-grade dice with an owned,
-/// version-independent algorithm are a later tournament-fairness concern.
+/// version-independent algorithm are provided by <see cref="VerifiableDiceSource"/>
+/// (commit-and-reveal fairness). An explicit seed means the caller already knows
+/// the sequence, so seeded mode stays as-is — committing to it would be theater.
 ///
 /// Not thread-safe — use one instance per driver.
 /// </summary>
