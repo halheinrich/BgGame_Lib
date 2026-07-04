@@ -37,13 +37,16 @@ namespace BgGame_Lib;
 public interface IMatchObserver
 {
     /// <summary>
-    /// A game is beginning. Fires before the opening roll, so no state is
+    /// A game is beginning. Fires before the opening roll, so no board state is
     /// carried — the frame is indeterminate until the opening roll names the
-    /// first mover, whose <see cref="PlayTranscriptEntry"/> is the game's
-    /// first entry and carries the starting position.
+    /// first mover, whose <see cref="PlayTranscriptEntry"/> is the game's first
+    /// entry and carries the starting position. The frame-free facts that
+    /// <em>are</em> settled at game construction — the seats' entering scores
+    /// and the Crawford flag — travel in <paramref name="context"/>, so a
+    /// consumer folds them without re-deriving them from completed games.
     /// </summary>
-    /// <param name="gameNumber">1-based game number within the match.</param>
-    void OnGameStarted(int gameNumber);
+    /// <param name="context">Seat-absolute entering scores, the Crawford flag, and the 1-based game number.</param>
+    void OnGameStarted(GameStartContext context);
 
     /// <summary>
     /// An entry was appended to the current game's <see cref="Transcript"/> —

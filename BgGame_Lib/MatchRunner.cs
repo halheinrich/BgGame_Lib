@@ -147,7 +147,7 @@ public sealed class MatchRunner
 
         private NullMatchObserver() { }
 
-        public void OnGameStarted(int gameNumber) { }
+        public void OnGameStarted(GameStartContext context) { }
         public void OnEntryRecorded(TranscriptEntry entry) { }
         public void OnGameEnded(int gameNumber, GameRecord record) { }
         public void OnMatchEnded(MatchResult result) { }
@@ -184,7 +184,12 @@ public sealed class MatchRunner
                 cancellationToken.ThrowIfCancellationRequested();
 
                 int gameNumber = games.Count + 1;
-                observer.OnGameStarted(gameNumber);
+                // Entering scores from the seat-keyed tallies (seat-absolute,
+                // frame-free) and the Crawford flag straight off the substrate —
+                // the same value GameState.NewGame reasons about — so the live
+                // wire carries both without re-encoding either rule.
+                observer.OnGameStarted(new GameStartContext(
+                    gameNumber, ScoreOf(MatchSeat.One), ScoreOf(MatchSeat.Two), match.IsCrawford));
                 GameRecord record = await PlayGameAsync().ConfigureAwait(false);
                 games.Add(record);
                 observer.OnGameEnded(gameNumber, record);

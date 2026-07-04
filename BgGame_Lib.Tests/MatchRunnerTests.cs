@@ -20,14 +20,14 @@ public class MatchRunnerTests
     /// <summary>Collects every observer callback, in order, as typed events.</summary>
     private sealed class RecordingObserver : IMatchObserver
     {
-        public sealed record GameStarted(int GameNumber);
+        public sealed record GameStarted(GameStartContext Context);
         public sealed record EntryRecorded(TranscriptEntry Entry);
         public sealed record GameEnded(int GameNumber, GameRecord Record);
         public sealed record MatchEnded(MatchResult Result);
 
         public List<object> Events { get; } = [];
 
-        public void OnGameStarted(int gameNumber) => Events.Add(new GameStarted(gameNumber));
+        public void OnGameStarted(GameStartContext context) => Events.Add(new GameStarted(context));
         public void OnEntryRecorded(TranscriptEntry entry) => Events.Add(new EntryRecorded(entry));
         public void OnGameEnded(int gameNumber, GameRecord record) => Events.Add(new GameEnded(gameNumber, record));
         public void OnMatchEnded(MatchResult result) => Events.Add(new MatchEnded(result));
@@ -38,7 +38,7 @@ public class MatchRunnerTests
 
     private sealed class ThrowingObserver : IMatchObserver
     {
-        public void OnGameStarted(int gameNumber) { }
+        public void OnGameStarted(GameStartContext context) { }
         public void OnEntryRecorded(TranscriptEntry entry) => throw new ObserverFailedException();
         public void OnGameEnded(int gameNumber, GameRecord record) { }
         public void OnMatchEnded(MatchResult result) { }
@@ -663,7 +663,7 @@ public class MatchRunnerTests
         for (int g = 0; g < result.Games.Count; g++)
         {
             var started = Assert.IsType<RecordingObserver.GameStarted>(observer.Events[i++]);
-            Assert.Equal(g + 1, started.GameNumber);
+            Assert.Equal(g + 1, started.Context.GameNumber);
 
             foreach (var entry in result.Games[g].Transcript.Entries)
             {
@@ -726,6 +726,90 @@ public class MatchRunnerTests
         await Assert.ThrowsAsync<ObserverFailedException>(
             () => runner.RunMatchAsync(one, two, matchLength: 5, observer: new ThrowingObserver()));
     }
+
+    // ── OnGameStarted context: entering scores + Crawford ─────────
+
+    [Fact]
+    public async Task OnGameStarted_CarriesSeatAbsoluteEnteringScores_Scripted()
+    {
+        // A fully scripted three-game run with alternating openings, each game
+        // decided immediately by a double-and-pass so no in-game dice are
+        // needed: opening (1,6) → seat Two wins the opening and plays, seat One
+        // then doubles from on-roll and Two passes → One wins 1; opening (6,1)
+        // hands the point to Two symmetrically. Scores march 0-0 → 1-0 → 1-1,
+        // and the context reports them seat-absolutely regardless of which seat
+        // is on roll as each game opens.
+        var observer = new RecordingObserver();
+        var runner = new MatchRunner(new RecordedDiceSource([(1, 6), (6, 1), (1, 6)]));
+        var one = Participant(new FirstPlayAgent(), CubeAgents.AlwaysDoubleAlwaysPass());
+        var two = Participant(new FirstPlayAgent(), CubeAgents.AlwaysDoubleAlwaysPass());
+
+        await runner.RunMatchAsync(one, two, matchLength: 5, maxGames: 3, observer: observer);
+
+        var contexts = observer.Events
+            .OfType<RecordingObserver.GameStarted>()
+            .Select(e => e.Context)
+            .ToList();
+
+        Assert.Equal(
+            [(1, 0, 0), (2, 1, 0), (3, 1, 1)],
+            contexts.Select(c => (c.GameNumber, c.SeatOneScore, c.SeatTwoScore)));
+        Assert.All(contexts, c => Assert.False(c.IsCrawford));   // leader never reaches matchLength − 1
+    }
+
+    [Fact]
+    public async Task OnGameStarted_CrawfordFlag_CrossesTheBoundary_SeededMatch()
+    {
+        // A seeded full match that provably crosses Crawford: the flag turns
+        // true entering the Crawford game and back to false entering the
+        // post-Crawford game. The context's per-game scores and flag are
+        // cross-checked against two independent substrate witnesses — the
+        // cumulative game awards and each game's own opening-play snapshot — so
+        // this pins the wiring, not a re-encoding of the Crawford rule.
+        var observer = new RecordingObserver();
+        var result = await RunSeededMatch(matchLength: 7, seed: CrawfordCrossingSeed, observer);
+
+        var contexts = observer.Events
+            .OfType<RecordingObserver.GameStarted>()
+            .Select(e => e.Context)
+            .ToList();
+        Assert.Equal(result.Games.Count, contexts.Count);
+
+        int seatOne = 0, seatTwo = 0;
+        for (int g = 0; g < contexts.Count; g++)
+        {
+            var context = contexts[g];
+            Assert.Equal(g + 1, context.GameNumber);
+
+            // Entering scores == the running tally of prior games' awards.
+            Assert.Equal(seatOne, context.SeatOneScore);
+            Assert.Equal(seatTwo, context.SeatTwoScore);
+
+            // Crawford flag == the value the substrate stamped into this game's
+            // first transcript entry (the opening play's match snapshot).
+            var opening = Assert.IsType<PlayTranscriptEntry>(result.Games[g].Transcript.Entries[0]);
+            Assert.Equal(opening.State.Match.IsCrawford, context.IsCrawford);
+
+            if (result.Games[g].Winner == MatchSeat.One) seatOne += result.Games[g].Result.Points;
+            else seatTwo += result.Games[g].Result.Points;
+        }
+
+        // The boundary is genuinely crossed: a Crawford game exists and a later
+        // game runs post-Crawford (flag back to false). Guards the seed against
+        // silently stopping to exercise the transition.
+        int crawford = contexts.FindIndex(c => c.IsCrawford);
+        Assert.InRange(crawford, 0, contexts.Count - 2);
+        Assert.False(contexts[crawford + 1].IsCrawford);
+        Assert.Single(contexts, c => c.IsCrawford);   // exactly one Crawford game
+    }
+
+    /// <summary>
+    /// Seed whose length-7 <see cref="RunSeededMatch"/> reaches 6–x, plays a
+    /// Crawford game the trailer wins, then a post-Crawford game — verified by
+    /// the crossing assertions in
+    /// <see cref="OnGameStarted_CrawfordFlag_CrossesTheBoundary_SeededMatch"/>.
+    /// </summary>
+    private const int CrawfordCrossingSeed = 1;
 
     // ── The arc's proof: seeded full matches, end to end ──────────
 

@@ -37,6 +37,7 @@ BgGame_Lib/
   GameRecord.cs           — one completed game: winner seat + result + transcript
   GameResult.cs           — record + GameResultKind enum (single / gammon / backgammon)
   GameSnapshot.cs         — immutable record (transcript-friendly)
+  GameStartContext.cs     — frame-free OnGameStarted payload (seat scores + Crawford)
   GameState.cs            — mutable: Board + cube state; aggregates a MatchState
   ICubeAgent.cs           — two-method interface (offer / response)
   IDiceSource.cs          — dice seam: Roll() → (Die1, Die2); driver-side only
@@ -316,9 +317,12 @@ transcript itself: `OnEntryRecorded` delivers the same `TranscriptEntry`
 instances the transcript records — single source of truth, no parallel
 event family — through the loop's single append path (`Record`), so the
 observed stream and the recorded transcript cannot diverge by construction.
-Three lifecycle events bracket it: `OnGameStarted(n)` (before the opening
-roll — no state; the frame is indeterminate until the opening roll, and the
-first play entry carries the starting position), `OnGameEnded(n, record)`
+Three lifecycle events bracket it: `OnGameStarted(context)` (before the opening
+roll — no board, since the frame is indeterminate until the opening roll and the
+first play entry carries the starting position; the frame-free facts that *are*
+settled — the seats' seat-absolute entering scores and the Crawford flag — ride
+in a `GameStartContext` so a live consumer folds them without re-deriving from
+completed games), `OnGameEnded(n, record)`
 (after the game-end entry and `AwardGame`), `OnMatchEnded(result)` (the
 returned instance, only on a completed run). Callbacks are synchronous,
 serialized, and fail-fast: an observer exception propagates out of
@@ -560,11 +564,17 @@ public sealed class MatchRunner
 // Live observation (per-match; synchronous; fail-fast — see Pitfalls)
 public interface IMatchObserver
 {
-    void OnGameStarted(int gameNumber);                   // 1-based; before the opening roll
+    void OnGameStarted(GameStartContext context);         // before the opening roll; frame-free game context
     void OnEntryRecorded(TranscriptEntry entry);          // the instance the transcript holds
     void OnGameEnded(int gameNumber, GameRecord record);  // the instance MatchResult.Games holds
     void OnMatchEnded(MatchResult result);                // the returned instance; completed runs only
 }
+
+// The frame-free facts settled at game construction (no board — the frame is
+// indeterminate until the opening roll). Scores are SEAT-ABSOLUTE, sourced from
+// the runner's seat-keyed tallies; IsCrawford is the substrate's own value
+// (MatchState.IsCrawford), the same one GameState.NewGame reasons about.
+public sealed record GameStartContext(int GameNumber, int SeatOneScore, int SeatTwoScore, bool IsCrawford);
 
 // Transcript — OnRollSeat is the FRAME seat: the seat whose perspective State
 // is expressed in (see Architecture / Transcript model / Seat identity)
