@@ -40,6 +40,7 @@ BgGame_Lib/
   GameState.cs            — mutable: Board + cube state; aggregates a MatchState
   ICubeAgent.cs           — two-method interface (offer / response)
   IDiceSource.cs          — dice seam: Roll() → (Die1, Die2); driver-side only
+  IMatchObserver.cs       — live per-move view of one RunMatchAsync run (transcript stream + lifecycle)
   IPlayAgent.cs           — async Play decision interface
   IProblemSetSource.cs    — re-iterable IAsyncEnumerable<BgDecisionData>
   MatchParticipant.cs     — one entrant: IPlayAgent + ICubeAgent bundle
@@ -309,6 +310,25 @@ entries with an empty play.
 `maxGames` caps the run (required for money sessions, which have no match
 end). `MatchResult.Winner` is null when the run ended without a match winner.
 
+**Observation.** An optional per-match `IMatchObserver` (a `RunMatchAsync`
+parameter, not runner state) receives the run live. Its vocabulary is the
+transcript itself: `OnEntryRecorded` delivers the same `TranscriptEntry`
+instances the transcript records — single source of truth, no parallel
+event family — through the loop's single append path (`Record`), so the
+observed stream and the recorded transcript cannot diverge by construction.
+Three lifecycle events bracket it: `OnGameStarted(n)` (before the opening
+roll — no state; the frame is indeterminate until the opening roll, and the
+first play entry carries the starting position), `OnGameEnded(n, record)`
+(after the game-end entry and `AwardGame`), `OnMatchEnded(result)` (the
+returned instance, only on a completed run). Callbacks are synchronous,
+serialized, and fail-fast: an observer exception propagates out of
+`RunMatchAsync` unwrapped — a spectator adapter that must not disrupt the
+match enqueues to a channel and is non-throwing by construction. On abort
+(agent violation, cancellation) the stream simply stops — no terminal
+callback (the observer's owner is the caller that catches the throw) — and
+everything up to the failure point has already been delivered, so a forfeit
+no longer discards completed games' transcripts.
+
 **Failure semantics.** An out-of-contract agent value (illegal play,
 wrong-half cube action) aborts the run with
 `AgentContractViolationException` carrying the offending seat, a
@@ -331,6 +351,25 @@ Three concrete entry subtypes — `PlayTranscriptEntry`,
 discriminated union via abstract base record + pattern matching. A single
 record with nullable fields would be worse; legal-payload-by-discriminator
 would have to be enforced at runtime rather than by the type system.
+
+**Seat identity.** Every entry is stamped at append time with
+`OnRollSeat` — the seat whose perspective its snapshot is expressed in (the
+frame seat, not "the actor"). This is the one fact that makes every
+perspective-relative snapshot field absolutely interpretable; frame
+conventions themselves are unchanged (snapshots stay on-roll-frame; both
+cube entries stay offerer-frame — the stamp does not flip between an offer
+and its response). Attribution rules are *derived* on the subtypes that own
+them, single-sourcing what consumers previously re-derived by walking
+runner sequencing conventions: a play's mover is its `OnRollSeat`;
+`CubeTranscriptEntry.ActingSeat` resolves offer-side actions to the on-roll
+offerer and response-side actions (`Take`/`Pass`) to the other seat;
+`GameEndedTranscriptEntry.Winner` resolves `Result.OnRollWon` against the
+frame seat (and is what the runner uses to construct `GameRecord.Winner` —
+one home for win attribution). The frame-seat semantic was chosen over
+stamping the actor because it is uniform across all subtypes (a game-end
+entry has no actor) and because board-rendering consumers need the frame
+for every entry; each actor is a pure derivation from it. Derived
+properties do not participate in record equality.
 
 ### Problem-set source
 
@@ -514,14 +553,31 @@ public sealed class MatchRunner
         MatchParticipant seatOne, MatchParticipant seatTwo,
         int matchLength,                       // ≥ 1, or 0 = money session (then maxGames required)
         int? maxGames = null,
+        IMatchObserver? observer = null,
         CancellationToken cancellationToken = default);
 }
 
-// Transcript
-public abstract record TranscriptEntry(GameSnapshot State);
-public sealed record PlayTranscriptEntry(GameSnapshot State, int Die1, int Die2, Play ChosenPlay) : TranscriptEntry(State);
-public sealed record CubeTranscriptEntry(GameSnapshot State, CubeAction Action) : TranscriptEntry(State);
-public sealed record GameEndedTranscriptEntry(GameSnapshot State, GameResult Result) : TranscriptEntry(State);
+// Live observation (per-match; synchronous; fail-fast — see Pitfalls)
+public interface IMatchObserver
+{
+    void OnGameStarted(int gameNumber);                   // 1-based; before the opening roll
+    void OnEntryRecorded(TranscriptEntry entry);          // the instance the transcript holds
+    void OnGameEnded(int gameNumber, GameRecord record);  // the instance MatchResult.Games holds
+    void OnMatchEnded(MatchResult result);                // the returned instance; completed runs only
+}
+
+// Transcript — OnRollSeat is the FRAME seat: the seat whose perspective State
+// is expressed in (see Architecture / Transcript model / Seat identity)
+public abstract record TranscriptEntry(GameSnapshot State, MatchSeat OnRollSeat);
+public sealed record PlayTranscriptEntry(GameSnapshot State, MatchSeat OnRollSeat, int Die1, int Die2, Play ChosenPlay) : TranscriptEntry(State, OnRollSeat);
+public sealed record CubeTranscriptEntry(GameSnapshot State, MatchSeat OnRollSeat, CubeAction Action) : TranscriptEntry(State, OnRollSeat)
+{
+    public MatchSeat ActingSeat { get; }   // derived: offer-side → OnRollSeat, Take/Pass → Other()
+}
+public sealed record GameEndedTranscriptEntry(GameSnapshot State, MatchSeat OnRollSeat, GameResult Result) : TranscriptEntry(State, OnRollSeat)
+{
+    public MatchSeat Winner { get; }       // derived: Result.OnRollWon resolved against OnRollSeat
+}
 
 public sealed class Transcript
 {
@@ -619,10 +675,34 @@ public sealed record QuizScore(ScoreSegment PlayDecisions, ScoreSegment DoubleDe
   umbrella gates the coordinated pointer bump on that adapt). The view is a
   query snapshot: mutating it does not affect the live game, and the live
   state stays in the offerer's frame for `Referee.ApplyCubeResponse`.
-- **`GameResult.OnRollWon` is perspective-relative; `GameRecord.Winner` is
-  absolute.** Consumers attributing wins to entrants should read the seat
-  off `GameRecord`/`MatchResult`, not re-derive it from a snapshot's
-  perspective-relative fields.
+- **BREAKING (2026-07): `TranscriptEntry` gained `OnRollSeat` — and it is
+  the frame seat, not the actor.** All three subtypes' constructors gained
+  the positional param (any consumer constructing entries breaks at
+  compile). `OnRollSeat` means "the seat whose perspective `State` is
+  expressed in": a play entry's mover *is* its `OnRollSeat`, but a cube
+  *response* entry keeps the **offerer's** stamp (the live state never
+  flips across the responder query) — the responder is the derived
+  `CubeTranscriptEntry.ActingSeat`, and a finished game's winner is the
+  derived `GameEndedTranscriptEntry.Winner`. Reading `OnRollSeat` as "who
+  acted" is wrong for exactly those two derived cases; use the derived
+  properties instead of re-encoding the rules. Consumers should stop
+  walking opening-die / flip-per-play conventions to attribute entries —
+  the stamp is authoritative.
+- **`IMatchObserver` callbacks are synchronous and fail-fast.** They run
+  inline on the match loop between agent queries: a slow observer slows the
+  match, and an observer exception propagates out of `RunMatchAsync`
+  unwrapped, aborting the run. Adapters intended to be non-disruptive must
+  enqueue-and-return and be non-throwing by construction. `OnMatchEnded`
+  fires only for a completed run — when the run aborts (agent violation,
+  cancellation) the stream just stops, with everything up to the failure
+  point already delivered; there is no terminal abort callback, by design
+  (the observer's owner is the same caller that catches the throw).
+- **`GameResult.OnRollWon` is perspective-relative; `GameRecord.Winner` and
+  `GameEndedTranscriptEntry.Winner` are absolute.** Consumers attributing
+  wins to entrants should read the seat off `GameRecord`/`MatchResult` (or
+  the terminal entry's derived `Winner`, which is where the attribution
+  rule lives), not re-derive it from a snapshot's perspective-relative
+  fields.
 - **A scripted match that never plays checkers still hits Crawford.** With
   double→pass bots, the game before a side reaches match length is the
   Crawford game — the window doesn't open and the game must be decided by

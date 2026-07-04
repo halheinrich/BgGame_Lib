@@ -31,8 +31,8 @@ public class TranscriptTests
         var play = new Play();
         play.Add(new Move(13, 7));
 
-        t.Append(new PlayTranscriptEntry(snap1, 6, 4, play));
-        t.Append(new CubeTranscriptEntry(snap2, CubeAction.Double));
+        t.Append(new PlayTranscriptEntry(snap1, MatchSeat.One, 6, 4, play));
+        t.Append(new CubeTranscriptEntry(snap2, MatchSeat.Two, CubeAction.Double));
 
         Assert.Equal(2, t.Entries.Count);
         Assert.IsType<PlayTranscriptEntry>(t.Entries[0]);
@@ -50,10 +50,10 @@ public class TranscriptTests
         var play = new Play();
         play.Add(new Move(8, 5));
 
-        t.Append(new PlayTranscriptEntry(snap, 3, 1, play));
-        t.Append(new CubeTranscriptEntry(snap, CubeAction.NoDouble));
+        t.Append(new PlayTranscriptEntry(snap, MatchSeat.One, 3, 1, play));
+        t.Append(new CubeTranscriptEntry(snap, MatchSeat.Two, CubeAction.NoDouble));
         t.Append(new GameEndedTranscriptEntry(
-            snap, new GameResult(GameResultKind.WinGammon, OnRollWon: true, CubeSize: 1)));
+            snap, MatchSeat.One, new GameResult(GameResultKind.WinGammon, OnRollWon: true, CubeSize: 1)));
 
         int playCount = 0, cubeCount = 0, endCount = 0;
         foreach (var e in t.Entries)
@@ -78,7 +78,7 @@ public class TranscriptTests
         var game = GameState.NewGame(match);
 
         var snapAtStart = game.Snapshot();
-        var entry = new CubeTranscriptEntry(snapAtStart, CubeAction.Double);
+        var entry = new CubeTranscriptEntry(snapAtStart, MatchSeat.One, CubeAction.Double);
 
         // Mutate the live state.
         game.DoubleCube();
@@ -108,9 +108,48 @@ public class TranscriptTests
         Array.Copy(game.Board.Points, board, 26);
         var snap = new GameSnapshot(board, 1, CubeOwner.Centered, matchSnap);
 
-        var a = new CubeTranscriptEntry(snap, CubeAction.Double);
-        var b = new CubeTranscriptEntry(snap, CubeAction.Double);
+        var a = new CubeTranscriptEntry(snap, MatchSeat.One, CubeAction.Double);
+        var b = new CubeTranscriptEntry(snap, MatchSeat.One, CubeAction.Double);
 
         Assert.Equal(a, b);
+    }
+
+    // ── Derived attribution (single-sourced on the entry types) ──
+    //
+    // OnRollSeat is the frame seat; the actor/winner rules live on the
+    // subtypes. Offer-side cube actions (NoDouble, Double) belong to the
+    // on-roll offerer; response-side actions (Take, Pass) to the other seat.
+
+    [Theory]
+    [InlineData(CubeAction.NoDouble, MatchSeat.One, MatchSeat.One)]
+    [InlineData(CubeAction.Double, MatchSeat.One, MatchSeat.One)]
+    [InlineData(CubeAction.Take, MatchSeat.One, MatchSeat.Two)]
+    [InlineData(CubeAction.Pass, MatchSeat.One, MatchSeat.Two)]
+    [InlineData(CubeAction.NoDouble, MatchSeat.Two, MatchSeat.Two)]
+    [InlineData(CubeAction.Double, MatchSeat.Two, MatchSeat.Two)]
+    [InlineData(CubeAction.Take, MatchSeat.Two, MatchSeat.One)]
+    [InlineData(CubeAction.Pass, MatchSeat.Two, MatchSeat.One)]
+    public void CubeEntry_ActingSeat_OfferAtOnRoll_ResponseAtOther(
+        CubeAction action, MatchSeat onRollSeat, MatchSeat expectedActor)
+    {
+        var snap = GameState.NewGame(MatchState.NewMatch(7)).Snapshot();
+        var entry = new CubeTranscriptEntry(snap, onRollSeat, action);
+
+        Assert.Equal(expectedActor, entry.ActingSeat);
+    }
+
+    [Theory]
+    [InlineData(true, MatchSeat.One, MatchSeat.One)]
+    [InlineData(false, MatchSeat.One, MatchSeat.Two)]
+    [InlineData(true, MatchSeat.Two, MatchSeat.Two)]
+    [InlineData(false, MatchSeat.Two, MatchSeat.One)]
+    public void GameEndedEntry_Winner_ResolvesOnRollWonAgainstFrameSeat(
+        bool onRollWon, MatchSeat onRollSeat, MatchSeat expectedWinner)
+    {
+        var snap = GameState.NewGame(MatchState.NewMatch(7)).Snapshot();
+        var entry = new GameEndedTranscriptEntry(
+            snap, onRollSeat, new GameResult(GameResultKind.WinSingle, onRollWon, CubeSize: 1));
+
+        Assert.Equal(expectedWinner, entry.Winner);
     }
 }

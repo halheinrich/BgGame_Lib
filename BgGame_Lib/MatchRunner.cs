@@ -36,7 +36,17 @@ using BgMoveGen;
 /// the state the decision was made in, dice, chosen play), every actual
 /// double offer and its response (declined windows — NoDouble — are implicit:
 /// a play entry with no preceding cube entry), and a terminating
-/// <see cref="GameEndedTranscriptEntry"/>. One transcript per game.</para>
+/// <see cref="GameEndedTranscriptEntry"/>. One transcript per game. Every
+/// entry is stamped with <see cref="TranscriptEntry.OnRollSeat"/> — the seat
+/// whose frame its snapshot is in — so consumers never re-derive attribution
+/// from sequencing conventions.</para>
+///
+/// <para><b>Observation.</b> An optional per-match <see cref="IMatchObserver"/>
+/// receives the transcript entries as they are recorded — the same instances,
+/// through the single append path, so the observed stream and the recorded
+/// transcript cannot diverge — plus game/match lifecycle events. See
+/// <see cref="IMatchObserver"/> for the delivery contract (synchronous,
+/// fail-fast, stream stops on abort).</para>
 ///
 /// <para><b>Perspective note for cube responders.</b> The queried player
 /// always sees its own frame — the unified convention across every agent
@@ -88,6 +98,12 @@ public sealed class MatchRunner
     /// optional as a safety cap in match play. When the cap stops the run
     /// before a match winner exists, <see cref="MatchResult.Winner"/> is null.
     /// </param>
+    /// <param name="observer">
+    /// Optional live view of the run — receives every transcript entry as it
+    /// is recorded plus game/match lifecycle events. Callbacks are synchronous
+    /// and their exceptions propagate unwrapped; see <see cref="IMatchObserver"/>
+    /// for the delivery contract.
+    /// </param>
     /// <param name="cancellationToken">Cooperative cancellation, honored at every turn and game boundary and inside agent calls.</param>
     /// <exception cref="ArgumentNullException">A participant is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="matchLength"/> is negative, or <paramref name="maxGames"/> is non-null and &lt; 1.</exception>
@@ -99,6 +115,7 @@ public sealed class MatchRunner
         MatchParticipant seatTwo,
         int matchLength,
         int? maxGames = null,
+        IMatchObserver? observer = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(seatOne);
@@ -115,8 +132,25 @@ public sealed class MatchRunner
         // rather than surfacing on the awaited task.
         var loop = new MatchLoop(
             _diceSource, _referee, seatOne, seatTwo,
-            MatchState.NewMatch(matchLength), cancellationToken);
+            MatchState.NewMatch(matchLength),
+            observer ?? NullMatchObserver.Instance, cancellationToken);
         return loop.RunAsync(maxGames);
+    }
+
+    /// <summary>
+    /// Null-object stand-in when no observer is supplied, so the loop invokes
+    /// an observer unconditionally instead of null-checking at every site.
+    /// </summary>
+    private sealed class NullMatchObserver : IMatchObserver
+    {
+        public static readonly NullMatchObserver Instance = new();
+
+        private NullMatchObserver() { }
+
+        public void OnGameStarted(int gameNumber) { }
+        public void OnEntryRecorded(TranscriptEntry entry) { }
+        public void OnGameEnded(int gameNumber, GameRecord record) { }
+        public void OnMatchEnded(MatchResult result) { }
     }
 
     /// <summary>
@@ -131,6 +165,7 @@ public sealed class MatchRunner
         MatchParticipant seatOne,
         MatchParticipant seatTwo,
         MatchState match,
+        IMatchObserver observer,
         CancellationToken cancellationToken)
     {
         /// <summary>
@@ -147,7 +182,12 @@ public sealed class MatchRunner
             while (!match.IsMatchOver && (maxGames is not int cap || games.Count < cap))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                games.Add(await PlayGameAsync().ConfigureAwait(false));
+
+                int gameNumber = games.Count + 1;
+                observer.OnGameStarted(gameNumber);
+                GameRecord record = await PlayGameAsync().ConfigureAwait(false);
+                games.Add(record);
+                observer.OnGameEnded(gameNumber, record);
             }
 
             int seatOneScore = ScoreOf(MatchSeat.One);
@@ -155,7 +195,9 @@ public sealed class MatchRunner
             MatchSeat? winner = !match.IsMatchOver
                 ? null
                 : seatOneScore >= match.MatchLength ? MatchSeat.One : MatchSeat.Two;
-            return new MatchResult(winner, seatOneScore, seatTwoScore, games);
+            var result = new MatchResult(winner, seatOneScore, seatTwoScore, games);
+            observer.OnMatchEnded(result);
+            return result;
         }
 
         private int ScoreOf(MatchSeat seat) =>
@@ -185,12 +227,13 @@ public sealed class MatchRunner
                 result = await PlayTurnAsync(game, transcript, d1, d2).ConfigureAwait(false);
             }
 
-            // Attribute the win to an absolute seat before AwardGame (which
-            // does not flip perspective, so _onRollSeat still matches `result`).
-            MatchSeat winner = result.OnRollWon ? _onRollSeat : _onRollSeat.Other();
-            transcript.Append(new GameEndedTranscriptEntry(game.Snapshot(), result));
+            // Stamp the terminal entry before AwardGame (which does not flip
+            // perspective, so _onRollSeat still matches `result`); win
+            // attribution is single-sourced in the entry's Winner.
+            var ended = new GameEndedTranscriptEntry(game.Snapshot(), _onRollSeat, result);
+            Record(transcript, ended);
             match.AwardGame(result);
-            return new GameRecord(winner, result, transcript);
+            return new GameRecord(ended.Winner, result, transcript);
         }
 
         /// <summary>
@@ -230,7 +273,7 @@ public sealed class MatchRunner
             if (offer != CubeAction.Double)
                 throw AgentContractViolationException.ForCubeOffer(_onRollSeat, offer);
 
-            transcript.Append(new CubeTranscriptEntry(game.Snapshot(), CubeAction.Double));
+            Record(transcript, new CubeTranscriptEntry(game.Snapshot(), _onRollSeat, CubeAction.Double));
 
             // The responder is queried in its own frame (detached view); the
             // live state stays in the offerer's frame for ApplyCubeResponse.
@@ -240,7 +283,10 @@ public sealed class MatchRunner
             if (response is not CubeAction.Take and not CubeAction.Pass)
                 throw AgentContractViolationException.ForCubeResponse(responderSeat, response);
 
-            transcript.Append(new CubeTranscriptEntry(game.Snapshot(), response));
+            // Snapshotted against the live state — still the offerer's frame,
+            // so the stamp does not flip; the entry's ActingSeat derives the
+            // responder.
+            Record(transcript, new CubeTranscriptEntry(game.Snapshot(), _onRollSeat, response));
             return referee.ApplyCubeResponse(game, response);
         }
 
@@ -277,10 +323,22 @@ public sealed class MatchRunner
                 throw AgentContractViolationException.ForPlay(_onRollSeat, chosenPlay, die1, die2, ex);
             }
 
-            transcript.Append(new PlayTranscriptEntry(decisionSnapshot, die1, die2, chosenPlay));
+            Record(transcript, new PlayTranscriptEntry(decisionSnapshot, _onRollSeat, die1, die2, chosenPlay));
             _onRollSeat = _onRollSeat.Other();
 
             return referee.IsGameOver(game);
+        }
+
+        /// <summary>
+        /// The single append path: every entry reaches the transcript and the
+        /// observer here, in that order, so the observed stream and the
+        /// recorded transcript cannot diverge (and the transcript — the
+        /// source of truth — is never behind the observer).
+        /// </summary>
+        private void Record(Transcript transcript, TranscriptEntry entry)
+        {
+            transcript.Append(entry);
+            observer.OnEntryRecorded(entry);
         }
 
         /// <summary>Roll, validating the user-supplied source's output.</summary>

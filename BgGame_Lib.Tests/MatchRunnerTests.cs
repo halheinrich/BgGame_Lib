@@ -17,6 +17,33 @@ public class MatchRunnerTests
         public (int Die1, int Die2) Roll() => (7, 3);
     }
 
+    /// <summary>Collects every observer callback, in order, as typed events.</summary>
+    private sealed class RecordingObserver : IMatchObserver
+    {
+        public sealed record GameStarted(int GameNumber);
+        public sealed record EntryRecorded(TranscriptEntry Entry);
+        public sealed record GameEnded(int GameNumber, GameRecord Record);
+        public sealed record MatchEnded(MatchResult Result);
+
+        public List<object> Events { get; } = [];
+
+        public void OnGameStarted(int gameNumber) => Events.Add(new GameStarted(gameNumber));
+        public void OnEntryRecorded(TranscriptEntry entry) => Events.Add(new EntryRecorded(entry));
+        public void OnGameEnded(int gameNumber, GameRecord record) => Events.Add(new GameEnded(gameNumber, record));
+        public void OnMatchEnded(MatchResult result) => Events.Add(new MatchEnded(result));
+    }
+
+    /// <summary>Distinctive type proving observer exceptions propagate unwrapped.</summary>
+    private sealed class ObserverFailedException : Exception;
+
+    private sealed class ThrowingObserver : IMatchObserver
+    {
+        public void OnGameStarted(int gameNumber) { }
+        public void OnEntryRecorded(TranscriptEntry entry) => throw new ObserverFailedException();
+        public void OnGameEnded(int gameNumber, GameRecord record) { }
+        public void OnMatchEnded(MatchResult result) { }
+    }
+
     // ── Argument validation (eager, before the loop starts) ──────
 
     [Fact]
@@ -508,6 +535,198 @@ public class MatchRunnerTests
             () => runner.RunMatchAsync(p, p, matchLength: 5));
     }
 
+    // ── Seat identity stamps ──────────────────────────────────────
+    //
+    // OnRollSeat is the frame seat — the seat whose perspective the entry's
+    // snapshot is in. Plays flip it; cube entries don't (both halves are
+    // snapshotted against the live offerer-frame state); attribution is
+    // derived on the entry types (ActingSeat, Winner).
+
+    [Fact]
+    public async Task SeatStamps_DoubleTakeRedouble_ExactSequencePinned()
+    {
+        // Same script as DoubleTakeRedoublePass: One wins the opening (6,5)
+        // and plays; turn 2 Two doubles / One takes; Two plays (4,3); turn 3
+        // One redoubles / Two passes.
+        var dice = new RecordedDiceSource([(6, 5), (4, 3)]);
+        var runner = new MatchRunner(dice);
+        var one = Participant(new FirstPlayAgent(), new DelegateCubeAgent(
+            offer: _ => CubeAction.Double, response: _ => CubeAction.Take));
+        var two = Participant(new FirstPlayAgent(), new DelegateCubeAgent(
+            offer: s => s.CubeSize == 1 ? CubeAction.Double : CubeAction.NoDouble,
+            response: _ => CubeAction.Pass));
+
+        var result = await runner.RunMatchAsync(one, two, matchLength: 5, maxGames: 1);
+
+        var game = Assert.Single(result.Games);
+        Assert.Collection(game.Transcript.Entries,
+            e => Assert.Equal(MatchSeat.One, Assert.IsType<PlayTranscriptEntry>(e).OnRollSeat),
+            e =>
+            {
+                var offer = Assert.IsType<CubeTranscriptEntry>(e);
+                Assert.Equal(MatchSeat.Two, offer.OnRollSeat);   // Two's window after One's play
+                Assert.Equal(MatchSeat.Two, offer.ActingSeat);   // offer at on-roll
+            },
+            e =>
+            {
+                var take = Assert.IsType<CubeTranscriptEntry>(e);
+                Assert.Equal(MatchSeat.Two, take.OnRollSeat);    // offerer frame — no flip
+                Assert.Equal(MatchSeat.One, take.ActingSeat);    // response at other
+            },
+            e => Assert.Equal(MatchSeat.Two, Assert.IsType<PlayTranscriptEntry>(e).OnRollSeat),
+            e =>
+            {
+                var redouble = Assert.IsType<CubeTranscriptEntry>(e);
+                Assert.Equal(MatchSeat.One, redouble.OnRollSeat);
+                Assert.Equal(MatchSeat.One, redouble.ActingSeat);
+            },
+            e =>
+            {
+                var pass = Assert.IsType<CubeTranscriptEntry>(e);
+                Assert.Equal(MatchSeat.One, pass.OnRollSeat);    // no flip
+                Assert.Equal(MatchSeat.Two, pass.ActingSeat);
+            },
+            e =>
+            {
+                var ended = Assert.IsType<GameEndedTranscriptEntry>(e);
+                Assert.Equal(MatchSeat.One, ended.OnRollSeat);   // a pass leaves the offerer's frame live
+                Assert.Equal(MatchSeat.One, ended.Winner);
+                Assert.Equal(game.Winner, ended.Winner);
+            });
+    }
+
+    [Fact]
+    public async Task SeatStamps_OpeningWonBySeatTwo_StampsTwoFirst()
+    {
+        // Die2 higher: Two wins the opening and moves first; turn 2 is One's
+        // window (One doubles, Two passes).
+        var dice = new RecordedDiceSource([(2, 4)]);
+        var runner = new MatchRunner(dice);
+        var one = Participant(new FirstPlayAgent(), CubeAgents.AlwaysDoubleAlwaysPass());
+        var two = Participant(new FirstPlayAgent(), new DelegateCubeAgent(
+            offer: _ => CubeAction.NoDouble, response: _ => CubeAction.Pass));
+
+        var result = await runner.RunMatchAsync(one, two, matchLength: 5, maxGames: 1);
+
+        var game = Assert.Single(result.Games);
+        var opening = Assert.IsType<PlayTranscriptEntry>(game.Transcript.Entries[0]);
+        Assert.Equal(MatchSeat.Two, opening.OnRollSeat);
+        var offer = Assert.IsType<CubeTranscriptEntry>(game.Transcript.Entries[1]);
+        Assert.Equal(MatchSeat.One, offer.ActingSeat);
+        var pass = Assert.IsType<CubeTranscriptEntry>(game.Transcript.Entries[2]);
+        Assert.Equal(MatchSeat.Two, pass.ActingSeat);
+    }
+
+    [Theory]
+    [InlineData(5, 42)]
+    [InlineData(15, 7)]
+    public async Task SeatStamps_ConsistentWithFrameWalk_EverySeededGame(int matchLength, int seed)
+    {
+        // The stamps must agree with the previously consumer-side frame walk
+        // for every entry of every game: the opening-die rule names the first
+        // stamp, every play entry (dance turns included) flips it, cube
+        // entries carry it unflipped.
+        var result = await RunSeededMatch(matchLength, seed);
+
+        foreach (var game in result.Games)
+        {
+            var entries = game.Transcript.Entries;
+            var opening = Assert.IsType<PlayTranscriptEntry>(entries[0]);
+            MatchSeat expected = opening.Die1 > opening.Die2 ? MatchSeat.One : MatchSeat.Two;
+
+            foreach (var entry in entries)
+            {
+                Assert.Equal(expected, entry.OnRollSeat);
+                if (entry is PlayTranscriptEntry) expected = expected.Other();
+            }
+
+            // Win attribution is single-sourced on the terminal entry.
+            var ended = Assert.IsType<GameEndedTranscriptEntry>(entries[^1]);
+            Assert.Equal(game.Winner, ended.Winner);
+        }
+    }
+
+    // ── Observer seam ─────────────────────────────────────────────
+
+    [Fact]
+    public async Task Observer_StreamMirrorsTranscript_SameInstances_LifecycleBracketed()
+    {
+        // One cursor walk over the flat event list pins order, content, and
+        // completeness at once: per game a GameStarted(n), then exactly the
+        // game's transcript entries (reference-identical — SSOT, no parallel
+        // event family), then GameEnded(n) with the same GameRecord instance;
+        // finally MatchEnded with the returned result, and nothing else.
+        var observer = new RecordingObserver();
+        var result = await RunSeededMatch(matchLength: 9, seed: 21, observer);
+
+        int i = 0;
+        for (int g = 0; g < result.Games.Count; g++)
+        {
+            var started = Assert.IsType<RecordingObserver.GameStarted>(observer.Events[i++]);
+            Assert.Equal(g + 1, started.GameNumber);
+
+            foreach (var entry in result.Games[g].Transcript.Entries)
+            {
+                var recorded = Assert.IsType<RecordingObserver.EntryRecorded>(observer.Events[i++]);
+                Assert.Same(entry, recorded.Entry);
+            }
+
+            var ended = Assert.IsType<RecordingObserver.GameEnded>(observer.Events[i++]);
+            Assert.Equal(g + 1, ended.GameNumber);
+            Assert.Same(result.Games[g], ended.Record);
+        }
+
+        var matchEnded = Assert.IsType<RecordingObserver.MatchEnded>(observer.Events[i++]);
+        Assert.Same(result, matchEnded.Result);
+        Assert.Equal(observer.Events.Count, i);
+    }
+
+    [Fact]
+    public async Task Forfeit_CompletedGamesReachedObserver_StreamStopsWithoutTerminalEvents()
+    {
+        // Game 1 completes double→pass; in game 2 seat Two's offer returns a
+        // response-side value (Take), aborting the run mid-game — after One's
+        // opening play was already delivered.
+        var observer = new RecordingObserver();
+        var runner = new MatchRunner(new RecordedDiceSource([(6, 5), (6, 5)]));
+        int offers = 0;
+        var one = Participant(new FirstPlayAgent(), new DelegateCubeAgent(
+            offer: _ => CubeAction.NoDouble, response: _ => CubeAction.Pass));
+        var two = Participant(new FirstPlayAgent(), new DelegateCubeAgent(
+            offer: _ => ++offers == 1 ? CubeAction.Double : CubeAction.Take,
+            response: _ => CubeAction.Pass));
+
+        var ex = await Assert.ThrowsAsync<AgentContractViolationException>(
+            () => runner.RunMatchAsync(one, two, matchLength: 5, observer: observer));
+        Assert.Equal(MatchSeat.Two, ex.Seat);
+        Assert.Equal(AgentContractViolationKind.IllegalCubeOffer, ex.Kind);
+
+        // The completed game 1 was fully delivered before the abort...
+        var gameEnded = Assert.Single(observer.Events.OfType<RecordingObserver.GameEnded>());
+        Assert.Equal(1, gameEnded.GameNumber);
+        Assert.Equal(MatchSeat.Two, gameEnded.Record.Winner);
+        Assert.Equal(4, gameEnded.Record.Transcript.Entries.Count);
+
+        // ...game 2 started and streamed its opening play, then the stream
+        // just stopped: no GameEnded(2), no MatchEnded.
+        Assert.Equal(2, observer.Events.OfType<RecordingObserver.GameStarted>().Count());
+        var last = Assert.IsType<RecordingObserver.EntryRecorded>(observer.Events[^1]);
+        Assert.IsType<PlayTranscriptEntry>(last.Entry);
+        Assert.Empty(observer.Events.OfType<RecordingObserver.MatchEnded>());
+        Assert.Equal(8, observer.Events.Count);   // started, 4 entries, ended, started, 1 entry
+    }
+
+    [Fact]
+    public async Task Observer_ExceptionPropagatesUnwrapped_FailFast()
+    {
+        var runner = new MatchRunner(new RecordedDiceSource([(6, 5)]));
+        var one = Participant(new FirstPlayAgent(), CubeAgents.Never());
+        var two = Participant(new FirstPlayAgent(), CubeAgents.Never());
+
+        await Assert.ThrowsAsync<ObserverFailedException>(
+            () => runner.RunMatchAsync(one, two, matchLength: 5, observer: new ThrowingObserver()));
+    }
+
     // ── The arc's proof: seeded full matches, end to end ──────────
 
     [Theory]
@@ -598,11 +817,11 @@ public class MatchRunnerTests
         }
     }
 
-    private static Task<MatchResult> RunSeededMatch(int matchLength, int seed)
+    private static Task<MatchResult> RunSeededMatch(int matchLength, int seed, IMatchObserver? observer = null)
     {
         var runner = new MatchRunner(new SeededDiceSource(seed));
         var one = Participant(new RandomPlayAgent(seed + 1), CubeAgents.DoubleOnceTake());
         var two = Participant(new RandomPlayAgent(seed + 2), CubeAgents.DoubleOnceTake());
-        return runner.RunMatchAsync(one, two, matchLength);
+        return runner.RunMatchAsync(one, two, matchLength, observer: observer);
     }
 }
