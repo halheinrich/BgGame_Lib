@@ -78,6 +78,16 @@ public sealed class MatchState
     /// </para>
     ///
     /// <para>
+    /// The scores must also form a valid Crawford position: exactly one side
+    /// is one-away from the match — its score equals
+    /// <paramref name="matchLength"/> − 1 while the other is strictly below it.
+    /// The Crawford game is the single game right after the leader first reaches
+    /// that score, so double match point (both sides one-away) is provably
+    /// post-Crawford and neither-side-one-away is pre-Crawford; both are
+    /// rejected.
+    /// </para>
+    ///
+    /// <para>
     /// In match play (<paramref name="matchLength"/> &gt; 0) each score must be
     /// strictly below the match length — a score at or over the length is a
     /// finished match, not a resumable mid-match state. Money games
@@ -106,6 +116,17 @@ public sealed class MatchState
         if (isCrawford && matchLength == 1)
             throw new ArgumentException(
                 "Crawford does not apply in a 1-point match — it has no cube to suspend.",
+                nameof(isCrawford));
+        // Score-consistency (matchLength ≥ 2 guaranteed here, both scores ≤ matchLength − 1
+        // by the range guards above): the Crawford game is the single game after the leader
+        // first reaches matchLength − 1, so exactly one side is one-away. Both-at-(L−1) is
+        // double match point — provably post-Crawford — and neither-at-(L−1) is pre-Crawford.
+        if (isCrawford &&
+            (Math.Max(onRollScore, opponentScore) != matchLength - 1 ||
+             Math.Min(onRollScore, opponentScore) == matchLength - 1))
+            throw new ArgumentException(
+                "Crawford requires exactly one side one-away from the match "
+                + "(a score of matchLength − 1); the given scores are not a Crawford position.",
                 nameof(isCrawford));
 
         return new MatchState

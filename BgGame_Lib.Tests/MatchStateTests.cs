@@ -195,6 +195,36 @@ public class MatchStateTests
     }
 
     [Fact]
+    public void FromScores_CrawfordWithNeitherSideOneAway_Throws()
+    {
+        // Neither score is matchLength − 1 (6): a Crawford game can only be the one
+        // right after the leader first reaches one-away, so this is pre-Crawford.
+        Assert.Throws<ArgumentException>(
+            () => MatchState.FromScores(matchLength: 7, onRollScore: 4, opponentScore: 3, isCrawford: true));
+    }
+
+    [Fact]
+    public void FromScores_CrawfordWithBothSidesOneAway_Throws()
+    {
+        // Both scores at matchLength − 1 (6) is double match point — provably
+        // post-Crawford, never a Crawford game.
+        Assert.Throws<ArgumentException>(
+            () => MatchState.FromScores(matchLength: 7, onRollScore: 6, opponentScore: 6, isCrawford: true));
+    }
+
+    [Fact]
+    public void FromScores_CrawfordWithLeaderOneAway_Constructs()
+    {
+        // Guard boundary: leader exactly at matchLength − 1 (6), trailer strictly
+        // below — the one valid Crawford position — constructs cleanly.
+        var match = MatchState.FromScores(matchLength: 7, onRollScore: 6, opponentScore: 3, isCrawford: true);
+
+        Assert.True(match.IsCrawford);
+        Assert.Equal(6, match.OnRollScore);
+        Assert.Equal(3, match.OpponentScore);
+    }
+
+    [Fact]
     public void AwardGame_OnePointMatch_EndsWithoutEnteringCrawford()
     {
         var match = MatchState.NewMatch(1);
