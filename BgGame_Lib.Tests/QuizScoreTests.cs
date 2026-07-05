@@ -1,15 +1,21 @@
 namespace BgGame_Lib.Tests;
 
+using System.Globalization;
 using BgDataTypes_Lib;
 
 public class QuizScoreTests
 {
+    // QuizScore folds these records by reading their result fields; it never
+    // reads DecisionId. A fixed representative id therefore keeps every folding
+    // assertion below unchanged in intent.
+    private static readonly DecisionId AnyId = DecisionId.Parse("problem.xgp", CultureInfo.InvariantCulture);
+
     private static SubmittedPlay Play(double equityLoss, bool correct) =>
-        new(new Play(), MatchedCandidateIndex: correct ? 0 : 1, EquityLoss: equityLoss, IsCorrect: correct);
+        new(AnyId, new Play(), MatchedCandidateIndex: correct ? 0 : 1, EquityLoss: equityLoss, IsCorrect: correct);
 
     private static SubmittedCubeAction Cube(
         double doublerLoss, bool doublerCorrect, double takerLoss, bool takerCorrect) =>
-        new(new CubeDecisionPair(CubeAction.Double, CubeAction.Take),
+        new(AnyId, new CubeDecisionPair(CubeAction.Double, CubeAction.Take),
             DoublerEquityLoss: doublerLoss, TakerEquityLoss: takerLoss,
             DoublerCorrect: doublerCorrect, TakerCorrect: takerCorrect);
 

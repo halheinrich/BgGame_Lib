@@ -6,6 +6,7 @@ using BgDataTypes_Lib;
 /// One play submitted by a quiz user, scored against the position's candidate
 /// plays.
 /// </summary>
+/// <param name="DecisionId">Stable identity of the decision this submission answers (from BgDecisionData.Id).</param>
 /// <param name="UserPlay">The play the user chose.</param>
 /// <param name="MatchedCandidateIndex">
 /// Index into the position's <c>Plays</c> list of the candidate the user's
@@ -15,6 +16,7 @@ using BgDataTypes_Lib;
 /// <param name="EquityLoss">Equity loss vs. the best candidate (0 if best).</param>
 /// <param name="IsCorrect">True iff the user matched the best candidate (i.e., zero equity loss).</param>
 public sealed record SubmittedPlay(
+    DecisionId DecisionId,
     Play UserPlay,
     int? MatchedCandidateIndex,
     double EquityLoss,

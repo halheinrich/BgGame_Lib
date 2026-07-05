@@ -1,5 +1,6 @@
 namespace BgGame_Lib.Tests;
 
+using System.Globalization;
 using BgDataTypes_Lib;
 
 public class TrivialTypeTests
@@ -33,23 +34,52 @@ public class TrivialTypeTests
     {
         var play = new Play();
         play.Add(new Move(13, 7));
+        var id = DecisionId.Parse("problem.xgp", CultureInfo.InvariantCulture);
 
-        var a = new SubmittedPlay(play, MatchedCandidateIndex: 0, EquityLoss: 0.0, IsCorrect: true);
-        var b = new SubmittedPlay(play, MatchedCandidateIndex: 0, EquityLoss: 0.0, IsCorrect: true);
+        var a = new SubmittedPlay(id, play, MatchedCandidateIndex: 0, EquityLoss: 0.0, IsCorrect: true);
+        var b = new SubmittedPlay(id, play, MatchedCandidateIndex: 0, EquityLoss: 0.0, IsCorrect: true);
 
         Assert.Equal(a, b);
+    }
+
+    [Fact]
+    public void SubmittedPlay_DecisionIdParticipatesInEquality()
+    {
+        var play = new Play();
+        play.Add(new Move(13, 7));
+
+        var a = new SubmittedPlay(DecisionId.Parse("problem-a.xgp", CultureInfo.InvariantCulture),
+            play, MatchedCandidateIndex: 0, EquityLoss: 0.0, IsCorrect: true);
+        var b = new SubmittedPlay(DecisionId.Parse("problem-b.xgp", CultureInfo.InvariantCulture),
+            play, MatchedCandidateIndex: 0, EquityLoss: 0.0, IsCorrect: true);
+
+        Assert.NotEqual(a, b);
     }
 
     [Fact]
     public void SubmittedCubeAction_RecordEqualityHoldsByValue()
     {
         var decision = new CubeDecisionPair(CubeAction.Double, CubeAction.Take);
+        var id = DecisionId.Parse("problem.xgp", CultureInfo.InvariantCulture);
 
-        var a = new SubmittedCubeAction(decision,
+        var a = new SubmittedCubeAction(id, decision,
             DoublerEquityLoss: 0.0, TakerEquityLoss: 0.08, DoublerCorrect: true, TakerCorrect: false);
-        var b = new SubmittedCubeAction(decision,
+        var b = new SubmittedCubeAction(id, decision,
             DoublerEquityLoss: 0.0, TakerEquityLoss: 0.08, DoublerCorrect: true, TakerCorrect: false);
 
         Assert.Equal(a, b);
+    }
+
+    [Fact]
+    public void SubmittedCubeAction_DecisionIdParticipatesInEquality()
+    {
+        var decision = new CubeDecisionPair(CubeAction.Double, CubeAction.Take);
+
+        var a = new SubmittedCubeAction(DecisionId.Parse("problem-a.xgp", CultureInfo.InvariantCulture),
+            decision, DoublerEquityLoss: 0.0, TakerEquityLoss: 0.08, DoublerCorrect: true, TakerCorrect: false);
+        var b = new SubmittedCubeAction(DecisionId.Parse("problem-b.xgp", CultureInfo.InvariantCulture),
+            decision, DoublerEquityLoss: 0.0, TakerEquityLoss: 0.08, DoublerCorrect: true, TakerCorrect: false);
+
+        Assert.NotEqual(a, b);
     }
 }

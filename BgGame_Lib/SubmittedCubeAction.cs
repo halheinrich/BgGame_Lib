@@ -15,12 +15,14 @@ using BgDataTypes_Lib;
 /// <c>BestDoublerAction</c> / <c>BestTakerAction</c>); this type is the carrier
 /// that <see cref="QuizScore.Plus(SubmittedCubeAction)"/> folds in.
 /// </summary>
+/// <param name="DecisionId">Stable identity of the decision this submission answers (from BgDecisionData.Id).</param>
 /// <param name="UserDecision">The doubler/taker action pair the user chose.</param>
 /// <param name="DoublerEquityLoss">Equity loss of the user's doubler action vs. the best doubler action (0 if best).</param>
 /// <param name="TakerEquityLoss">Equity loss of the user's taker action vs. the best taker action (0 if best).</param>
 /// <param name="DoublerCorrect">True iff the user's doubler action matched the best doubler action.</param>
 /// <param name="TakerCorrect">True iff the user's taker action matched the best taker action.</param>
 public sealed record SubmittedCubeAction(
+    DecisionId DecisionId,
     CubeDecisionPair UserDecision,
     double DoublerEquityLoss,
     double TakerEquityLoss,
