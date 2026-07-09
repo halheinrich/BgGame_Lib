@@ -809,7 +809,7 @@ public class MatchRunnerTests
     /// the crossing assertions in
     /// <see cref="OnGameStarted_CrawfordFlag_CrossesTheBoundary_SeededMatch"/>.
     /// </summary>
-    private const int CrawfordCrossingSeed = 1;
+    private const int CrawfordCrossingSeed = 6;
 
     // ── The arc's proof: seeded full matches, end to end ──────────
 
