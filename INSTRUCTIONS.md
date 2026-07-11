@@ -31,6 +31,7 @@ https://github.com/halheinrich/BgGame_Lib — branch `main`.
 
 ```
 BgGame_Lib.slnx
+Directory.Packages.props  — central package-version management (CPM)
 spec/
   verifiable-dice-vectors.json — committed cross-language dice vectors (the PROTOCOL.md contract)
 BgGame_Lib/
@@ -60,6 +61,7 @@ BgGame_Lib/
   QuizScore.cs            — immutable cumulative score: play / double / take segments + derived total
   Referee.cs              — skeletal: end-of-game, ApplyCubeResponse
   ScoreSegment.cs         — immutable per-category running tally (submitted / correct / equity loss)
+  ShuffledProblemSetSource.cs — IProblemSetSource decorator: Fisher-Yates; re-shuffles per enumeration
   SubmittedCubeAction.cs  — record: user cube decision + per-half (doubler/taker) results
   SubmittedPlay.cs        — record: user play + matched candidate + equity loss
   Transcript.cs           — append-only ordered list of TranscriptEntry
@@ -78,6 +80,7 @@ BgGame_Lib.Tests/
   TestAgents.cs           — in-proc baseline bots (random/first/delegate agents)
   PlayAgentContractTests.cs
   ProblemSetSourceContractTests.cs
+  ShuffledProblemSetSourceTests.cs
   QuizScoreTests.cs
   ScoreSegmentTests.cs
   RefereeTests.cs
@@ -435,6 +438,37 @@ Future implementations (uploaded files, deployed problem-set bundles,
 curated libraries) plug in via the same interface without changes to the
 consuming quiz controller.
 
+`ShuffledProblemSetSource` is the one concrete `IProblemSetSource` shipping
+here — a **decorator**, not a leaf source. It wraps any inner source and
+presents that source's decisions in a randomized (Fisher-Yates) order,
+composing over server-disk, uploaded-file, or future bundle sources because
+it speaks only the interface. The consumer wires it in: BgQuiz_Blazor's
+`Program.cs` wraps the picked source only when the user toggles shuffle on.
+
+- **Materialization.** Shuffling needs the whole item set up front, so each
+  `EnumerateAsync` drains the inner source into a list before yielding
+  anything. For a lazily streamed, uncounted inner source this trades that
+  source's streaming/lazy-count behavior for one full materialization per
+  enumeration — a deliberate cost of shuffling, not a free wrapper.
+- **Name / Count passthrough.** Order is the only thing shuffling changes;
+  cardinality is untouched and the decorator knows no more about the inner
+  size than the inner does. Both properties pass through unchanged (`Count`
+  stays null when the inner source streams).
+- **Re-shuffle per enumeration.** The decorator caches no shuffled list. Each
+  `EnumerateAsync` re-materializes from the inner source's current state
+  (itself required to be re-iterable) and re-shuffles using this instance's
+  shared `Random`, so successive calls — a quiz controller's Restart — draw a
+  *new* permutation rather than replaying the last one. That matches what
+  "restart a shuffled quiz" means to a user, and keeps the decorator stateless
+  beyond the RNG.
+- **Two constructors.** The unseeded ctor seeds `Random` non-deterministically
+  — production use where reproducibility isn't wanted (the path `Program.cs`
+  takes). The seeded ctor fixes the shuffle sequence for deterministic tests
+  and replayable sessions; reproducibility scope mirrors `SeededDiceSource`
+  (stable within a .NET runtime version via the framework's compatibility
+  `Random`, not an audit-grade guarantee). Not thread-safe — `Random` isn't,
+  and the wrapper adds no synchronization.
+
 ### Quiz-result records
 
 **`SubmittedPlay`** captures one user play scored against a position's
@@ -675,6 +709,16 @@ public interface IProblemSetSource
     IAsyncEnumerable<BgDecisionData> EnumerateAsync(CancellationToken cancellationToken = default);
 }
 
+public sealed class ShuffledProblemSetSource : IProblemSetSource   // decorator: Fisher-Yates over an inner source
+{
+    public ShuffledProblemSetSource(IProblemSetSource inner);              // production: non-deterministic seed
+    public ShuffledProblemSetSource(IProblemSetSource inner, int seed);   // deterministic tests / replay
+    public string Name { get; }    // passthrough from inner
+    public int? Count { get; }     // passthrough from inner (null when inner streams)
+    public IAsyncEnumerable<BgDecisionData> EnumerateAsync(CancellationToken cancellationToken = default);
+        // drains + re-shuffles the inner source each call → a fresh permutation per enumeration
+}
+
 // Quiz scoring
 public sealed record SubmittedPlay(Play UserPlay, int? MatchedCandidateIndex, double EquityLoss, bool IsCorrect);
 public sealed record SubmittedCubeAction(
@@ -740,6 +784,15 @@ public sealed record QuizScore(ScoreSegment PlayDecisions, ScoreSegment DoubleDe
   that wrap a one-shot resource (consumed upload, exhausted network stream)
   must throw on a second call rather than silently yielding an empty
   sequence — an empty sequence would look like "no problems" to the consumer.
+- **`ShuffledProblemSetSource` re-shuffles every enumeration — same items,
+  new order.** It honors the re-iterable contract (each `EnumerateAsync`
+  yields the full set from the start), but the order differs between calls:
+  the decorator caches no shuffled list and advances its shared `Random` each
+  pass, so a Restart is a fresh permutation, not a replay. Do not assume the
+  order is stable across enumerations (e.g. caching indices from one pass to
+  address items in the next). It also materializes the inner source in full
+  per enumeration, forfeiting a streaming inner's laziness — wrap only when
+  shuffling is actually wanted.
 - **`Match` aggregation, not ownership.** `GameState.Match` is a reference
   to a `MatchState` that may outlive the `GameState`. Mutations to the
   match (via `AwardGame`) persist into the next game's `GameState`. Do not
