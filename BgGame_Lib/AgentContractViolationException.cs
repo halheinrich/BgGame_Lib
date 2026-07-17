@@ -21,11 +21,16 @@ public enum AgentContractViolationKind
 /// <see cref="CubeAction"/> enum for the decision being asked.
 ///
 /// The runner is deliberately policy-free about consequences. Converting a
-/// violation into a forfeit — and deciding what a forfeit awards — is
-/// tournament-layer logic: a tournament server catches this exception, reads
-/// <see cref="Seat"/> / <see cref="Kind"/> (plus <see cref="OffendingPlay"/> /
-/// <see cref="OffendingCubeAction"/> for its audit record), and applies its
-/// own rules. The substrate state is not mutated by the offending decision
+/// violation into a forfeit — and deciding what a forfeit awards or persists —
+/// is tournament-layer logic: a tournament server catches this exception and
+/// applies its own rules. <see cref="Seat"/> and <see cref="Kind"/> classify
+/// the offender and the broken rule; <see cref="OffendingPlay"/> /
+/// <see cref="OffendingCubeAction"/> carry the structured offending value for
+/// any policy layer that wants to inspect it beyond the message text (which
+/// already embeds the same detail — see the factory methods). Which of these a
+/// server persists is its own choice: the current BgTournament server forfeits
+/// on <see cref="Seat"/> and records the human-readable <see cref="Exception.Message"/>.
+/// The substrate state is not mutated by the offending decision
 /// (throw-before-mutate holds throughout), so the match is abandoned
 /// mid-decision, not corrupted.
 /// </summary>
