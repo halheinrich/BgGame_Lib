@@ -1,10 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <!-- TargetFramework / Nullable / ImplicitUsings / TreatWarningsAsErrors are
+       repo-wide policy in Directory.Build.props. -->
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <!-- No shipping surface, so no XML docs: undocumented test members must not
+         warn (and, under TreatWarningsAsErrors, fail the build). Warnings stay
+         errors; only the doc-file requirement is lifted. -->
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
   </PropertyGroup>
 
   <ItemGroup>

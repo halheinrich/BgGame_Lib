@@ -1,10 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-  </PropertyGroup>
+  <!-- TargetFramework / Nullable / ImplicitUsings / TreatWarningsAsErrors /
+       GenerateDocumentationFile are repo-wide policy in Directory.Build.props. -->
 
   <ItemGroup>
     <InternalsVisibleTo Include="BgGame_Lib.Tests" />
