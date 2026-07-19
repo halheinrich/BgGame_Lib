@@ -46,27 +46,39 @@ public class DecisionStatsTests
     }
 
     [Fact]
-    public void FromCube_BothHalvesCorrect_CountsOneCorrectDecision()
+    public void FromCube_BothHalvesCorrect_CountsTwoCorrectDecisions()
     {
         var s = DecisionStats.From(
             Cube(Id, doublerLoss: 0.0, doublerCorrect: true, takerLoss: 0.0, takerCorrect: true), T1);
 
-        Assert.Equal(new ScoreSegment(Submitted: 1, Correct: 1, TotalEquityLoss: 0.0), s.Tally);
+        Assert.Equal(new ScoreSegment(Submitted: 2, Correct: 2, TotalEquityLoss: 0.0), s.Tally);
     }
 
     [Theory]
     [InlineData(0.05, false, 0.00, true)]   // doubler half wrong
     [InlineData(0.00, true, 0.08, false)]   // taker half wrong
-    [InlineData(0.05, false, 0.08, false)]  // both halves wrong
-    public void FromCube_AnyHalfWrong_CountsOneWrongDecision_LossSumsBothHalves(
+    public void FromCube_OneHalfWrong_CountsOneOfTwo_LossSumsBothHalves(
         double doublerLoss, bool doublerCorrect, double takerLoss, bool takerCorrect)
     {
         var s = DecisionStats.From(
             Cube(Id, doublerLoss, doublerCorrect, takerLoss, takerCorrect), T1);
 
-        Assert.Equal(1, s.Tally.Submitted);
-        Assert.Equal(0, s.Tally.Correct);
+        Assert.Equal(2, s.Tally.Submitted);
+        Assert.Equal(1, s.Tally.Correct);
+        Assert.Equal(1, s.Wrong);
         Assert.Equal(doublerLoss + takerLoss, s.Tally.TotalEquityLoss, precision: 9);
+    }
+
+    [Fact]
+    public void FromCube_BothHalvesWrong_CountsZeroOfTwo_LossSumsBothHalves()
+    {
+        var s = DecisionStats.From(
+            Cube(Id, doublerLoss: 0.05, doublerCorrect: false, takerLoss: 0.08, takerCorrect: false), T1);
+
+        Assert.Equal(2, s.Tally.Submitted);
+        Assert.Equal(0, s.Tally.Correct);
+        Assert.Equal(2, s.Wrong);
+        Assert.Equal(0.13, s.Tally.TotalEquityLoss, precision: 9);
     }
 
     [Fact]
@@ -88,8 +100,8 @@ public class DecisionStatsTests
         var s = DecisionStats.From(Play(Id, equityLoss: 0.02, correct: false), T1)
             .Plus(Cube(Id, doublerLoss: 0.0, doublerCorrect: true, takerLoss: 0.0, takerCorrect: true), T2);
 
-        Assert.Equal(2, s.Tally.Submitted);
-        Assert.Equal(1, s.Tally.Correct);
+        Assert.Equal(3, s.Tally.Submitted);   // one play + a cube's two halves
+        Assert.Equal(2, s.Tally.Correct);
         Assert.Equal(0.02, s.Tally.TotalEquityLoss, precision: 9);
     }
 

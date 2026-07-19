@@ -527,12 +527,13 @@ single-writer.
 composed `ScoreSegment` tally, and the last-quizzed date. Composing
 `ScoreSegment` (rather than local correct/wrong fields) keeps the library's
 single accumulation primitive single-sourced; the wrong count is the derived
-`Wrong` (`Submitted − Correct`), never stored. The fold rule differs from
-`QuizScore` **by design**: a cube position folds as **one** decision — correct
-only when both the doubler and taker halves were right, with both halves'
-equity losses accumulated — where `QuizScore.Plus(cube)` scores the halves as
-two independent segment submissions. One quizzed position, one lifetime
-record. Folding a submission whose `DecisionId` differs from the record's
+`Wrong` (`Submitted − Correct`), never stored. The fold rule **agrees with
+`QuizScore`** on how many decisions a cube position is worth: two — the
+doubler half and the taker half — so a cube submission adds 2 submitted and
+one correct per half that was right, with both halves' equity losses
+accumulated. One quizzed position still produces exactly one lifetime record
+keyed by its `DecisionId`; only the counting granularity inside that record
+is per-half. Folding a submission whose `DecisionId` differs from the record's
 throws `ArgumentException` (wrong-key folds are data corruption); the static
 `From` factories are defined as an empty seed plus `Plus`, so the fold rule
 has one definition. Skips and off-list plays never reach a fold — the
@@ -814,7 +815,7 @@ public sealed record DecisionStats(DecisionId Id, ScoreSegment Tally, DateTimeOf
     public static DecisionStats From(SubmittedPlay play, DateTimeOffset quizzedAt);       // first-ever fold
     public static DecisionStats From(SubmittedCubeAction cube, DateTimeOffset quizzedAt);
     public DecisionStats Plus(SubmittedPlay play, DateTimeOffset quizzedAt);       // ArgumentException on id mismatch
-    public DecisionStats Plus(SubmittedCubeAction cube, DateTimeOffset quizzedAt); // ONE decision: both halves must be right
+    public DecisionStats Plus(SubmittedCubeAction cube, DateTimeOffset quizzedAt); // TWO decisions (per half), as QuizScore
 }
 
 [JsonConverter(typeof(DecisionStatsDocumentJsonConverter))]   // bundled; consumers register nothing
@@ -866,13 +867,17 @@ public sealed class DecisionStatsDocument                     // immutable; refe
   the record self-describing for downstream display. Producers must keep
   the two consistent; consumers should not derive a different correctness
   rule (e.g., "within 0.001 equity").
-- **`DecisionStats` folds a cube position as ONE decision; `QuizScore` folds
-  it as two.** In the lifetime record a cube submission counts correct only
-  when both the doubler and taker halves were right, and accumulates both
-  halves' equity losses into one tally; `QuizScore.Plus(cube)` scores the
-  halves as independent double/take segment submissions. Both are by design —
-  do not expect a document's tallies to reconcile with a `QuizScore.Total`
-  over the same submissions, and do not "fix" either to match the other.
+- **`DecisionStats` and `QuizScore` count a cube position the same way: TWO
+  decisions.** Both fold the doubler half and the taker half as independent
+  submissions, so a half-right cube reads **1-of-2, not 0-of-1** — a
+  deliberate alignment, since two counting rules for the same event are
+  user-visible the moment lifetime stats sit beside a session score. The
+  difference is only in shape: `QuizScore` splits them across its
+  `DoubleDecisions` / `TakeDecisions` segments, while `DecisionStats` sums
+  both halves into the one tally of the one record keyed by that position's
+  `DecisionId`. A document's tallies therefore reconcile with a
+  `QuizScore.Total` over the same submissions; if they ever diverge, that is
+  a bug in one of the two folds, not a design difference.
 - **`DecisionStatsDocument` JSON pins names and ordering, not whitespace.**
   The bundled converter hand-writes fixed property names ordered by canonical
   id, so the consumer's naming policy cannot change the format — but

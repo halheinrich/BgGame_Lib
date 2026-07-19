@@ -12,11 +12,12 @@ using BgDataTypes_Lib;
 /// The tally reuses <see cref="ScoreSegment"/> — the library's single
 /// accumulation primitive — rather than restating submitted/correct/loss
 /// fields locally; the wrong count is the derived <see cref="Wrong"/>, never
-/// stored. Unlike <see cref="QuizScore.Plus(SubmittedCubeAction)"/>, which
-/// scores a cube position's doubler and taker halves as two independent
-/// segment submissions, a cube position folds into this record as <b>one</b>
-/// decision: correct only when both halves were right, with the equity loss
-/// of both halves accumulated. One quizzed position — one lifetime record.
+/// stored. Cube positions are counted the same way here as in
+/// <see cref="QuizScore.Plus(SubmittedCubeAction)"/>: the doubler and taker
+/// halves are two decisions, so a cube submission adds <b>two</b> to the
+/// tally — one per half that was right — with both halves' equity losses
+/// accumulated. One quizzed position still yields one lifetime record; only
+/// the counting granularity inside it is per-half.
 /// </para>
 ///
 /// <para>
@@ -89,10 +90,13 @@ public sealed record DecisionStats(DecisionId Id, ScoreSegment Tally, DateTimeOf
     }
 
     /// <summary>
-    /// Return a new record with <paramref name="cube"/> folded in as
-    /// <b>one</b> decision: correct only when both the doubler and taker
-    /// halves were right, with both halves' equity losses accumulated, and
-    /// <see cref="LastQuizzed"/> advanced to <paramref name="quizzedAt"/>.
+    /// Return a new record with <paramref name="cube"/> folded in as <b>two</b>
+    /// decisions — the doubler half and the taker half — matching
+    /// <see cref="QuizScore.Plus(SubmittedCubeAction)"/>: two submissions, one
+    /// correct per half that was right, both halves' equity losses
+    /// accumulated, and <see cref="LastQuizzed"/> advanced to
+    /// <paramref name="quizzedAt"/>. A half-right cube therefore reads
+    /// 1-of-2, not 0-of-1.
     /// </summary>
     /// <param name="cube">The submission to fold.</param>
     /// <param name="quizzedAt">The resolved fold timestamp.</param>
@@ -104,10 +108,12 @@ public sealed record DecisionStats(DecisionId Id, ScoreSegment Tally, DateTimeOf
     {
         ArgumentNullException.ThrowIfNull(cube);
         RequireMatchingId(cube.DecisionId, nameof(cube));
-        bool correct = cube.DoublerCorrect && cube.TakerCorrect;
         return this with
         {
-            Tally = Tally.Add(1, correct ? 1 : 0, cube.DoublerEquityLoss + cube.TakerEquityLoss),
+            Tally = Tally.Add(
+                2,
+                (cube.DoublerCorrect ? 1 : 0) + (cube.TakerCorrect ? 1 : 0),
+                cube.DoublerEquityLoss + cube.TakerEquityLoss),
             LastQuizzed = quizzedAt,
         };
     }

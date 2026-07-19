@@ -80,19 +80,20 @@ public class DecisionStatsDocumentTests
 
         Assert.Equal(2, doc.Count);
         Assert.Equal(0, doc.Decisions[IdA].Tally.Correct);
-        Assert.Equal(1, doc.Decisions[IdB].Tally.Correct);
+        Assert.Equal(2, doc.Decisions[IdB].Tally.Correct);
     }
 
     [Fact]
-    public void PlusCube_FoldsAsOneDecision()
+    public void PlusCube_FoldsHalvesAsTwoDecisionsInOneRecord()
     {
         var doc = DecisionStatsDocument.Empty.Plus(
             Cube(IdB, doublerLoss: 0.04, doublerCorrect: false, takerLoss: 0.06, takerCorrect: true),
             new TestClock(T1));
 
+        Assert.Equal(1, doc.Count);               // still one record per decision
         var stats = doc.Decisions[IdB];
-        Assert.Equal(1, stats.Tally.Submitted);   // one decision, not two halves
-        Assert.Equal(0, stats.Tally.Correct);     // a wrong half makes the decision wrong
+        Assert.Equal(2, stats.Tally.Submitted);   // doubler half + taker half
+        Assert.Equal(1, stats.Tally.Correct);     // half-right reads 1-of-2
         Assert.Equal(0.10, stats.Tally.TotalEquityLoss, precision: 9);
     }
 
