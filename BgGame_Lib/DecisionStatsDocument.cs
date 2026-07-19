@@ -116,8 +116,10 @@ public sealed class DecisionStatsDocument
     /// decision's lifetime record — created via
     /// <see cref="DecisionStats.From(SubmittedCubeAction, DateTimeOffset)"/>
     /// when the decision has never been quizzed before. The cube position
-    /// folds as one decision (both halves must be right to count correct) —
-    /// see <see cref="DecisionStats.Plus(SubmittedCubeAction, DateTimeOffset)"/>.
+    /// folds as <b>two</b> decisions — the doubler half and the taker half,
+    /// each counted separately into the one record, so a half-right cube reads
+    /// 1-of-2 — see
+    /// <see cref="DecisionStats.Plus(SubmittedCubeAction, DateTimeOffset)"/>.
     /// </summary>
     /// <param name="cube">The submission to fold.</param>
     /// <param name="clock">Source of the fold timestamp (its <see cref="TimeProvider.GetUtcNow"/>).</param>
