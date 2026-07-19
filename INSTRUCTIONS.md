@@ -37,6 +37,9 @@ spec/
 BgGame_Lib/
   BgGame_Lib.csproj
   AgentContractViolationException.cs — seat + kind + offending value; thrown by MatchRunner
+  DecisionStats.cs        — immutable per-decision lifetime record: DecisionId + ScoreSegment tally + last-quizzed
+  DecisionStatsDocument.cs — immutable DecisionId-keyed collection of DecisionStats; the versioned quiz-stats document
+  DecisionStatsDocumentJsonConverter.cs — bundled converter: pinned wire format, fail-loud reads
   GameRecord.cs           — one completed game: winner seat + result + transcript
   GameResult.cs           — record + GameResultKind enum (single / gammon / backgammon)
   GameSnapshot.cs         — immutable record (transcript-friendly)
@@ -81,6 +84,9 @@ BgGame_Lib.Tests/
   PlayAgentContractTests.cs
   ProblemSetSourceContractTests.cs
   ShuffledProblemSetSourceTests.cs
+  DecisionStatsTests.cs
+  DecisionStatsDocumentTests.cs
+  DecisionStatsDocumentSerializationTests.cs
   QuizScoreTests.cs
   ScoreSegmentTests.cs
   RefereeTests.cs
@@ -508,6 +514,61 @@ The per-problem history is intentionally not in the score — consumers that
 need it keep an `IReadOnlyList<SubmittedPlay>` / `SubmittedCubeAction`
 alongside.
 
+### Per-decision lifetime stats
+
+`DecisionStats` / `DecisionStatsDocument` are the storage-agnostic model
+behind BgQuiz's persistent per-decision stats file (a versioned JSON document
+kept beside the quizzed `.xg`/`.xgp` corpus). The library does no I/O — the
+consumer loads bytes, deserializes, folds submissions in, and serializes back.
+Merge/concurrency machinery is deliberately absent: single-user,
+single-writer.
+
+**`DecisionStats`** is one decision's lifetime record: its `DecisionId`, a
+composed `ScoreSegment` tally, and the last-quizzed date. Composing
+`ScoreSegment` (rather than local correct/wrong fields) keeps the library's
+single accumulation primitive single-sourced; the wrong count is the derived
+`Wrong` (`Submitted − Correct`), never stored. The fold rule differs from
+`QuizScore` **by design**: a cube position folds as **one** decision — correct
+only when both the doubler and taker halves were right, with both halves'
+equity losses accumulated — where `QuizScore.Plus(cube)` scores the halves as
+two independent segment submissions. One quizzed position, one lifetime
+record. Folding a submission whose `DecisionId` differs from the record's
+throws `ArgumentException` (wrong-key folds are data corruption); the static
+`From` factories are defined as an empty seed plus `Plus`, so the fold rule
+has one definition. Skips and off-list plays never reach a fold — the
+consumer doesn't call it for them.
+
+**`DecisionStatsDocument`** is the immutable document: an id-keyed collection
+of `DecisionStats` whose `Plus` overloads return a new document with the
+submission folded into its decision's record (created on first sight). It is
+a **class, not a record** — it wraps an `ImmutableDictionary`, where record
+equality would silently be reference equality; instances compare by
+reference. The clock enters here and only here: document folds take a
+`TimeProvider` and resolve `GetUtcNow()` themselves, so the model never reads
+ambient time and folding stays deterministic under a fake provider. The
+asymmetry with `DecisionStats.Plus` (which takes the already-resolved
+`DateTimeOffset`) is deliberate: the document is the consumer's entry point,
+so holding the seam there makes ambient-time misuse impossible at the type
+level, while the record-level fold stays a pure value computation.
+
+**Wire format.** JSON via the bundled internal
+`DecisionStatsDocumentJsonConverter` (type-level `[JsonConverter]`, same
+pattern as BgDataTypes_Lib's `DecisionIdJsonConverter` — consumers register
+nothing): a `schemaVersion` field (`CurrentSchemaVersion`, currently 1) and a
+`decisions` **array** whose elements carry the canonical `DecisionId` string,
+a nested tally object, and the ISO 8601 last-quizzed date. An array rather
+than an id-keyed JSON object because `DecisionIdJsonConverter` implements no
+property-name conversion (`ReadAsPropertyName`/`WriteAsPropertyName`) — a
+`DecisionId`-keyed JSON dictionary would throw at serialization time; the
+in-memory shape stays a dictionary. The converter hand-writes the whole tree
+with fixed property names, ordered by canonical id (ordinal), so the
+persisted format cannot vary with the consumer's `JsonSerializerOptions`.
+Reads are fail-loud: any schema version other than the current one (with a
+distinguished "newer than this library supports" message), unknown
+properties, missing required properties, invalid or duplicate ids, malformed
+dates, and impossible tallies all throw `JsonException` — a schema-version
+bump is the format's only evolution mechanism.
+
 ### Why these types live here, not in BgDataTypes_Lib
 
 BgDataTypes_Lib's charter is the shared data layer: types and pure
@@ -720,8 +781,11 @@ public sealed class ShuffledProblemSetSource : IProblemSetSource   // decorator:
 }
 
 // Quiz scoring
-public sealed record SubmittedPlay(Play UserPlay, int? MatchedCandidateIndex, double EquityLoss, bool IsCorrect);
+public sealed record SubmittedPlay(
+    DecisionId DecisionId,
+    Play UserPlay, int? MatchedCandidateIndex, double EquityLoss, bool IsCorrect);
 public sealed record SubmittedCubeAction(
+    DecisionId DecisionId,
     CubeDecisionPair UserDecision,
     double DoublerEquityLoss, double TakerEquityLoss,
     bool DoublerCorrect, bool TakerCorrect);
@@ -741,6 +805,28 @@ public sealed record QuizScore(ScoreSegment PlayDecisions, ScoreSegment DoubleDe
     public ScoreSegment Total { get; }         // derived: PlayDecisions + DoubleDecisions + TakeDecisions
     public QuizScore Plus(SubmittedPlay play);
     public QuizScore Plus(SubmittedCubeAction cube);   // one double + one take decision
+}
+
+// Per-decision lifetime stats (the BgQuiz persistent stats-file model)
+public sealed record DecisionStats(DecisionId Id, ScoreSegment Tally, DateTimeOffset LastQuizzed)
+{
+    public int Wrong { get; }                  // derived: Tally.Submitted − Tally.Correct; never stored
+    public static DecisionStats From(SubmittedPlay play, DateTimeOffset quizzedAt);       // first-ever fold
+    public static DecisionStats From(SubmittedCubeAction cube, DateTimeOffset quizzedAt);
+    public DecisionStats Plus(SubmittedPlay play, DateTimeOffset quizzedAt);       // ArgumentException on id mismatch
+    public DecisionStats Plus(SubmittedCubeAction cube, DateTimeOffset quizzedAt); // ONE decision: both halves must be right
+}
+
+[JsonConverter(typeof(DecisionStatsDocumentJsonConverter))]   // bundled; consumers register nothing
+public sealed class DecisionStatsDocument                     // immutable; reference equality (see Pitfalls)
+{
+    public const int CurrentSchemaVersion = 1;
+    public static DecisionStatsDocument Empty { get; }
+    public static DecisionStatsDocument FromStats(IEnumerable<DecisionStats> stats);   // ArgumentException on duplicate id
+    public int Count { get; }
+    public IReadOnlyDictionary<DecisionId, DecisionStats> Decisions { get; }
+    public DecisionStatsDocument Plus(SubmittedPlay play, TimeProvider clock);         // clock resolved here — the model
+    public DecisionStatsDocument Plus(SubmittedCubeAction cube, TimeProvider clock);   //   never reads ambient time
 }
 ```
 
@@ -780,6 +866,28 @@ public sealed record QuizScore(ScoreSegment PlayDecisions, ScoreSegment DoubleDe
   the record self-describing for downstream display. Producers must keep
   the two consistent; consumers should not derive a different correctness
   rule (e.g., "within 0.001 equity").
+- **`DecisionStats` folds a cube position as ONE decision; `QuizScore` folds
+  it as two.** In the lifetime record a cube submission counts correct only
+  when both the doubler and taker halves were right, and accumulates both
+  halves' equity losses into one tally; `QuizScore.Plus(cube)` scores the
+  halves as independent double/take segment submissions. Both are by design —
+  do not expect a document's tallies to reconcile with a `QuizScore.Total`
+  over the same submissions, and do not "fix" either to match the other.
+- **`DecisionStatsDocument` JSON pins names and ordering, not whitespace.**
+  The bundled converter hand-writes fixed property names ordered by canonical
+  id, so the consumer's naming policy cannot change the format — but
+  `WriteIndented` lives on the writer the serializer creates, so indentation
+  is still options-controlled. Byte-stable files (diff-friendliness) require
+  the consumer to serialize with fixed options. Reads are strict: unknown
+  properties, missing required ones, a schema version other than
+  `CurrentSchemaVersion`, invalid or duplicate ids, malformed dates, and
+  impossible tallies all throw `JsonException` — a version bump is the
+  format's only evolution mechanism; do not add tolerant-read behavior.
+- **`DecisionStatsDocument` has no value equality.** It is a class wrapping an
+  `ImmutableDictionary` (record equality would silently be reference
+  equality), so two documents with identical contents are not `Equals`.
+  Compare `Decisions` content — the `DecisionStats` values are records with
+  full value equality — not document instances.
 - **`IProblemSetSource.EnumerateAsync` is contractually re-iterable.** Implementations
   that wrap a one-shot resource (consumed upload, exhausted network stream)
   must throw on a second call rather than silently yielding an empty
