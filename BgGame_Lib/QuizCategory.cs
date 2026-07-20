@@ -30,8 +30,9 @@ namespace BgGame_Lib;
 /// <see cref="QuizCategoryKind.EverythingElse"/> is the residual category:
 /// it matches the decisions matched by no other entry selected in the same
 /// mix, so it is contextual rather than a standalone predicate —
-/// <see cref="BuildPredicate"/> throws for it, and composers gate on
-/// <see cref="IsResidual"/> instead.
+/// <see cref="BuildPredicate"/> throws for it, and the composer
+/// (<see cref="MixedProblemSetSource"/>) gates on <see cref="IsResidual"/>
+/// instead.
 /// </para>
 /// </summary>
 public sealed record QuizCategory

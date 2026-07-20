@@ -41,6 +41,9 @@ BgGame_Lib/
   DecisionStatsDocument.cs — immutable DecisionId-keyed collection of DecisionStats; the versioned quiz-stats document
   DecisionStatsDocumentJsonConverter.cs — bundled converter: pinned wire format, fail-loud reads
   GameRecord.cs           — one completed game: winner seat + result + transcript
+  MixedProblemSetSource.cs — IProblemSetSource decorator: composes a quiz from per-category pools by mix percentages
+  MixComposition.cs       — per-enumeration composition telemetry: target vs drawn + per-entry reports
+  MixCompositionEntry.cs  — one entry's telemetry: pool size, requested, drawn
   GameResult.cs           — record + GameResultKind enum (single / gammon / backgammon)
   GameSnapshot.cs         — immutable record (transcript-friendly)
   GameStartContext.cs     — frame-free OnGameStarted payload (seat scores + Crawford)
@@ -96,6 +99,7 @@ BgGame_Lib.Tests/
   QuizCategoryTests.cs
   QuizMixTests.cs
   QuizMixSerializationTests.cs
+  MixedProblemSetSourceTests.cs
   QuizScoreTests.cs
   ScoreSegmentTests.cs
   RefereeTests.cs
@@ -586,8 +590,8 @@ behind stats-weighted quiz composition ("present the decisions I get wrong
 more often"): each category is a predicate over a decision's lifetime stats —
 never-seen, got-wrong, seen-fewer-than-n, not-seen-in-days-n,
 avg-equity-loss-over-x, wrong-rate-over-r — plus the residual EverythingElse.
-The mix model and the composing `IProblemSetSource` decorator that consume
-them land alongside (BgQuiz Phase 2+ selection).
+`QuizMix` (below) selects and weights them; `MixedProblemSetSource` (below)
+composes quizzes from them (BgQuiz Phase 2+ selection).
 
 - **Data/behavior split (the `FilterConfig.Build` pattern).** `QuizCategory`
   is the serializable, value-equal DTO: a `QuizCategoryKind` plus one
@@ -667,6 +671,57 @@ rationale), while `QuizMixEntry` is a record with full value equality.
   in-memory ones. Persistence is the `FilterConfig` trio: `ToJson` /
   `FromJson` (fail loud) / `TryFromJson` (absent or corrupt restores to
   `Empty` + `false` — the localStorage path).
+
+### Stats-weighted composing source
+
+`MixedProblemSetSource` is the third `IProblemSetSource` decorator-family
+member (alongside `ShuffledProblemSetSource`): it composes each enumeration's
+quiz from an inner source by classifying decisions against a `QuizMix`'s
+categories and drawing per-entry pools to the percentage composition.
+**Composition, not ordering** — the mix decides *which* decisions form the
+quiz. Constructor: (inner, stats-provider, mix, clock) plus a seeded overload
+for deterministic tests (the shuffled-source pattern).
+
+- **Passthrough.** A blank mix makes the layer fully inert: the inner source
+  streams through unchanged (no materialization, no RNG consumption, no
+  dedupe), `Count` passes through, `LastComposition` is null. With an active
+  mix, `Count` is null — a composition's size depends on the stats document
+  and clock at enumeration time — and `Name` still passes through.
+- **Per-enumeration pipeline.** Resolve the stats document (provider seam)
+  and one `GetUtcNow()` timestamp (every predicate sees the same "now");
+  materialize the inner source, deduping by `DecisionId` (first occurrence
+  wins — a quiz presents each decision at most once); classify into per-entry
+  pools in source order (the residual pool collects decisions matched by no
+  non-residual entry, reachable only when an EverythingElse entry is
+  selected — otherwise unmatched decisions are simply not drawn); target =
+  `QuizLength ?? union of selected pools` (deduped); apportion the target by
+  percent via largest remainder (floor, leftover to largest fractional
+  remainders, ties to the earlier entry); draw in declared entry order with
+  the global once-per-quiz dedupe; redistribute shortfall proportionally (by
+  percent, largest remainder again) across entries that still have supply —
+  terminates because the draw goal is capped at the union.
+- **The random toggle.** `RandomOrder` on: uniform draws without replacement,
+  then a Fisher-Yates shuffle of the drawn set for presentation. Off: fully
+  deterministic — pools draw in source order, presentation is source order,
+  and the RNG is never consumed (even an unseeded instance is exactly
+  reproducible).
+- **Provider seam (Restart semantics).** The stats input is a
+  current-document getter, resolved fresh per enumeration: the document is
+  immutable and replaced fold-by-fold, so a quiz controller's Restart
+  re-composes against the lifetime record as it stands, including decisions
+  answered this session. A null return is a consumer wiring bug and throws
+  `InvalidOperationException` — the no-stats case is "don't wire the
+  decorator", and silently composing as all-never-seen would mask the bug as
+  a weird quiz. An *empty document* is the legitimate everything-never-seen
+  input and needs no special-casing.
+- **Telemetry.** `LastComposition` (a `MixComposition`) carries the most
+  recent enumeration's requested-vs-actual: overall `TargetCount` /
+  `DrawnCount` plus per-entry (category, percent, pool size, requested,
+  drawn) in declared order. Assigned before the first yield, so the consumer
+  can render an honest shortfall notice at quiz start. `DrawnCount <
+  TargetCount` means the requested length exceeded reachable supply;
+  per-entry `Drawn < Requested` means that entry's pool ran dry and its
+  share was redistributed.
 
 ### Why these types live here, not in BgDataTypes_Lib
 
@@ -972,6 +1027,29 @@ public sealed class QuizMix                     // immutable; reference equality
     public static QuizMix FromJson(string json);                    // fail loud
     public static bool TryFromJson(string? json, out QuizMix mix);  // absent/corrupt → Empty + false
 }
+
+// Stats-weighted composing source (decorator; see Pitfalls for the contracts)
+public sealed class MixedProblemSetSource : IProblemSetSource
+{
+    public MixedProblemSetSource(IProblemSetSource inner,
+        Func<DecisionStatsDocument> statsProvider,   // current document, resolved fresh per enumeration;
+        QuizMix mix, TimeProvider clock);            //   must never return null
+    public MixedProblemSetSource(..., int seed);     // deterministic random-mode draws/shuffle for tests
+    public string Name { get; }                      // passthrough
+    public int? Count { get; }                       // inner.Count when mix.IsPassthrough; else null
+    public MixComposition? LastComposition { get; }  // most recent enumeration; assigned before first yield
+    public IAsyncEnumerable<BgDecisionData> EnumerateAsync(CancellationToken cancellationToken = default);
+}
+
+public sealed record MixComposition(
+    int TargetCount,                                 // QuizLength ?? deduped union of selected pools
+    int DrawnCount,                                  // min(TargetCount, union) — what was actually drawn
+    IReadOnlyList<MixCompositionEntry> Entries);     // declared entry order
+public sealed record MixCompositionEntry(
+    QuizCategory Category, int Percent,
+    int PoolSize,                                    // matches for this entry, pre-dedupe
+    int Requested,                                   // initial largest-remainder share of TargetCount
+    int Drawn);                                      // actual, incl. redistribution top-ups
 ```
 
 ## Pitfalls
@@ -1051,6 +1129,21 @@ public sealed class QuizMix                     // immutable; reference equality
   are strict per the same converter posture — a corrupt or foreign mix throws
   `JsonException` rather than loading quietly different; `TryFromJson` is the
   restore-to-default path and yields `Empty`, never a partially-read mix.
+- **`MixedProblemSetSource` contracts differ between blank and active
+  mixes.** Blank (passthrough): streams the inner source unchanged — no
+  dedupe (duplicate ids stream through), `Count` passthrough,
+  `LastComposition` null. Active: materializes per enumeration (the shuffled
+  tradeoff), dedupes by `DecisionId` (first occurrence wins), `Count` is null
+  (read `LastComposition.DrawnCount` after enumeration starts instead), and
+  decisions matched by no selected entry are unreachable unless an
+  `EverythingElse` entry is in the mix. The stats provider is resolved fresh
+  per enumeration — Restart composes against the *current* document,
+  including this session's folds — and must never return null: that throws
+  `InvalidOperationException` (wiring bug), while an empty document is the
+  valid everything-never-seen input. `LastComposition` is per-instance
+  mutable state and the `Random` is shared — not thread-safe, same caveat
+  class as `ShuffledProblemSetSource`. With `RandomOrder` on, re-enumeration
+  is a fresh draw and shuffle, not a replay.
 - **`DecisionStatsDocument` has no value equality.** It is a class wrapping an
   `ImmutableDictionary` (record equality would silently be reference
   equality), so two documents with identical contents are not `Equals`.

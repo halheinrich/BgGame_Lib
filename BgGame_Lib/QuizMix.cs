@@ -7,8 +7,9 @@ using System.Text.Json.Serialization;
 /// <summary>
 /// The stats-weighted quiz composition config: an ordered set of
 /// <see cref="QuizMixEntry"/> lines (category + percentage), an optional quiz
-/// length, and the random toggle. Immutable; the composing problem-set
-/// decorator reads it to decide <i>which</i> decisions form a quiz.
+/// length, and the random toggle. Immutable;
+/// <see cref="MixedProblemSetSource"/> reads it to decide <i>which</i>
+/// decisions form a quiz.
 ///
 /// <para>
 /// <b>Blank mix = passthrough.</b> <see cref="Empty"/> (no entries) makes the
