@@ -217,11 +217,16 @@ public sealed class MixedProblemSetSource : IProblemSetSource
         var drawn = Compose(items, stats, now, out var composition);
         LastComposition = composition;
 
+        // Cooperative yielding is time-budgeted, not per-item (see
+        // CooperativeYielder). The pacing clock is deliberately TimeProvider.System,
+        // not _clock: _clock is the semantic classification timestamp and reusing
+        // it here would couple yield pacing to a fixed test clock.
+        var yielder = new CooperativeYielder(TimeProvider.System);
         foreach (var item in drawn)
         {
             cancellationToken.ThrowIfCancellationRequested();
             yield return item;
-            await Task.Yield();
+            await yielder.YieldIfDueAsync();
         }
     }
 

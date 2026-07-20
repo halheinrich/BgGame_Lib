@@ -105,11 +105,16 @@ public sealed class ShuffledProblemSetSource : IProblemSetSource
             (items[i], items[j]) = (items[j], items[i]);
         }
 
+        // Cooperative yielding is time-budgeted, not per-item: a per-item
+        // Task.Yield() over a large materialized set pays tens of thousands of
+        // scheduler round-trips on Blazor WASM's single event loop. See
+        // CooperativeYielder.
+        var yielder = new CooperativeYielder(TimeProvider.System);
         foreach (var item in items)
         {
             cancellationToken.ThrowIfCancellationRequested();
             yield return item;
-            await Task.Yield();
+            await yielder.YieldIfDueAsync();
         }
     }
 }

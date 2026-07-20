@@ -37,6 +37,7 @@ spec/
 BgGame_Lib/
   BgGame_Lib.csproj
   AgentContractViolationException.cs — seat + kind + offending value; thrown by MatchRunner
+  CooperativeYielder.cs   — time-budgeted cooperative-yield gate (TimeProvider seam) for long WASM loops
   DecisionStats.cs        — immutable per-decision lifetime record: DecisionId + ScoreSegment tally + last-quizzed
   DecisionStatsDocument.cs — immutable DecisionId-keyed collection of DecisionStats; the versioned quiz-stats document
   DecisionStatsDocumentJsonConverter.cs — bundled converter: pinned wire format, fail-loud reads
@@ -92,6 +93,7 @@ BgGame_Lib.Tests/
   TestAgents.cs           — in-proc baseline bots (random/first/delegate agents)
   PlayAgentContractTests.cs
   ProblemSetSourceContractTests.cs
+  CooperativeYielderTests.cs
   ShuffledProblemSetSourceTests.cs
   DecisionStatsTests.cs
   DecisionStatsDocumentTests.cs
@@ -723,6 +725,38 @@ for deterministic tests (the shuffled-source pattern).
   per-entry `Drawn < Requested` means that entry's pool ran dry and its
   share was redistributed.
 
+### Cooperative yielding on the enumeration hot path
+
+Both decorators materialize their inner source and then present a large drawn
+set. `CooperativeYielder` single-sources how those presentation loops yield to
+the scheduler so a Blazor WASM Start stays responsive without paying a
+per-item cost.
+
+- **The problem.** An `await Task.Yield()` after *every* presented item pays one
+  event-loop round-trip per item — tens of thousands for a large corpus — which
+  dominated a shuffled/mixed quiz Start (~7.5 s for ~25k decisions) without
+  letting the browser do anything useful between items.
+- **Time-budgeted, not per-item.** `YieldIfDueAsync()` yields only once a budget
+  (`DefaultBudget`, ~50 ms) has elapsed since the last yield, then resets the
+  window; within the budget it returns `ValueTask.CompletedTask` — synchronous,
+  no allocation — so a caller can `await` it every iteration cheaply. Often
+  enough that the browser repaints a busy cursor during a long materialization,
+  rare enough that the yields are not themselves the bottleneck.
+- **Class, owning the await.** The gate owns the `await Task.Yield()` itself, so
+  the yield *mechanism* — not merely the "is it due?" decision — is
+  single-sourced across callers. An `async` method on a struct mutates a copy of
+  `this` and would lose the budget-reset across the await, so owning the await
+  requires a reference type.
+- **Clock seam.** Timing runs through a `TimeProvider`'s monotonic
+  `GetTimestamp()` / `GetElapsedTime()` (the testable `Stopwatch` analog), so the
+  policy is deterministically unit-tested with a fake clock; production passes
+  `TimeProvider.System`. This pacing clock is deliberately kept **separate** from
+  `MixedProblemSetSource`'s semantic `_clock` (the `GetUtcNow` classification
+  timestamp): the two encode independent decisions, and reusing the semantic
+  clock would silently disable yielding whenever a test injects a fixed clock.
+  The pacing never affects which items flow or in what order — enumeration
+  semantics (items, order, cancellation) are unchanged.
+
 ### Why these types live here, not in BgDataTypes_Lib
 
 BgDataTypes_Lib's charter is the shared data layer: types and pure
@@ -914,6 +948,15 @@ public sealed class Transcript
 {
     public IReadOnlyList<TranscriptEntry> Entries { get; }
     public void Append(TranscriptEntry entry);
+}
+
+// Cooperative yielding (time-budgeted; single-sources the decorators' yield policy)
+public sealed class CooperativeYielder
+{
+    public static readonly TimeSpan DefaultBudget;                 // ~50 ms
+    public CooperativeYielder(TimeProvider clock);                 // DefaultBudget; prod passes TimeProvider.System
+    public CooperativeYielder(TimeProvider clock, TimeSpan budget);// budget must be > TimeSpan.Zero
+    public ValueTask YieldIfDueAsync();                            // yields (+ resets) only once the budget elapses
 }
 
 // Problem set
