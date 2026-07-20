@@ -61,6 +61,9 @@ BgGame_Lib/
   VerifiableDiceSource.cs — key-derived audit-grade rolls (public HMAC-SHA256 stream + rejection sampling)
   DiceKey.cs              — immutable 256-bit key: Generate() + Commit(context)
   DiceCommitment.cs       — immutable SHA-256 commitment: Verifies(key, context)
+  QuizCategoryKind.cs     — enum: which lifetime-stats predicate a quiz category applies
+  QuizCategory.cs         — kind + validated-parameter DTO; internal BuildPredicate() is the one kind→behavior switch
+  QuizCategoryPredicates.cs — internal behavior half: IQuizCategoryPredicate + per-kind predicate types
   QuizScore.cs            — immutable cumulative score: play / double / take segments + derived total
   Referee.cs              — skeletal: end-of-game, ApplyCubeResponse
   ScoreSegment.cs         — immutable per-category running tally (submitted / correct / equity loss)
@@ -87,6 +90,7 @@ BgGame_Lib.Tests/
   DecisionStatsTests.cs
   DecisionStatsDocumentTests.cs
   DecisionStatsDocumentSerializationTests.cs
+  QuizCategoryTests.cs
   QuizScoreTests.cs
   ScoreSegmentTests.cs
   RefereeTests.cs
@@ -570,6 +574,54 @@ properties, missing required properties, invalid or duplicate ids, malformed
 dates, and impossible tallies all throw `JsonException` — a schema-version
 bump is the format's only evolution mechanism.
 
+### Stats-weighted quiz categories
+
+`QuizCategoryKind` / `QuizCategory` are the selectable decision categories
+behind stats-weighted quiz composition ("present the decisions I get wrong
+more often"): each category is a predicate over a decision's lifetime stats —
+never-seen, got-wrong, seen-fewer-than-n, not-seen-in-days-n,
+avg-equity-loss-over-x, wrong-rate-over-r — plus the residual EverythingElse.
+The mix model and the composing `IProblemSetSource` decorator that consume
+them land alongside (BgQuiz Phase 2+ selection).
+
+- **Data/behavior split (the `FilterConfig.Build` pattern).** `QuizCategory`
+  is the serializable, value-equal DTO: a `QuizCategoryKind` plus one
+  `double?` parameter slot, constructible only through validating factories
+  (parameterless kinds are cached singletons; parameterized kinds fail fast on
+  out-of-bound values, so an invalid kind/parameter combination is
+  unrepresentable from outside; integer parameters store exactly). The
+  matching behavior lives in internal predicate types
+  (`IQuizCategoryPredicate` + one sealed class per kind), materialized by the
+  internal `QuizCategory.BuildPredicate()` — a single switch that is the one
+  home of the kind→behavior mapping. Adding a category is additive: one enum
+  member, one factory, one switch arm.
+- **The predicate context is the (decision, stats) pair** — the live
+  `BgDecisionData` alongside its `DecisionStats` (null = never quizzed) —
+  because sightings are derived per decision kind: a checker play submits one
+  decision per sighting, a cube position two (the two-half fold), so cube
+  sightings are `Tally.Submitted / 2` — always exact, since one id only ever
+  folds one kind. No stats-schema change; "seen fewer than n" means sightings,
+  not raw submissions.
+- **Per-half measures need no cube adjustment.** `AvgEquityLossOver` compares
+  `Tally.AverageEquityLoss`, whose numerator (both halves' losses) and
+  denominator (2 per sighting) both count per-half — `Total/Submitted` is
+  already the per-half average, comparable across decision kinds under one
+  threshold. `WrongRateOver` likewise compares the per-half wrong fraction
+  (`1 − Accuracy`, in [0, 1]): a half-right cube reads 0.5, consistent with
+  the ratified 1-of-2 fold. Thresholds are fractions — percentage rendering
+  stays a display concern, per the `ScoreSegment.Accuracy` convention.
+- **EverythingElse is residual, not a predicate.** It matches exactly the
+  decisions matched by no other entry selected in the same mix — contextual
+  by definition. `BuildPredicate()` throws for it; composers gate on
+  `QuizCategory.IsResidual` and compute the residual pool themselves. The
+  type-level split keeps a throwing `Matches` out of the predicate contract.
+- **Time enters as a parameter.** `NotSeenInDays` compares against an `asOf`
+  timestamp passed into `Matches` — resolved once per classification pass by
+  the caller (the composing decorator holds the `TimeProvider` seam), so the
+  predicates stay pure and deterministic under test. Never-seen counts as
+  not-seen (the literal reading; overlap with NeverSeen is safe because
+  composition presents each decision at most once).
+
 ### Why these types live here, not in BgDataTypes_Lib
 
 BgDataTypes_Lib's charter is the shared data layer: types and pure
@@ -829,6 +881,27 @@ public sealed class DecisionStatsDocument                     // immutable; refe
     public DecisionStatsDocument Plus(SubmittedPlay play, TimeProvider clock);         // clock resolved here — the model
     public DecisionStatsDocument Plus(SubmittedCubeAction cube, TimeProvider clock);   //   never reads ambient time
 }
+
+// Stats-weighted quiz categories (predicates over a decision's lifetime stats)
+public enum QuizCategoryKind
+{
+    NeverSeen = 1, GotWrong, SeenFewerThan, NotSeenInDays,
+    AvgEquityLossOver, WrongRateOver, EverythingElse,
+}
+
+public sealed record QuizCategory   // immutable DTO; value equality; factory-only construction
+{
+    public QuizCategoryKind Kind { get; }
+    public double? Value { get; }     // null iff parameterless kind; int parameters stored exactly
+    public bool IsResidual { get; }   // Kind == EverythingElse — see Pitfalls
+    public static QuizCategory NeverSeen { get; }                  // cached singletons
+    public static QuizCategory GotWrong { get; }
+    public static QuizCategory EverythingElse { get; }
+    public static QuizCategory SeenFewerThan(int times);           // times ≥ 1; sightings, not submissions
+    public static QuizCategory NotSeenInDays(int days);            // days ≥ 1; never-seen matches too
+    public static QuizCategory AvgEquityLossOver(double loss);     // finite, ≥ 0.0; per-half average
+    public static QuizCategory WrongRateOver(double rate);         // fraction in [0.0, 1.0); per-half
+}
 ```
 
 ## Pitfalls
@@ -888,6 +961,16 @@ public sealed class DecisionStatsDocument                     // immutable; refe
   `CurrentSchemaVersion`, invalid or duplicate ids, malformed dates, and
   impossible tallies all throw `JsonException` — a version bump is the
   format's only evolution mechanism; do not add tolerant-read behavior.
+- **`QuizCategory` measures are per-half and its thresholds are fractions;
+  "seen" means sightings.** `SeenFewerThan` counts sightings derived from the
+  tally (`Submitted / 2` for a cube decision — the two-half fold), so the
+  predicate needs the live decision's kind, not stats alone.
+  `AvgEquityLossOver` and `WrongRateOver` compare per-half measures
+  (`AverageEquityLoss` is already per-half for cubes — no adjustment) and
+  their thresholds are fractions in line with `ScoreSegment.Accuracy`, not
+  0–100 points. `EverythingElse` has no standalone predicate — the internal
+  `BuildPredicate()` throws for it; gate on `IsResidual` (it means "matched by
+  no other selected entry", computable only with the whole mix in hand).
 - **`DecisionStatsDocument` has no value equality.** It is a class wrapping an
   `ImmutableDictionary` (record equality would silently be reference
   equality), so two documents with identical contents are not `Equals`.
