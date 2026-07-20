@@ -3,12 +3,13 @@ namespace BgGame_Lib;
 /// <summary>
 /// The discriminator of a <see cref="QuizCategory"/>: which lifetime-stats
 /// predicate the category applies when classifying decisions for a
-/// stats-weighted quiz mix.
+/// stats-weighted <see cref="QuizMix"/>.
 ///
 /// <para>
 /// Adding a category is additive: a new member here, a validating factory on
-/// <see cref="QuizCategory"/>, and one arm in the single predicate switch
-/// (<c>QuizCategory.BuildPredicate</c>) — no existing surface changes.
+/// <see cref="QuizCategory"/>, and one arm in each of that type's two kind
+/// switches (<c>BuildPredicate</c> and the deserialization seam
+/// <c>Create</c>) — no existing surface changes.
 /// </para>
 /// </summary>
 public enum QuizCategoryKind

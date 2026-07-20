@@ -64,6 +64,9 @@ BgGame_Lib/
   QuizCategoryKind.cs     — enum: which lifetime-stats predicate a quiz category applies
   QuizCategory.cs         — kind + validated-parameter DTO; internal BuildPredicate() is the one kind→behavior switch
   QuizCategoryPredicates.cs — internal behavior half: IQuizCategoryPredicate + per-kind predicate types
+  QuizMix.cs              — immutable stats-weighted composition config: ordered entries + optional length + random toggle
+  QuizMixEntry.cs         — one mix line: category + percent (1–100, validated in its own ctor)
+  QuizMixJsonConverter.cs — bundled converter: pinned versioned wire format, fail-loud reads
   QuizScore.cs            — immutable cumulative score: play / double / take segments + derived total
   Referee.cs              — skeletal: end-of-game, ApplyCubeResponse
   ScoreSegment.cs         — immutable per-category running tally (submitted / correct / equity loss)
@@ -91,6 +94,8 @@ BgGame_Lib.Tests/
   DecisionStatsDocumentTests.cs
   DecisionStatsDocumentSerializationTests.cs
   QuizCategoryTests.cs
+  QuizMixTests.cs
+  QuizMixSerializationTests.cs
   QuizScoreTests.cs
   ScoreSegmentTests.cs
   RefereeTests.cs
@@ -622,6 +627,47 @@ them land alongside (BgQuiz Phase 2+ selection).
   not-seen (the literal reading; overlap with NeverSeen is safe because
   composition presents each decision at most once).
 
+### Stats-weighted quiz mix config
+
+`QuizMix` / `QuizMixEntry` are the composition config the composing decorator
+reads: an **ordered** list of (category, percent) lines, an optional quiz
+length, and the random toggle (default true). Immutable; `QuizMix` is a class
+with reference equality (it wraps a list — the `DecisionStatsDocument`
+rationale), while `QuizMixEntry` is a record with full value equality.
+
+- **Validation split.** The per-entry rule (percent 1–100) lives in
+  `QuizMixEntry`'s own constructor — the earliest construction point, so an
+  out-of-range entry never exists un-failed. `QuizMix` owns only the
+  set-level rules: non-empty entries sum to exactly 100; no duplicate
+  categories (same kind *and* parameter — the same kind with different
+  parameters is two distinct categories and allowed); length null or ≥ 1;
+  length-without-entries rejected. All fail fast.
+- **Blank = passthrough, and nothing else is blank-ish.** `QuizMix.Empty`
+  (no entries, no length) makes the composition layer fully inert. A length
+  without entries is rejected rather than treated as an implicit
+  100%-everything mix — "cap at N without weighting" is expressed losslessly
+  as a single `EverythingElse` entry at 100 plus a length.
+- **Entry order is contractual.** Under overlapping categories the composer
+  draws entries in declared order, so contested decisions go to the earlier
+  entry. The wire format preserves order; consumers rendering or persisting
+  entry lists must too.
+- **Wire format.** Versioned JSON via the bundled internal
+  `QuizMixJsonConverter` (type-level `[JsonConverter]`, hand-written fixed
+  property names, `schemaVersion` currently 1) — the
+  `DecisionStatsDocumentJsonConverter` posture: all properties always written
+  (`quizLength` as JSON `null` when unset) and always required; reads
+  fail-loud on any other schema version (distinguished "newer" message),
+  unknown or missing properties at any level, invalid kinds (exact
+  declaration-name match — numeric strings and case variants rejected),
+  kind/value pairing violations (value forbidden on parameterless kinds,
+  required on parameterized ones, integral for integer kinds), and any
+  construction-rule violation — category reconstruction routes through the
+  internal `QuizCategory.Create` seam and the mix through the public
+  constructor, so wire-level bounds have the same single definition as
+  in-memory ones. Persistence is the `FilterConfig` trio: `ToJson` /
+  `FromJson` (fail loud) / `TryFromJson` (absent or corrupt restores to
+  `Empty` + `false` — the localStorage path).
+
 ### Why these types live here, not in BgDataTypes_Lib
 
 BgDataTypes_Lib's charter is the shared data layer: types and pure
@@ -902,6 +948,30 @@ public sealed record QuizCategory   // immutable DTO; value equality; factory-on
     public static QuizCategory AvgEquityLossOver(double loss);     // finite, ≥ 0.0; per-half average
     public static QuizCategory WrongRateOver(double rate);         // fraction in [0.0, 1.0); per-half
 }
+
+// Stats-weighted quiz mix config (persisted by the consumer à la FilterConfig)
+public sealed record QuizMixEntry
+{
+    public QuizMixEntry(QuizCategory category, int percent);   // percent 1–100, validated here
+    public QuizCategory Category { get; }
+    public int Percent { get; }
+}
+
+[JsonConverter(typeof(QuizMixJsonConverter))]   // bundled; consumers register nothing
+public sealed class QuizMix                     // immutable; reference equality (see Pitfalls)
+{
+    public const int CurrentSchemaVersion = 1;
+    public static QuizMix Empty { get; }        // blank: composition layer fully inert
+    public QuizMix(IEnumerable<QuizMixEntry> entries, int? quizLength = null, bool randomOrder = true);
+        // fail fast: sum == 100, no duplicate categories, length ≥ 1, no length without entries
+    public IReadOnlyList<QuizMixEntry> Entries { get; }   // declared order — contractual (see Pitfalls)
+    public int? QuizLength { get; }             // null = size to the deduped union of selected pools
+    public bool RandomOrder { get; }            // default true; false = fully deterministic
+    public bool IsPassthrough { get; }          // Entries.Count == 0
+    public string ToJson();
+    public static QuizMix FromJson(string json);                    // fail loud
+    public static bool TryFromJson(string? json, out QuizMix mix);  // absent/corrupt → Empty + false
+}
 ```
 
 ## Pitfalls
@@ -971,6 +1041,16 @@ public sealed record QuizCategory   // immutable DTO; value equality; factory-on
   0–100 points. `EverythingElse` has no standalone predicate — the internal
   `BuildPredicate()` throws for it; gate on `IsResidual` (it means "matched by
   no other selected entry", computable only with the whole mix in hand).
+- **`QuizMix` entry order is semantically meaningful, and the mix has no
+  value equality.** Under overlapping categories, composition draws entries in
+  declared order — contested decisions go to the earlier entry — so reordering
+  a mix's entries changes the quiz it composes; preserve order when rendering
+  or persisting (the JSON form does). And like `DecisionStatsDocument`,
+  `QuizMix` is a class wrapping a list: instances compare by reference;
+  compare `Entries` content (`QuizMixEntry` is a value-equal record). Reads
+  are strict per the same converter posture — a corrupt or foreign mix throws
+  `JsonException` rather than loading quietly different; `TryFromJson` is the
+  restore-to-default path and yields `Empty`, never a partially-read mix.
 - **`DecisionStatsDocument` has no value equality.** It is a class wrapping an
   `ImmutableDictionary` (record equality would silently be reference
   equality), so two documents with identical contents are not `Equals`.

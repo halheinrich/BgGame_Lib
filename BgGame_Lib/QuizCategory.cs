@@ -8,8 +8,8 @@ namespace BgGame_Lib;
 /// unrepresentable from outside.
 ///
 /// <para>
-/// This is the serializable data half of the category (the shape the mix
-/// model persists); the matching behavior lives in internal
+/// This is the serializable data half of the category (the shape a
+/// <see cref="QuizMix"/> persists); the matching behavior lives in internal
 /// predicate types materialized by <see cref="BuildPredicate"/> — a single
 /// switch that is the one home of the data-to-behavior mapping, the same
 /// config-to-filters split as <c>XgFilter_Lib</c>'s <c>FilterConfig.Build</c>.
@@ -148,9 +148,55 @@ public sealed record QuizCategory
     }
 
     /// <summary>
-    /// Materialize this category's matching behavior. The single switch below
-    /// is the one home of the kind-to-predicate mapping; adding a category
-    /// adds one arm here and touches nothing else.
+    /// Recreate a category from its raw kind/value pair — the deserialization
+    /// seam used by <see cref="QuizMixJsonConverter"/>. Routes through the
+    /// public factories, so every bound has one definition; this switch is
+    /// the one home of which kinds are parameterized.
+    /// </summary>
+    /// <exception cref="ArgumentException">
+    /// Thrown (as <see cref="ArgumentException"/> or a subclass) when a
+    /// parameterless kind carries a value, a parameterized kind lacks one, an
+    /// integer-parameter kind gets a non-integral or out-of-range value, or a
+    /// value violates its factory's bounds.
+    /// </exception>
+    internal static QuizCategory Create(QuizCategoryKind kind, double? value) => kind switch
+    {
+        QuizCategoryKind.NeverSeen => RequireNoValue(NeverSeen, value),
+        QuizCategoryKind.GotWrong => RequireNoValue(GotWrong, value),
+        QuizCategoryKind.EverythingElse => RequireNoValue(EverythingElse, value),
+        QuizCategoryKind.SeenFewerThan => SeenFewerThan(ToExactInt(value, kind)),
+        QuizCategoryKind.NotSeenInDays => NotSeenInDays(ToExactInt(value, kind)),
+        QuizCategoryKind.AvgEquityLossOver => AvgEquityLossOver(RequireValue(value, kind)),
+        QuizCategoryKind.WrongRateOver => WrongRateOver(RequireValue(value, kind)),
+        _ => throw new ArgumentException($"Unknown QuizCategoryKind '{kind}'.", nameof(kind)),
+    };
+
+    private static QuizCategory RequireNoValue(QuizCategory singleton, double? value) =>
+        value is null
+            ? singleton
+            : throw new ArgumentException(
+                $"Category kind '{singleton.Kind}' takes no parameter value (got {value}).",
+                nameof(value));
+
+    private static double RequireValue(double? value, QuizCategoryKind kind) =>
+        value ?? throw new ArgumentException(
+            $"Category kind '{kind}' requires a parameter value.", nameof(value));
+
+    private static int ToExactInt(double? value, QuizCategoryKind kind)
+    {
+        var raw = RequireValue(value, kind);
+        if (!double.IsFinite(raw) || raw != Math.Floor(raw) || raw < int.MinValue || raw > int.MaxValue)
+            throw new ArgumentException(
+                $"Category kind '{kind}' requires an integral parameter (got {raw}).",
+                nameof(value));
+        return (int)raw;
+    }
+
+    /// <summary>
+    /// Materialize this category's matching behavior. The switch below is the
+    /// one home of the kind-to-predicate mapping; adding a category adds one
+    /// enum member, one factory, and one arm in each of the two kind switches
+    /// (this one and <see cref="Create"/>).
     /// </summary>
     /// <exception cref="InvalidOperationException">
     /// Thrown for <see cref="QuizCategoryKind.EverythingElse"/> — the residual
