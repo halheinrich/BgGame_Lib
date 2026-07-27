@@ -1277,6 +1277,10 @@ public sealed record MixCompositionEntry(
 
 ## Subproject-internal next steps
 
-None — surface complete for Phase 1 needs. Cross-cutting work (Phase 1
-wiring into BgQuiz_Blazor, future Phase 2+ modes) is tracked in the
-umbrella `INSTRUCTIONS.md`, not here.
+Surface complete for Phase 1 needs. Cross-cutting work (Phase 1 wiring into
+BgQuiz_Blazor, future Phase 2+ modes) is tracked in the umbrella
+`INSTRUCTIONS.md`, not here.
+
+- **One British stem to normalize at the next code touch** — `amortised`, in
+  the `Transcript.cs:22` doc comment. This repo is otherwise American; the
+  wider code-side spelling sweep is tracked in the umbrella.
