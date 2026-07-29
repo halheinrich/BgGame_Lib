@@ -49,14 +49,20 @@ using System.Text.Json.Serialization;
 /// </para>
 ///
 /// <para>
-/// A plain class, not a record: it wraps a list, where record equality would
-/// silently be reference equality. Instances compare by reference; compare
-/// <see cref="Entries"/> content if needed (<see cref="QuizMixEntry"/> is a
-/// record with full value equality).
+/// <b>Value equality over the full member surface.</b> Two mixes are equal
+/// when <see cref="Entries"/> match as an ordered sequence and
+/// <see cref="QuizLength"/> and <see cref="RandomOrder"/> match — so "does
+/// this draft differ from the committed mix?" is a single <c>==</c>. Order
+/// participates because entry order is contractual (see above): the same
+/// entries reordered are a different mix. A class with hand-written equality
+/// rather than a record: the type wraps a list, and the record-generated form
+/// would compare that list by reference — reporting identical configs
+/// unequal — where the hand-rolled form compares its elements
+/// (<see cref="QuizMixEntry"/> is a record with full value equality).
 /// </para>
 /// </summary>
 [JsonConverter(typeof(QuizMixJsonConverter))]
-public sealed class QuizMix
+public sealed class QuizMix : IEquatable<QuizMix>
 {
     /// <summary>
     /// The schema version this library reads and writes. Reads reject any
@@ -160,6 +166,65 @@ public sealed class QuizMix
     /// composition layer fully inert.
     /// </summary>
     public bool IsPassthrough => Entries.Count == 0;
+
+    /// <summary>
+    /// Value equality over the full member surface: <see cref="Entries"/> as
+    /// an ordered sequence (order is contractual — the same entries reordered
+    /// are a different mix), plus <see cref="QuizLength"/> and
+    /// <see cref="RandomOrder"/>. See the type remarks.
+    /// </summary>
+    /// <param name="other">The mix to compare with, or <see langword="null"/>.</param>
+    /// <returns>
+    /// <see langword="true"/> if <paramref name="other"/> has equal content;
+    /// <see langword="false"/> otherwise, including when <paramref name="other"/>
+    /// is <see langword="null"/>.
+    /// </returns>
+    public bool Equals(QuizMix? other)
+    {
+        if (ReferenceEquals(this, other))
+            return true;
+        return other is not null
+            && QuizLength == other.QuizLength
+            && RandomOrder == other.RandomOrder
+            && Entries.SequenceEqual(other.Entries);
+    }
+
+    /// <inheritdoc cref="Equals(QuizMix?)"/>
+    public override bool Equals(object? obj) => Equals(obj as QuizMix);
+
+    /// <summary>
+    /// Hash code consistent with <see cref="Equals(QuizMix?)"/>: folds the
+    /// entry sequence in order, then <see cref="QuizLength"/> and
+    /// <see cref="RandomOrder"/>. Safe to hash — the type is immutable.
+    /// </summary>
+    /// <returns>The content-based hash code.</returns>
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        foreach (var entry in Entries)
+            hash.Add(entry);
+        hash.Add(QuizLength);
+        hash.Add(RandomOrder);
+        return hash.ToHashCode();
+    }
+
+    /// <summary>
+    /// Content equality per <see cref="Equals(QuizMix?)"/>; two
+    /// <see langword="null"/> operands are equal.
+    /// </summary>
+    /// <param name="left">The first mix, or <see langword="null"/>.</param>
+    /// <param name="right">The second mix, or <see langword="null"/>.</param>
+    /// <returns><see langword="true"/> if both are <see langword="null"/> or have equal content.</returns>
+    public static bool operator ==(QuizMix? left, QuizMix? right) =>
+        left is null ? right is null : left.Equals(right);
+
+    /// <summary>
+    /// Negation of <see cref="operator ==(QuizMix?, QuizMix?)"/>.
+    /// </summary>
+    /// <param name="left">The first mix, or <see langword="null"/>.</param>
+    /// <param name="right">The second mix, or <see langword="null"/>.</param>
+    /// <returns><see langword="true"/> if the operands differ in content or nullness.</returns>
+    public static bool operator !=(QuizMix? left, QuizMix? right) => !(left == right);
 
     /// <summary>
     /// Serializes this mix to its canonical JSON representation — the inverse

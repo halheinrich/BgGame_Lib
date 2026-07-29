@@ -135,4 +135,95 @@ public class QuizMixTests
         Assert.Single(mix.Entries);
         Assert.Equal(25, mix.QuizLength);
     }
+
+    // -----------------------------------------------------------------------
+    //  QuizMix — value equality over the full member surface
+    // -----------------------------------------------------------------------
+
+    private static QuizMix Mix(int? quizLength = 25, bool randomOrder = false) => new(
+        [
+            Entry(QuizCategory.NeverSeen, 50),
+            Entry(QuizCategory.GotWrong, 30),
+            Entry(QuizCategory.EverythingElse, 20),
+        ],
+        quizLength,
+        randomOrder);
+
+    [Fact]
+    public void Equality_EqualContentIsEqual()
+    {
+        Assert.Equal(Mix(), Mix());
+        Assert.True(Mix() == Mix());
+        Assert.False(Mix() != Mix());
+        Assert.Equal(Mix().GetHashCode(), Mix().GetHashCode());
+    }
+
+    [Fact]
+    public void Equality_EmptyEqualsBlankConstruction()
+    {
+        Assert.Equal(QuizMix.Empty, new QuizMix([]));
+        Assert.Equal(QuizMix.Empty.GetHashCode(), new QuizMix([]).GetHashCode());
+    }
+
+    [Fact]
+    public void Equality_SingleEntryMixesCompareByContent()
+    {
+        Assert.Equal(
+            new QuizMix([Entry(QuizCategory.NeverSeen, 100)]),
+            new QuizMix([Entry(QuizCategory.NeverSeen, 100)]));
+        Assert.NotEqual(
+            new QuizMix([Entry(QuizCategory.NeverSeen, 100)]),
+            new QuizMix([Entry(QuizCategory.GotWrong, 100)]));
+    }
+
+    [Fact]
+    public void Equality_ReorderedEntriesAreNotEqual()
+    {
+        // Entry order is contractual (earlier entries win contested
+        // decisions), so reordering the same entries is a real edit — the
+        // comparison must be an ordered sequence, not a set.
+        var forward = new QuizMix([Entry(QuizCategory.NeverSeen, 50), Entry(QuizCategory.GotWrong, 50)]);
+        var reversed = new QuizMix([Entry(QuizCategory.GotWrong, 50), Entry(QuizCategory.NeverSeen, 50)]);
+
+        Assert.NotEqual(forward, reversed);
+    }
+
+    [Fact]
+    public void Equality_DetectsEntryContentDifference()
+    {
+        // Same entry count, same categories in the same order — only the
+        // percent split differs.
+        Assert.NotEqual(
+            new QuizMix([Entry(QuizCategory.NeverSeen, 50), Entry(QuizCategory.GotWrong, 50)]),
+            new QuizMix([Entry(QuizCategory.NeverSeen, 60), Entry(QuizCategory.GotWrong, 40)]));
+    }
+
+    [Fact]
+    public void Equality_QuizLengthAloneBreaksEquality()
+    {
+        Assert.NotEqual(Mix(quizLength: 25), Mix(quizLength: null));
+        Assert.NotEqual(Mix(quizLength: 25), Mix(quizLength: 26));
+    }
+
+    [Fact]
+    public void Equality_RandomOrderAloneBreaksEquality() =>
+        Assert.NotEqual(Mix(randomOrder: false), Mix(randomOrder: true));
+
+    [Fact]
+    public void Equality_OperatorsHandleNull()
+    {
+        Assert.True((QuizMix?)null == null);
+        Assert.False((QuizMix?)null != null);
+        Assert.False(Mix() == null);
+        Assert.False(null == Mix());
+        Assert.True(Mix() != null);
+        Assert.True(null != Mix());
+    }
+
+    [Fact]
+    public void Equality_ObjectEqualsRejectsNullAndOtherTypes()
+    {
+        Assert.False(Mix().Equals((object?)null));
+        Assert.False(Mix().Equals("not a mix"));
+    }
 }
