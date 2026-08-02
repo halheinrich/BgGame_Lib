@@ -37,6 +37,7 @@ spec/
 BgGame_Lib/
   BgGame_Lib.csproj
   AgentContractViolationException.cs — seat + kind + offending value; thrown by MatchRunner
+  AnswerTypeDistribution.cs — immutable per-pool answer-type tally: checker plays + the four cube best-pairs
   CooperativeYielder.cs   — time-budgeted cooperative-yield gate (TimeProvider seam) for long WASM loops
   DecisionStats.cs        — immutable per-decision lifetime record: DecisionId + ScoreSegment tally + last-quizzed
   DecisionStatsDocument.cs — immutable DecisionId-keyed collection of DecisionStats; the versioned quiz-stats document
@@ -104,6 +105,7 @@ BgGame_Lib.Tests/
   MixedProblemSetSourceTests.cs
   QuizScoreTests.cs
   ScoreSegmentTests.cs
+  AnswerTypeDistributionTests.cs
   RefereeTests.cs
   TranscriptTests.cs
   TrivialTypeTests.cs
@@ -757,6 +759,42 @@ per-item cost.
   The pacing never affects which items flow or in what order — enumeration
   semantics (items, order, cancellation) are unchanged.
 
+### Answer-type distribution over a decision pool
+
+`AnswerTypeDistribution` counts a pool of decisions by the kind of answer each
+one calls for: checker plays, plus one bucket per cube best-pair from
+`CubeDecisionPair`'s closed 2×2 (`NoDoubleTake`, `TooGood`, `DoubleTake`,
+`DoublePass`), with a derived `Total`. It answers a **collection-scoped**
+question — "what is my saved corpus actually made of?", the curation-bias check
+a beta tester asked for (over-saved takes, no too-good positions at all) — not a
+session-scoped one. Immutable, `ScoreSegment`'s shape throughout: `Empty`, a
+fold returning a new instance, and `operator +` as the single definition of how
+instances combine.
+
+- **The classification lives in the record.** `Add(DecisionData)` branches on
+  `IsCube` first (`BestDoublerAction` / `BestTakerAction` are cube-only surface
+  and throw on a checker play), then keys the bucket by constructing
+  `new CubeDecisionPair(BestDoublerAction, BestTakerAction)` and matching it
+  against the canonical instances — `IsTooGood` for the Too-Good arm. Those
+  atoms are BgDataTypes_Lib's existing SSOT for this classification, so nothing
+  here re-derives a verdict from equities, and consumers stream decisions in
+  without owning the bucketing rule. The private one-hot `Classify` is what
+  makes the fold contract structural rather than merely asserted.
+- **The fold contract leg 2 depends on: exactly one bucket per `Add`.** Hence
+  `Total` equals the number of decisions folded. That is what lets BgQuiz's
+  Home derive its "N decisions matched" count from `Total` instead of running a
+  second count-only pass over the same pool — `CountMatchesAsync` enumerates
+  that pool anyway, and two computations of "what matches" would drift.
+- **A cube decision buckets once**, keyed by its best pair. Deliberately *not*
+  the two-half convention of `QuizScore.Plus(SubmittedCubeAction)` /
+  `DecisionStats.Plus(SubmittedCubeAction, …)`, where a cube position is two
+  scored decisions: those count answers *given*, this counts problems
+  *present*, and pool membership counts rows. The two conventions measure
+  different things and are not required to reconcile.
+- **Not a score.** Nothing here records how the user answered; that axis stays
+  on `ScoreSegment` / `QuizScore`. Keeping the two apart is why this record
+  needs no submission type and no clock.
+
 ### Why these types live here, not in BgDataTypes_Lib
 
 BgDataTypes_Lib's charter is the shared data layer: types and pure
@@ -1093,6 +1131,21 @@ public sealed record MixCompositionEntry(
     int PoolSize,                                    // matches for this entry, pre-dedupe
     int Requested,                                   // initial largest-remainder share of TargetCount
     int Drawn);                                      // actual, incl. redistribution top-ups
+
+// Answer-type distribution over a decision pool (collection-scoped, not a score).
+// The four cube buckets are named for the CubeDecisionPair instances they count.
+public sealed record AnswerTypeDistribution(
+    int CheckerPlays,
+    int NoDoubleTake, int TooGood, int DoubleTake, int DoublePass)
+{
+    public static AnswerTypeDistribution Empty { get; }
+    public int Total { get; }                        // derived: sum of the five buckets
+    public AnswerTypeDistribution Add(DecisionData decision);
+        // increments EXACTLY ONE bucket → Total == decisions folded (see Pitfalls);
+        // cube decisions keyed by new CubeDecisionPair(BestDoublerAction, BestTakerAction)
+    public static AnswerTypeDistribution operator +(
+        AnswerTypeDistribution a, AnswerTypeDistribution b);   // null-guards both operands
+}
 ```
 
 ## Pitfalls
@@ -1142,6 +1195,18 @@ public sealed record MixCompositionEntry(
   `DecisionId`. A document's tallies therefore reconcile with a
   `QuizScore.Total` over the same submissions; if they ever diverge, that is
   a bug in one of the two folds, not a design difference.
+- **`AnswerTypeDistribution` counts a cube position as ONE — the opposite of
+  the bullet above, deliberately.** It buckets pool *membership* (one row per
+  decision, keyed by its best pair), while `QuizScore` / `DecisionStats` count
+  *answers given* (two per cube, one per half). Do not "fix" the discrepancy by
+  aligning them: they measure different things and are not required to
+  reconcile. The one-bucket-per-`Add` rule is load-bearing, not incidental —
+  `Total` is contractually the number of decisions folded in, which is what lets
+  a consumer use it as the pool's matched count instead of counting separately.
+  Anything that made an `Add` increment zero or two buckets (a "skip
+  unclassifiable decisions" escape hatch, a per-half cube fold) would silently
+  break that count. `Add` takes the `DecisionData` — `BgDecisionData.Decision`,
+  since `BestDoublerAction` / `BestTakerAction` live there, not on the composite.
 - **`DecisionStatsDocument` JSON pins names and ordering, not whitespace.**
   The bundled converter hand-writes fixed property names ordered by canonical
   id, so the consumer's naming policy cannot change the format — but
