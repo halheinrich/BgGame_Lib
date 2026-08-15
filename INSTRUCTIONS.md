@@ -39,9 +39,8 @@ BgGame_Lib/
   AgentContractViolationException.cs — seat + kind + offending value; thrown by MatchRunner
   AnswerTypeDistribution.cs — immutable per-pool answer-type tally: checker plays + the four cube best-pairs
   CooperativeYielder.cs   — time-budgeted cooperative-yield gate (TimeProvider seam) for long WASM loops
-  DecisionStats.cs        — immutable per-decision lifetime record: DecisionId + ScoreSegment tally + last-quizzed
-  DecisionStatsDocument.cs — immutable DecisionId-keyed collection of DecisionStats; the versioned quiz-stats document
-  DecisionStatsDocumentJsonConverter.cs — bundled converter: pinned wire format, fail-loud reads
+  DistinctPositionProblemSetSource.cs — IProblemSetSource decorator: one survivor per ProblemKey; duplicate-class telemetry
+  DuplicatePositionClass.cs — telemetry record: one multi-copy content class (key + member DecisionIds)
   GameRecord.cs           — one completed game: winner seat + result + transcript
   MixedProblemSetSource.cs — IProblemSetSource decorator: composes a quiz from per-category pools by mix percentages
   MixComposition.cs       — per-enumeration composition telemetry: target vs drawn + per-entry reports
@@ -61,6 +60,10 @@ BgGame_Lib/
   MatchSeat.cs            — enum One/Two + Other() extension; seat-keyed results
   MatchSnapshot.cs        — immutable record
   MatchState.cs           — mutable: match length, scores, Crawford
+  ProblemStats.cs         — immutable per-problem lifetime record: ProblemKey + ScoreSegment tally + last-quizzed
+  ProblemStatsDocument.cs — immutable ProblemKey-keyed collection of ProblemStats; the versioned quiz-stats document
+  ProblemStatsDocumentJsonConverter.cs — bundled converter: pinned v2 wire format, fail-loud reads, retired-v1 signal
+  RetiredStatsSchemaException.cs — the deliberate v1-recognition signal (a JsonException subtype)
   RecordedDiceSource.cs   — replays a fixed roll sequence; throws when exhausted
   SeededDiceSource.cs     — Random(seed)-backed reproducible rolls
   VerifiableDiceSource.cs — key-derived audit-grade rolls (public HMAC-SHA256 stream + rejection sampling)
@@ -96,9 +99,10 @@ BgGame_Lib.Tests/
   ProblemSetSourceContractTests.cs
   CooperativeYielderTests.cs
   ShuffledProblemSetSourceTests.cs
-  DecisionStatsTests.cs
-  DecisionStatsDocumentTests.cs
-  DecisionStatsDocumentSerializationTests.cs
+  DistinctPositionProblemSetSourceTests.cs
+  ProblemStatsTests.cs
+  ProblemStatsDocumentTests.cs
+  ProblemStatsDocumentSerializationTests.cs
   QuizCategoryTests.cs
   QuizMixTests.cs
   QuizMixSerializationTests.cs
@@ -531,16 +535,27 @@ The per-problem history is intentionally not in the score — consumers that
 need it keep an `IReadOnlyList<SubmittedPlay>` / `SubmittedCubeAction`
 alongside.
 
-### Per-decision lifetime stats
+### Per-problem lifetime stats
 
-`DecisionStats` / `DecisionStatsDocument` are the storage-agnostic model
-behind BgQuiz's persistent per-decision stats file (a versioned JSON document
+`ProblemStats` / `ProblemStatsDocument` are the storage-agnostic model
+behind BgQuiz's persistent per-problem stats file (a versioned JSON document
 kept beside the quizzed `.xg`/`.xgp` corpus). The library does no I/O — the
 consumer loads bytes, deserializes, folds submissions in, and serializes back.
 Merge/concurrency machinery is deliberately absent: single-user,
 single-writer.
 
-**`DecisionStats`** is one decision's lifetime record: its `DecisionId`, a
+**Content-keyed (SPEC-stats-identity.md; halheinrich/backgammon#95).** The
+key is `ProblemKey` — the content identity derived from the decision's facts
+— not the file-relative `DecisionId`, so every content-equal copy of a
+problem across files and matches folds into and reads one lifetime record.
+Submissions carry a `ProblemKey?` stamped at construction (the consumer
+derives it once via `ProblemKey.TryDerive`); a null key is the ruled
+**no-key rung**: the submission still scores the session (`QuizScore` never
+reads the key) but is not recorded — `ProblemStatsDocument.Plus` returns the
+document unchanged, and that document-level skip is the *single* no-key
+filter (degrade, never block).
+
+**`ProblemStats`** is one problem's lifetime record: its `ProblemKey`, a
 composed `ScoreSegment` tally, and the last-quizzed date. Composing
 `ScoreSegment` (rather than local correct/wrong fields) keeps the library's
 single accumulation primitive single-sourced; the wrong count is the derived
@@ -549,43 +564,54 @@ single accumulation primitive single-sourced; the wrong count is the derived
 doubler half and the taker half — so a cube submission adds 2 submitted and
 one correct per half that was right, with both halves' equity losses
 accumulated. One quizzed position still produces exactly one lifetime record
-keyed by its `DecisionId`; only the counting granularity inside that record
-is per-half. Folding a submission whose `DecisionId` differs from the record's
-throws `ArgumentException` (wrong-key folds are data corruption); the static
-`From` factories are defined as an empty seed plus `Plus`, so the fold rule
-has one definition. Skips and off-list plays never reach a fold — the
-consumer doesn't call it for them.
+keyed by its `ProblemKey`; only the counting granularity inside that record
+is per-half. Folding a submission whose key is null or differs from the
+record's throws `ArgumentException` (wrong-key folds are data corruption) —
+and since a play key and a cube key are distinct by grammar (the dice
+discriminant), **kind purity is structural**: a record only ever folds one
+decision kind, which keeps per-kind tally derivations (sightings' cube
+divide-by-two) exact. The static `From` factories are defined as an empty
+seed plus `Plus`, so the fold rule has one definition. Skips and off-list
+plays never reach a fold — the consumer doesn't call it for them.
 
-**`DecisionStatsDocument`** is the immutable document: an id-keyed collection
-of `DecisionStats` whose `Plus` overloads return a new document with the
-submission folded into its decision's record (created on first sight). It is
+**`ProblemStatsDocument`** is the immutable document: a key-keyed collection
+of `ProblemStats` whose `Plus` overloads return a new document with the
+submission folded into its problem's record (created on first sight). It is
 a **class, not a record** — it wraps an `ImmutableDictionary`, where record
 equality would silently be reference equality; instances compare by
 reference. The clock enters here and only here: document folds take a
 `TimeProvider` and resolve `GetUtcNow()` themselves, so the model never reads
 ambient time and folding stays deterministic under a fake provider. The
-asymmetry with `DecisionStats.Plus` (which takes the already-resolved
+asymmetry with `ProblemStats.Plus` (which takes the already-resolved
 `DateTimeOffset`) is deliberate: the document is the consumer's entry point,
 so holding the seam there makes ambient-time misuse impossible at the type
 level, while the record-level fold stays a pure value computation.
 
-**Wire format.** JSON via the bundled internal
-`DecisionStatsDocumentJsonConverter` (type-level `[JsonConverter]`, same
-pattern as BgDataTypes_Lib's `DecisionIdJsonConverter` — consumers register
-nothing): a `schemaVersion` field (`CurrentSchemaVersion`, currently 1) and a
-`decisions` **array** whose elements carry the canonical `DecisionId` string,
-a nested tally object, and the ISO 8601 last-quizzed date. An array rather
-than an id-keyed JSON object because `DecisionIdJsonConverter` implements no
-property-name conversion (`ReadAsPropertyName`/`WriteAsPropertyName`) — a
-`DecisionId`-keyed JSON dictionary would throw at serialization time; the
-in-memory shape stays a dictionary. The converter hand-writes the whole tree
-with fixed property names, ordered by canonical id (ordinal), so the
+**Wire format (schema v2 — the #95 clean break).** JSON via the bundled
+internal `ProblemStatsDocumentJsonConverter` (type-level `[JsonConverter]`,
+same pattern as BgDataTypes_Lib's `DecisionIdJsonConverter` — consumers
+register nothing): a `schemaVersion` field (`CurrentSchemaVersion`,
+currently 2) followed by a `problems` **object** keyed by canonical
+`ProblemKey` strings, each value a nested tally object plus the ISO 8601
+last-quizzed date. The map shape is what `ProblemKeyJsonConverter`'s
+property-name support exists for (v1's array-of-elements existed only
+because `DecisionId` lacked it). The converter hand-writes the whole tree
+with fixed property names, ordered by canonical key (ordinal), so the
 persisted format cannot vary with the consumer's `JsonSerializerOptions`.
-Reads are fail-loud: any schema version other than the current one (with a
-distinguished "newer than this library supports" message), unknown
-properties, missing required properties, invalid or duplicate ids, malformed
-dates, and impossible tallies all throw `JsonException` — a schema-version
-bump is the format's only evolution mechanism.
+`schemaVersion` is **contractually the first property** — the version gates
+how the rest is parsed; every file the v1/v2 writers ever produced satisfies
+this, and anything else reads as corrupt/foreign. Reads are fail-loud with
+one deliberate signal: a **genuine v1 document** (version 1 plus a shallow
+shape check — its `decisions` array's contents are skipped, never parsed; no
+migration exists) throws `RetiredStatsSchemaException`, a `JsonException`
+subtype carrying the retired version, so the consumer can retire the file
+honestly (rename aside, seed fresh, notice) instead of surfacing a generic
+load error. Everything else — newer or unknown schema versions
+(distinguished "newer than this library supports" message), unknown or
+duplicate properties, missing required properties, invalid or duplicate or
+non-canonically-spelled keys, malformed dates, impossible tallies — throws
+plain `JsonException`; a schema-version bump is the format's only evolution
+mechanism.
 
 ### Stats-weighted quiz categories
 
@@ -609,12 +635,14 @@ composes quizzes from them (BgQuiz Phase 2+ selection).
   home of the kind→behavior mapping. Adding a category is additive: one enum
   member, one factory, one switch arm.
 - **The predicate context is the (decision, stats) pair** — the live
-  `BgDecisionData` alongside its `DecisionStats` (null = never quizzed) —
-  because sightings are derived per decision kind: a checker play submits one
+  `BgDecisionData` alongside its problem's `ProblemStats` (null = never
+  quizzed; the by-key lookup is the composing decorator's job) — because
+  sightings are derived per decision kind: a checker play submits one
   decision per sighting, a cube position two (the two-half fold), so cube
-  sightings are `Tally.Submitted / 2` — always exact, since one id only ever
-  folds one kind. No stats-schema change; "seen fewer than n" means sightings,
-  not raw submissions.
+  sightings are `Tally.Submitted / 2` — always exact, since one key only ever
+  folds one kind (kind purity is structural — see the stats section). No
+  stats-schema change; "seen fewer than n" means sightings, not raw
+  submissions.
 - **Per-half measures need no cube adjustment.** `AvgEquityLossOver` compares
   `Tally.AverageEquityLoss`, whose numerator (both halves' losses) and
   denominator (2 per sighting) both count per-half — `Total/Submitted` is
@@ -640,7 +668,7 @@ composes quizzes from them (BgQuiz Phase 2+ selection).
 `QuizMix` / `QuizMixEntry` are the composition config the composing decorator
 reads: an **ordered** list of (category, percent) lines, an optional quiz
 length, and the random toggle (default true). Immutable; `QuizMix` is a class
-with reference equality (it wraps a list — the `DecisionStatsDocument`
+with reference equality (it wraps a list — the `ProblemStatsDocument`
 rationale), while `QuizMixEntry` is a record with full value equality.
 
 - **Validation split.** The per-entry rule (percent 1–100) lives in
@@ -662,7 +690,7 @@ rationale), while `QuizMixEntry` is a record with full value equality.
 - **Wire format.** Versioned JSON via the bundled internal
   `QuizMixJsonConverter` (type-level `[JsonConverter]`, hand-written fixed
   property names, `schemaVersion` currently 1) — the
-  `DecisionStatsDocumentJsonConverter` posture: all properties always written
+  `ProblemStatsDocumentJsonConverter` posture: all properties always written
   (`quizLength` as JSON `null` when unset) and always required; reads
   fail-loud on any other schema version (distinguished "newer" message),
   unknown or missing properties at any level, invalid kinds (exact
@@ -694,10 +722,16 @@ for deterministic tests (the shuffled-source pattern).
 - **Per-enumeration pipeline.** Resolve the stats document (provider seam)
   and one `GetUtcNow()` timestamp (every predicate sees the same "now");
   materialize the inner source, deduping by `DecisionId` (first occurrence
-  wins — a quiz presents each decision at most once); classify into per-entry
-  pools in source order (the residual pool collects decisions matched by no
-  non-residual entry, reachable only when an EverythingElse entry is
-  selected — otherwise unmatched decisions are simply not drawn); target =
+  wins — a quiz presents each decision at most once; deliberately *record*
+  identity, not the content key — collapsing content-equal copies is
+  `DistinctPositionProblemSetSource`'s job and the consumer's wiring choice);
+  classify into per-entry pools in source order, looking each decision's
+  lifetime record up **by its derived `ProblemKey`** (SPEC-stats-identity.md
+  §4: the classifier judges the problem's full record wherever the copy came
+  from; an underivable key means no record can exist, so the decision
+  classifies as never-seen) — the residual pool collects decisions matched
+  by no non-residual entry, reachable only when an EverythingElse entry is
+  selected (otherwise unmatched decisions are simply not drawn); target =
   `QuizLength ?? union of selected pools` (deduped); apportion the target by
   percent via largest remainder (floor, leftover to largest fractional
   remainders, ties to the earlier entry); draw in declared entry order with
@@ -727,12 +761,47 @@ for deterministic tests (the shuffled-source pattern).
   per-entry `Drawn < Requested` means that entry's pool ran dry and its
   share was redistributed.
 
+### Position-distinct source (content dedupe)
+
+`DistinctPositionProblemSetSource` is the fourth `IProblemSetSource`
+decorator-family member: it presents each distinct problem exactly once,
+wherever the copies came from. The dedupe key is the derived `ProblemKey`
+(SPEC-stats-identity.md §4; halheinrich/backgammon#95) — content identity,
+not the file-relative `DecisionId` and **not the raw XGID string** (the
+pre-#95 key, now display/provenance only, an identity nowhere). The key
+collapses strictly more than XGID did: same-away positions from different
+match lengths unify, mirror-turn duplicates unify — the ratified consequence.
+
+- **First occurrence survives, unconditionally.** With stats content-keyed,
+  every copy folds into and reads the same lifetime record, so survivor
+  choice no longer affects stats at all; the surviving copy matters only for
+  display/provenance. The former survivor-preference constructor/predicate —
+  a seam that existed solely to keep id-keyed stats reachable — is deleted,
+  not bypassed.
+- **Fail-open on the no-key rung.** Items with no derivable key pass through
+  unmerged, even when several are otherwise identical: an underivable key
+  carries no content claim, and treating absence as equality would collapse
+  unrelated problems.
+- **Duplicate-class telemetry.** `LastDuplicateClasses` exposes the most
+  recent enumeration's content-equivalence classes (one
+  `DuplicatePositionClass` — key + member `DecisionId`s, survivor first — per
+  key with ≥ 2 copies; singletons never appear), assigned before the first
+  yield. The ruled producer-side seam for a future "which files hold the same
+  position" report (#104 related work); no report UI exists anywhere yet.
+- **Contract plumbing.** `Name` passes through; `Count` is always null (how
+  many problems collapse is unknowable before enumeration); each enumeration
+  re-drains the inner source and recomputes survivors and classes fresh.
+  Materializes per enumeration (the shuffled tradeoff — first-occurrence
+  placement plus the class inventory need the whole set). Wires closest to
+  the raw source, beneath shuffle/mix, by consumer convention. Stateful
+  telemetry ⇒ not thread-safe (the `MixedProblemSetSource` caveat class).
+
 ### Cooperative yielding on the enumeration hot path
 
-Both decorators materialize their inner source and then present a large drawn
-set. `CooperativeYielder` single-sources how those presentation loops yield to
-the scheduler so a Blazor WASM Start stays responsive without paying a
-per-item cost.
+The materializing decorators (shuffled / mixed / distinct) drain their inner
+source and then present a large drawn set. `CooperativeYielder` single-sources
+how those presentation loops yield to the scheduler so a Blazor WASM Start
+stays responsive without paying a per-item cost.
 
 - **The problem.** An `await Task.Yield()` after *every* presented item pays one
   event-loop round-trip per item — tens of thousands for a large corpus — which
@@ -787,7 +856,7 @@ instances combine.
   that pool anyway, and two computations of "what matches" would drift.
 - **A cube decision buckets once**, keyed by its best pair. Deliberately *not*
   the two-half convention of `QuizScore.Plus(SubmittedCubeAction)` /
-  `DecisionStats.Plus(SubmittedCubeAction, …)`, where a cube position is two
+  `ProblemStats.Plus(SubmittedCubeAction, …)`, where a cube position is two
   scored decisions: those count answers *given*, this counts problems
   *present*, and pool membership counts rows. The two conventions measure
   different things and are not required to reconcile.
@@ -1015,12 +1084,14 @@ public sealed class ShuffledProblemSetSource : IProblemSetSource   // decorator:
         // drains + re-shuffles the inner source each call → a fresh permutation per enumeration
 }
 
-// Quiz scoring
+// Quiz scoring. ProblemKey is the content identity stamped at construction
+// (via ProblemKey.TryDerive); null = the no-key rung — scores the session,
+// never recorded in lifetime stats.
 public sealed record SubmittedPlay(
-    DecisionId DecisionId,
+    ProblemKey? ProblemKey,
     Play UserPlay, int? MatchedCandidateIndex, double EquityLoss, bool IsCorrect);
 public sealed record SubmittedCubeAction(
-    DecisionId DecisionId,
+    ProblemKey? ProblemKey,
     CubeDecisionPair UserDecision,
     double DoublerEquityLoss, double TakerEquityLoss,
     bool DoublerCorrect, bool TakerCorrect);
@@ -1042,26 +1113,35 @@ public sealed record QuizScore(ScoreSegment PlayDecisions, ScoreSegment DoubleDe
     public QuizScore Plus(SubmittedCubeAction cube);   // one double + one take decision
 }
 
-// Per-decision lifetime stats (the BgQuiz persistent stats-file model)
-public sealed record DecisionStats(DecisionId Id, ScoreSegment Tally, DateTimeOffset LastQuizzed)
+// Per-problem lifetime stats (the BgQuiz persistent stats-file model, content-keyed)
+public sealed record ProblemStats(ProblemKey Key, ScoreSegment Tally, DateTimeOffset LastQuizzed)
 {
     public int Wrong { get; }                  // derived: Tally.Submitted − Tally.Correct; never stored
-    public static DecisionStats From(SubmittedPlay play, DateTimeOffset quizzedAt);       // first-ever fold
-    public static DecisionStats From(SubmittedCubeAction cube, DateTimeOffset quizzedAt);
-    public DecisionStats Plus(SubmittedPlay play, DateTimeOffset quizzedAt);       // ArgumentException on id mismatch
-    public DecisionStats Plus(SubmittedCubeAction cube, DateTimeOffset quizzedAt); // TWO decisions (per half), as QuizScore
+    public static ProblemStats From(SubmittedPlay play, DateTimeOffset quizzedAt);       // first-ever fold; throws on null key
+    public static ProblemStats From(SubmittedCubeAction cube, DateTimeOffset quizzedAt);
+    public ProblemStats Plus(SubmittedPlay play, DateTimeOffset quizzedAt);       // ArgumentException on null/mismatched key
+    public ProblemStats Plus(SubmittedCubeAction cube, DateTimeOffset quizzedAt); // TWO decisions (per half), as QuizScore
 }
 
-[JsonConverter(typeof(DecisionStatsDocumentJsonConverter))]   // bundled; consumers register nothing
-public sealed class DecisionStatsDocument                     // immutable; reference equality (see Pitfalls)
+[JsonConverter(typeof(ProblemStatsDocumentJsonConverter))]    // bundled; consumers register nothing
+public sealed class ProblemStatsDocument                      // immutable; reference equality (see Pitfalls)
 {
-    public const int CurrentSchemaVersion = 1;
-    public static DecisionStatsDocument Empty { get; }
-    public static DecisionStatsDocument FromStats(IEnumerable<DecisionStats> stats);   // ArgumentException on duplicate id
+    public const int CurrentSchemaVersion = 2;
+    public static ProblemStatsDocument Empty { get; }
+    public static ProblemStatsDocument FromStats(IEnumerable<ProblemStats> stats);   // ArgumentException on duplicate key
     public int Count { get; }
-    public IReadOnlyDictionary<DecisionId, DecisionStats> Decisions { get; }
-    public DecisionStatsDocument Plus(SubmittedPlay play, TimeProvider clock);         // clock resolved here — the model
-    public DecisionStatsDocument Plus(SubmittedCubeAction cube, TimeProvider clock);   //   never reads ambient time
+    public IReadOnlyDictionary<ProblemKey, ProblemStats> Problems { get; }
+    public ProblemStatsDocument Plus(SubmittedPlay play, TimeProvider clock);        // clock resolved here — the model
+    public ProblemStatsDocument Plus(SubmittedCubeAction cube, TimeProvider clock);  //   never reads ambient time;
+                                                                                     //   null-key submission → same document
+}
+
+// The deliberate v1-recognition signal (see the stats wire-format section):
+// catch BEFORE the general JsonException to retire a v1 file honestly.
+public sealed class RetiredStatsSchemaException : JsonException
+{
+    public int SchemaVersion { get; }          // the retired version the document declared (1)
+    public RetiredStatsSchemaException(int schemaVersion, string message);
 }
 
 // Stats-weighted quiz categories (predicates over a decision's lifetime stats)
@@ -1109,11 +1189,12 @@ public sealed class QuizMix                     // immutable; reference equality
     public static bool TryFromJson(string? json, out QuizMix mix);  // absent/corrupt → Empty + false
 }
 
-// Stats-weighted composing source (decorator; see Pitfalls for the contracts)
+// Stats-weighted composing source (decorator; see Pitfalls for the contracts).
+// Classification looks lifetime records up by each item's derived ProblemKey.
 public sealed class MixedProblemSetSource : IProblemSetSource
 {
     public MixedProblemSetSource(IProblemSetSource inner,
-        Func<DecisionStatsDocument> statsProvider,   // current document, resolved fresh per enumeration;
+        Func<ProblemStatsDocument> statsProvider,    // current document, resolved fresh per enumeration;
         QuizMix mix, TimeProvider clock);            //   must never return null
     public MixedProblemSetSource(..., int seed);     // deterministic random-mode draws/shuffle for tests
     public string Name { get; }                      // passthrough
@@ -1121,6 +1202,24 @@ public sealed class MixedProblemSetSource : IProblemSetSource
     public MixComposition? LastComposition { get; }  // most recent enumeration; assigned before first yield
     public IAsyncEnumerable<BgDecisionData> EnumerateAsync(CancellationToken cancellationToken = default);
 }
+
+// Position-distinct source (decorator: one survivor per ProblemKey; see Pitfalls)
+public sealed class DistinctPositionProblemSetSource : IProblemSetSource
+{
+    public DistinctPositionProblemSetSource(IProblemSetSource inner);   // first occurrence survives
+    public string Name { get; }                      // passthrough
+    public int? Count { get; }                       // always null — collapse count unknowable pre-enumeration
+    public IReadOnlyList<DuplicatePositionClass>? LastDuplicateClasses { get; }
+        // most recent enumeration's multi-copy classes (≥2 members, survivor first,
+        // first-occurrence order; empty when nothing collapsed); null before the
+        // first enumeration; assigned before the first yield
+    public IAsyncEnumerable<BgDecisionData> EnumerateAsync(CancellationToken cancellationToken = default);
+        // dedupes by derived ProblemKey; no-key items pass through unmerged (fail-open)
+}
+
+public sealed record DuplicatePositionClass(      // wraps a list → effectively reference equality
+    ProblemKey Key,
+    IReadOnlyList<DecisionId> Members);           // every copy's id, occurrence order, survivor first; ≥ 2
 
 public sealed record MixComposition(
     int TargetCount,                                 // QuizLength ?? deduped union of selected pools
@@ -1184,20 +1283,23 @@ public sealed record AnswerTypeDistribution(
   the record self-describing for downstream display. Producers must keep
   the two consistent; consumers should not derive a different correctness
   rule (e.g., "within 0.001 equity").
-- **`DecisionStats` and `QuizScore` count a cube position the same way: TWO
+- **`ProblemStats` and `QuizScore` count a cube position the same way: TWO
   decisions.** Both fold the doubler half and the taker half as independent
   submissions, so a half-right cube reads **1-of-2, not 0-of-1** — a
   deliberate alignment, since two counting rules for the same event are
   user-visible the moment lifetime stats sit beside a session score. The
   difference is only in shape: `QuizScore` splits them across its
-  `DoubleDecisions` / `TakeDecisions` segments, while `DecisionStats` sums
+  `DoubleDecisions` / `TakeDecisions` segments, while `ProblemStats` sums
   both halves into the one tally of the one record keyed by that position's
-  `DecisionId`. A document's tallies therefore reconcile with a
-  `QuizScore.Total` over the same submissions; if they ever diverge, that is
-  a bug in one of the two folds, not a design difference.
+  `ProblemKey`. A document's tallies therefore reconcile with a
+  `QuizScore.Total` over the same submissions **only when every submission
+  carried a key** — no-key submissions score the session but never the
+  document (the ruled degrade rung), so a corpus with underivable records can
+  legitimately leave the document short; that is the no-key rung, not a fold
+  bug.
 - **`AnswerTypeDistribution` counts a cube position as ONE — the opposite of
   the bullet above, deliberately.** It buckets pool *membership* (one row per
-  decision, keyed by its best pair), while `QuizScore` / `DecisionStats` count
+  decision, keyed by its best pair), while `QuizScore` / `ProblemStats` count
   *answers given* (two per cube, one per half). Do not "fix" the discrepancy by
   aligning them: they measure different things and are not required to
   reconcile. The one-bucket-per-`Add` rule is load-bearing, not incidental —
@@ -1207,16 +1309,27 @@ public sealed record AnswerTypeDistribution(
   unclassifiable decisions" escape hatch, a per-half cube fold) would silently
   break that count. `Add` takes the `DecisionData` — `BgDecisionData.Decision`,
   since `BestDoublerAction` / `BestTakerAction` live there, not on the composite.
-- **`DecisionStatsDocument` JSON pins names and ordering, not whitespace.**
+- **`ProblemStatsDocument` JSON pins names and ordering, not whitespace.**
   The bundled converter hand-writes fixed property names ordered by canonical
-  id, so the consumer's naming policy cannot change the format — but
+  key, so the consumer's naming policy cannot change the format — but
   `WriteIndented` lives on the writer the serializer creates, so indentation
   is still options-controlled. Byte-stable files (diff-friendliness) require
   the consumer to serialize with fixed options. Reads are strict: unknown
-  properties, missing required ones, a schema version other than
-  `CurrentSchemaVersion`, invalid or duplicate ids, malformed dates, and
-  impossible tallies all throw `JsonException` — a version bump is the
-  format's only evolution mechanism; do not add tolerant-read behavior.
+  properties, missing required ones, an unknown schema version, invalid or
+  duplicate keys, malformed dates, and impossible tallies all throw
+  `JsonException` — a version bump is the format's only evolution mechanism;
+  do not add tolerant-read behavior. The one carve-out is deliberate: a
+  genuine v1 document throws `RetiredStatsSchemaException`, and a consumer
+  that wants the honest retire-and-restart path must catch it **before** the
+  general `JsonException` (it derives from it — catch order matters).
+- **No-key submissions vanish from lifetime stats silently — by ruling.**
+  `ProblemStatsDocument.Plus` with a null `ProblemKey` returns the *same*
+  document (degrade, never block); nothing throws and no counter ticks. That
+  document-level skip is the single filter — `ProblemStats.From`/`Plus`
+  treat a keyless fold as a caller bug (`ArgumentException`). Do not "fix"
+  either end: producer-stamped corpora make the rung unreachable in
+  practice, and a stricter fail-loud was explicitly rejected
+  (SPEC-stats-identity.md §2).
 - **`QuizCategory` measures are per-half and its thresholds are fractions;
   "seen" means sightings.** `SeenFewerThan` counts sightings derived from the
   tally (`Submitted / 2` for a cube decision — the two-half fold), so the
@@ -1231,7 +1344,7 @@ public sealed record AnswerTypeDistribution(
   value equality.** Under overlapping categories, composition draws entries in
   declared order — contested decisions go to the earlier entry — so reordering
   a mix's entries changes the quiz it composes; preserve order when rendering
-  or persisting (the JSON form does). And like `DecisionStatsDocument`,
+  or persisting (the JSON form does). And like `ProblemStatsDocument`,
   `QuizMix` is a class wrapping a list: instances compare by reference;
   compare `Entries` content (`QuizMixEntry` is a value-equal record). Reads
   are strict per the same converter posture — a corrupt or foreign mix throws
@@ -1241,21 +1354,36 @@ public sealed record AnswerTypeDistribution(
   mixes.** Blank (passthrough): streams the inner source unchanged — no
   dedupe (duplicate ids stream through), `Count` passthrough,
   `LastComposition` null. Active: materializes per enumeration (the shuffled
-  tradeoff), dedupes by `DecisionId` (first occurrence wins), `Count` is null
-  (read `LastComposition.DrawnCount` after enumeration starts instead), and
-  decisions matched by no selected entry are unreachable unless an
-  `EverythingElse` entry is in the mix. The stats provider is resolved fresh
-  per enumeration — Restart composes against the *current* document,
-  including this session's folds — and must never return null: that throws
-  `InvalidOperationException` (wiring bug), while an empty document is the
-  valid everything-never-seen input. `LastComposition` is per-instance
-  mutable state and the `Random` is shared — not thread-safe, same caveat
-  class as `ShuffledProblemSetSource`. With `RandomOrder` on, re-enumeration
-  is a fresh draw and shuffle, not a replay.
-- **`DecisionStatsDocument` has no value equality.** It is a class wrapping an
+  tradeoff), dedupes by `DecisionId` (first occurrence wins — record
+  identity, deliberately not the content key), classifies **by each item's
+  derived `ProblemKey`** (a content-equal copy under a different id
+  classifies by the problem's record; a no-key item classifies as
+  never-seen), `Count` is null (read `LastComposition.DrawnCount` after
+  enumeration starts instead), and decisions matched by no selected entry
+  are unreachable unless an `EverythingElse` entry is in the mix. The stats
+  provider is resolved fresh per enumeration — Restart composes against the
+  *current* document, including this session's folds — and must never return
+  null: that throws `InvalidOperationException` (wiring bug), while an empty
+  document is the valid everything-never-seen input. `LastComposition` is
+  per-instance mutable state and the `Random` is shared — not thread-safe,
+  same caveat class as `ShuffledProblemSetSource`. With `RandomOrder` on,
+  re-enumeration is a fresh draw and shuffle, not a replay.
+- **`DistinctPositionProblemSetSource` dedupes by content, fails open on
+  no-key, and is now stateful.** The key is the derived `ProblemKey` — the
+  raw XGID string is an identity nowhere, so two items with different XGIDs
+  can and should collapse (same-away across match lengths, mirror-turn).
+  No-key items pass through unmerged and never appear in
+  `LastDuplicateClasses`; do not "tighten" that into a merge or an error
+  (fail-open is the ratified rung). There is no survivor preference any more
+  — first occurrence survives, full stop; a consumer that wants a specific
+  copy to survive is holding it wrong, because stats no longer key on the
+  survivor. `LastDuplicateClasses` makes the instance stateful per
+  enumeration (null → telemetry after the first pass; replaced each pass) —
+  not thread-safe, the `MixedProblemSetSource` caveat class.
+- **`ProblemStatsDocument` has no value equality.** It is a class wrapping an
   `ImmutableDictionary` (record equality would silently be reference
   equality), so two documents with identical contents are not `Equals`.
-  Compare `Decisions` content — the `DecisionStats` values are records with
+  Compare `Problems` content — the `ProblemStats` values are records with
   full value equality — not document instances.
 - **`IProblemSetSource.EnumerateAsync` is contractually re-iterable.** Implementations
   that wrap a one-shot resource (consumed upload, exhausted network stream)
