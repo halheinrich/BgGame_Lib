@@ -65,6 +65,35 @@ public class MixedProblemSetSourceTests
     private static IReadOnlyList<BgDecisionData> Decisions(int count) =>
         Enumerable.Range(0, count).Select(Decision).ToList();
 
+    /// <summary>
+    /// A content-equal copy of decision <paramref name="n"/> under a
+    /// different file-relative identity — same <see cref="ProblemKey"/>,
+    /// different <see cref="DecisionId"/>.
+    /// </summary>
+    private static BgDecisionData Copy(int n, string file) =>
+        new()
+        {
+            Id = new XgpDecisionId(file),
+            Position = Decision(n).Position,
+            Decision = Decision(n).Decision,
+            Descriptive = new DescriptiveData(),
+            Outcome = new PlayOutcomeData(),
+        };
+
+    /// <summary>
+    /// A decision with real position facts but unstamped dice: no derivable
+    /// <see cref="ProblemKey"/> — the no-key rung.
+    /// </summary>
+    private static BgDecisionData NoKeyDecision(int n) =>
+        new()
+        {
+            Id = Id(n),
+            Position = Decision(n).Position,
+            Decision = new DecisionData(),   // dice default to {0,0}: underivable
+            Descriptive = new DescriptiveData(),
+            Outcome = new PlayOutcomeData(),
+        };
+
     /// <summary>Decision <paramref name="n"/>'s content key, via the one blessed factory.</summary>
     private static ProblemKey Key(int n)
     {
@@ -444,6 +473,89 @@ public class MixedProblemSetSourceTests
             Assert.NotNull(source.LastComposition);
             break;
         }
+    }
+
+    // -----------------------------------------------------------------------
+    //  Classification by content identity (the halheinrich/backgammon#95
+    //  mis-classification pin): the classifier judges the problem's full
+    //  record via the drawn item's ProblemKey, wherever the copy came from.
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public async Task Classification_JudgesACopyByTheProblemsRecord_NotItsOwnId()
+    {
+        // The lifetime record was earned quizzing SOME copy of problem 0; the
+        // source holds a content-equal copy under a different DecisionId.
+        // GotWrong must still claim it — under v1's id-keyed stats this copy
+        // carried no record and fell out of the pool (the #95 defect).
+        var doc = Doc(SeenWrong(0));
+        var mix = new QuizMix([Entry(QuizCategory.GotWrong, 100)], randomOrder: false);
+        var source = Source([Copy(0, "other-file.xgp"), Decision(1)], doc, mix);
+
+        Assert.Equal([0], await IdsAsync(source));
+    }
+
+    [Fact]
+    public async Task Classification_ACopyOfAProblemAnsweredCorrectly_IsNotGotWrong()
+    {
+        // The absent half of the pair above: a correct-only record excludes
+        // every copy of the problem, whichever id is drawn.
+        var doc = Doc(SeenCorrect(0));
+        var mix = new QuizMix([Entry(QuizCategory.GotWrong, 100)], randomOrder: false);
+        var source = Source([Copy(0, "other-file.xgp"), Decision(1)], doc, mix);
+
+        Assert.Empty(await IdsAsync(source));
+    }
+
+    [Fact]
+    public async Task Classification_SightingsReadTheProblemsFullRecord_AcrossCopies()
+    {
+        // One sighting lives on the problem's record; the drawn item is a
+        // different-id copy. SeenFewerThan(2) still sees supply (1 < 2);
+        // SeenFewerThan(1) sees none (1 sighting is not fewer than 1) — the
+        // present/absent pair over the same fixture.
+        var doc = Doc(SeenCorrect(0));
+        var items = new[] { Copy(0, "other-file.xgp") };
+
+        var underTwo = Source(items, doc, new QuizMix(
+            [Entry(QuizCategory.SeenFewerThan(2), 100)], randomOrder: false));
+        Assert.Equal([0], await IdsAsync(underTwo));
+
+        var underOne = Source(items, doc, new QuizMix(
+            [Entry(QuizCategory.SeenFewerThan(1), 100)], randomOrder: false));
+        Assert.Empty(await IdsAsync(underOne));
+    }
+
+    [Fact]
+    public async Task ContentEqualCopies_AreDistinctRecordsHere_BothClassified()
+    {
+        // The enumeration dedupe is record identity (DecisionId), not content
+        // identity: collapsing content-equal copies is the distinct layer's
+        // job and the consumer's wiring choice. Both copies share one record
+        // and both classify GotWrong.
+        var doc = Doc(SeenWrong(0));
+        var mix = new QuizMix([Entry(QuizCategory.GotWrong, 100)], randomOrder: false);
+        var source = Source([Decision(0), Copy(0, "other-file.xgp")], doc, mix);
+
+        Assert.Equal([0, 0], await IdsAsync(source));
+    }
+
+    [Fact]
+    public async Task NoKeyDecision_ClassifiesAsNeverSeen()
+    {
+        // The no-key rung: an underivable key means no record can exist, so
+        // the decision is never-seen to the classifier — reachable through
+        // NeverSeen, invisible to record-dependent categories like GotWrong.
+        var items = new[] { NoKeyDecision(0), Decision(1) };
+        var doc = Doc(SeenWrong(1));
+
+        var neverSeen = Source(items, doc, new QuizMix(
+            [Entry(QuizCategory.NeverSeen, 100)], randomOrder: false));
+        Assert.Equal([0], await IdsAsync(neverSeen));
+
+        var gotWrong = Source(items, doc, new QuizMix(
+            [Entry(QuizCategory.GotWrong, 100)], randomOrder: false));
+        Assert.Equal([1], await IdsAsync(gotWrong));
     }
 
     // -----------------------------------------------------------------------
