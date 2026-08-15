@@ -5,10 +5,10 @@ using BgDataTypes_Lib;
 
 /// <summary>
 /// The behavior half of a <see cref="QuizCategory"/>: decides whether one
-/// decision belongs to the category, given its lifetime stats record (null
-/// when never quizzed) and the classification timestamp. Materialized from
-/// the data half by <c>QuizCategory.BuildPredicate</c> — the single switch
-/// that owns the kind-to-predicate mapping.
+/// decision belongs to the category, given its problem's lifetime stats
+/// record (null when never quizzed) and the classification timestamp.
+/// Materialized from the data half by <c>QuizCategory.BuildPredicate</c> —
+/// the single switch that owns the kind-to-predicate mapping.
 ///
 /// <para>
 /// The context is the (decision, stats) pair rather than stats alone because
@@ -22,9 +22,10 @@ internal interface IQuizCategoryPredicate
 {
     /// <summary>Whether <paramref name="decision"/> belongs to this category.</summary>
     /// <param name="decision">The live decision being classified.</param>
-    /// <param name="stats">Its lifetime record, or <see langword="null"/> when never quizzed.</param>
+    /// <param name="stats">Its problem's lifetime record (looked up by the decision's
+    /// <see cref="ProblemKey"/>), or <see langword="null"/> when never quizzed.</param>
     /// <param name="asOf">The classification timestamp (one per pass).</param>
-    bool Matches(BgDecisionData decision, DecisionStats? stats, DateTimeOffset asOf);
+    bool Matches(BgDecisionData decision, ProblemStats? stats, DateTimeOffset asOf);
 }
 
 /// <summary>
@@ -37,7 +38,7 @@ internal static class QuizStatsMeasures
     /// Whether the decision has never been quizzed: no record at all, or —
     /// defensively — a record with an empty tally.
     /// </summary>
-    internal static bool IsUnseen([NotNullWhen(false)] DecisionStats? stats) =>
+    internal static bool IsUnseen([NotNullWhen(false)] ProblemStats? stats) =>
         stats is null || stats.Tally.Submitted == 0;
 
     /// <summary>
@@ -45,9 +46,11 @@ internal static class QuizStatsMeasures
     /// Derived from the tally per decision kind: a checker play submits one
     /// decision per sighting; a cube position submits two (the two-half fold),
     /// so its sightings are <c>Submitted / 2</c> — always exact, because one
-    /// id only ever folds one kind and cube folds add exactly 2.
+    /// key only ever folds one kind (a play key and a cube key are distinct
+    /// by grammar — see <see cref="ProblemStats"/>) and cube folds add
+    /// exactly 2.
     /// </summary>
-    internal static int Sightings(BgDecisionData decision, DecisionStats? stats) =>
+    internal static int Sightings(BgDecisionData decision, ProblemStats? stats) =>
         IsUnseen(stats) ? 0
         : decision.IsCube ? stats.Tally.Submitted / 2
         : stats.Tally.Submitted;
@@ -64,7 +67,7 @@ internal sealed class NeverSeenPredicate : IQuizCategoryPredicate
     internal static NeverSeenPredicate Instance { get; } = new();
 
     /// <inheritdoc/>
-    public bool Matches(BgDecisionData decision, DecisionStats? stats, DateTimeOffset asOf) =>
+    public bool Matches(BgDecisionData decision, ProblemStats? stats, DateTimeOffset asOf) =>
         QuizStatsMeasures.IsUnseen(stats);
 }
 
@@ -82,7 +85,7 @@ internal sealed class GotWrongPredicate : IQuizCategoryPredicate
     internal static GotWrongPredicate Instance { get; } = new();
 
     /// <inheritdoc/>
-    public bool Matches(BgDecisionData decision, DecisionStats? stats, DateTimeOffset asOf) =>
+    public bool Matches(BgDecisionData decision, ProblemStats? stats, DateTimeOffset asOf) =>
         !QuizStatsMeasures.IsUnseen(stats) && stats.Wrong >= 1;
 }
 
@@ -95,7 +98,7 @@ internal sealed class GotWrongPredicate : IQuizCategoryPredicate
 internal sealed class SeenFewerThanPredicate(int times) : IQuizCategoryPredicate
 {
     /// <inheritdoc/>
-    public bool Matches(BgDecisionData decision, DecisionStats? stats, DateTimeOffset asOf) =>
+    public bool Matches(BgDecisionData decision, ProblemStats? stats, DateTimeOffset asOf) =>
         QuizStatsMeasures.Sightings(decision, stats) < times;
 }
 
@@ -107,7 +110,7 @@ internal sealed class SeenFewerThanPredicate(int times) : IQuizCategoryPredicate
 internal sealed class NotSeenInDaysPredicate(int days) : IQuizCategoryPredicate
 {
     /// <inheritdoc/>
-    public bool Matches(BgDecisionData decision, DecisionStats? stats, DateTimeOffset asOf) =>
+    public bool Matches(BgDecisionData decision, ProblemStats? stats, DateTimeOffset asOf) =>
         QuizStatsMeasures.IsUnseen(stats)
         || asOf - stats.LastQuizzed >= TimeSpan.FromDays(days);
 }
@@ -121,7 +124,7 @@ internal sealed class NotSeenInDaysPredicate(int days) : IQuizCategoryPredicate
 internal sealed class AvgEquityLossOverPredicate(double loss) : IQuizCategoryPredicate
 {
     /// <inheritdoc/>
-    public bool Matches(BgDecisionData decision, DecisionStats? stats, DateTimeOffset asOf) =>
+    public bool Matches(BgDecisionData decision, ProblemStats? stats, DateTimeOffset asOf) =>
         !QuizStatsMeasures.IsUnseen(stats) && stats.Tally.AverageEquityLoss > loss;
 }
 
@@ -134,6 +137,6 @@ internal sealed class AvgEquityLossOverPredicate(double loss) : IQuizCategoryPre
 internal sealed class WrongRateOverPredicate(double rate) : IQuizCategoryPredicate
 {
     /// <inheritdoc/>
-    public bool Matches(BgDecisionData decision, DecisionStats? stats, DateTimeOffset asOf) =>
+    public bool Matches(BgDecisionData decision, ProblemStats? stats, DateTimeOffset asOf) =>
         !QuizStatsMeasures.IsUnseen(stats) && 1.0 - stats.Tally.Accuracy > rate;
 }

@@ -7,9 +7,20 @@ using BgDataTypes_Lib;
 /// <see cref="IProblemSetSource"/> decorator that composes a quiz from an
 /// inner source by lifetime performance: each enumeration classifies the
 /// inner decisions against a <see cref="QuizMix"/>'s categories (using the
-/// consumer's current <see cref="DecisionStatsDocument"/>) and draws
+/// consumer's current <see cref="ProblemStatsDocument"/>) and draws
 /// per-entry pools to the percentage composition. Composition, not ordering:
 /// the mix decides <i>which</i> decisions form the quiz.
+///
+/// <para>
+/// <b>Classification is by content identity.</b> Each decision's lifetime
+/// record is looked up by its derived <see cref="ProblemKey"/>
+/// (SPEC-stats-identity.md §4; halheinrich/backgammon#95), so the classifier
+/// judges the <i>problem's</i> full record wherever the drawn copy came from
+/// — a copy under a different <c>DecisionId</c> than the one once quizzed
+/// still classifies as GotWrong / seen. A decision whose key is underivable
+/// (the no-key rung) has no record by construction — such submissions are
+/// never recorded — and classifies as never-seen.
+/// </para>
 ///
 /// <para>
 /// <b>Blank mix = passthrough.</b> When the mix
@@ -83,14 +94,14 @@ using BgDataTypes_Lib;
 public sealed class MixedProblemSetSource : IProblemSetSource
 {
     private readonly IProblemSetSource _inner;
-    private readonly Func<DecisionStatsDocument> _statsProvider;
+    private readonly Func<ProblemStatsDocument> _statsProvider;
     private readonly QuizMix _mix;
     private readonly TimeProvider _clock;
     private readonly Random _random;
 
     private MixedProblemSetSource(
         IProblemSetSource inner,
-        Func<DecisionStatsDocument> statsProvider,
+        Func<ProblemStatsDocument> statsProvider,
         QuizMix mix,
         TimeProvider clock,
         Random random)
@@ -126,7 +137,7 @@ public sealed class MixedProblemSetSource : IProblemSetSource
     /// <exception cref="ArgumentNullException">Any argument is null.</exception>
     public MixedProblemSetSource(
         IProblemSetSource inner,
-        Func<DecisionStatsDocument> statsProvider,
+        Func<ProblemStatsDocument> statsProvider,
         QuizMix mix,
         TimeProvider clock)
         : this(inner, statsProvider, mix, clock, new Random())
@@ -150,7 +161,7 @@ public sealed class MixedProblemSetSource : IProblemSetSource
     /// <exception cref="ArgumentNullException">Any reference argument is null.</exception>
     public MixedProblemSetSource(
         IProblemSetSource inner,
-        Func<DecisionStatsDocument> statsProvider,
+        Func<ProblemStatsDocument> statsProvider,
         QuizMix mix,
         TimeProvider clock,
         int seed)
@@ -197,14 +208,17 @@ public sealed class MixedProblemSetSource : IProblemSetSource
         var stats = _statsProvider()
             ?? throw new InvalidOperationException(
                 "The stats provider returned null. A MixedProblemSetSource requires the " +
-                "current DecisionStatsDocument (an empty document is valid — it means " +
+                "current ProblemStatsDocument (an empty document is valid — it means " +
                 "nothing has been quizzed); when there is no stats document at all, do not " +
                 "wire the composing decorator.");
         var now = _clock.GetUtcNow();
 
-        // Materialize (composition needs the whole set), deduping by decision
-        // identity — first occurrence wins; a quiz presents each decision at
-        // most once.
+        // Materialize (composition needs the whole set), deduping by record
+        // identity (DecisionId) — first occurrence wins; a quiz presents each
+        // record at most once. Deliberately not the content key: this guard is
+        // about the same record streaming through twice, while content dedupe
+        // (ProblemKey) is DistinctPositionProblemSetSource's concern and the
+        // consumer's wiring choice.
         var items = new List<BgDecisionData>();
         var seenIds = new HashSet<DecisionId>();
         await foreach (var item in _inner.EnumerateAsync(cancellationToken))
@@ -239,7 +253,7 @@ public sealed class MixedProblemSetSource : IProblemSetSource
     /// </summary>
     private List<BgDecisionData> Compose(
         List<BgDecisionData> items,
-        DecisionStatsDocument stats,
+        ProblemStatsDocument stats,
         DateTimeOffset now,
         out MixComposition composition)
     {
@@ -262,7 +276,12 @@ public sealed class MixedProblemSetSource : IProblemSetSource
 
         for (int idx = 0; idx < items.Count; idx++)
         {
-            stats.Decisions.TryGetValue(items[idx].Id, out var record);
+            // Lifetime record by content identity; no derivable key (the
+            // no-key rung) means no record — such submissions are never
+            // recorded — so the decision classifies as never-seen.
+            ProblemStats? record = null;
+            if (ProblemKey.TryDerive(items[idx], out var key))
+                stats.Problems.TryGetValue(key, out record);
             bool matchedAny = false;
             for (int i = 0; i < n; i++)
             {

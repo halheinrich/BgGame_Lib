@@ -31,7 +31,7 @@ using BgDataTypes_Lib;
 /// membership counts rows, and one cube position is one row. This is
 /// deliberately <i>not</i> the two-half convention of
 /// <see cref="QuizScore.Plus(SubmittedCubeAction)"/> and
-/// <see cref="DecisionStats.Plus(SubmittedCubeAction, DateTimeOffset)"/>,
+/// <see cref="ProblemStats.Plus(SubmittedCubeAction, DateTimeOffset)"/>,
 /// where a cube position is two scored decisions (the doubler half and the
 /// taker half). Those count answers given; this counts problems present.
 /// </para>

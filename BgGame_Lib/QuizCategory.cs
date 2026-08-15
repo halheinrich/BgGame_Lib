@@ -17,7 +17,7 @@ namespace BgGame_Lib;
 ///
 /// <para>
 /// Predicates classify the <b>(decision, stats)</b> pair — the live
-/// <c>BgDecisionData</c> alongside its <see cref="DecisionStats"/> record
+/// <c>BgDecisionData</c> alongside its <see cref="ProblemStats"/> record
 /// (null when never quizzed) — because sightings are derived per decision
 /// kind: a cube position folds two halves per sighting, so its sightings are
 /// <c>Tally.Submitted / 2</c> (always exact — one id only ever folds one

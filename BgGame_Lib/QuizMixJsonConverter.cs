@@ -6,7 +6,7 @@ using System.Text.Json.Serialization;
 /// <summary>
 /// Serialises <see cref="QuizMix"/> as its versioned persistent wire format.
 /// Bundled via type-level <c>[JsonConverter]</c> on the mix (the same pattern
-/// as <see cref="DecisionStatsDocumentJsonConverter"/>), so consumers do not
+/// as <see cref="ProblemStatsDocumentJsonConverter"/>), so consumers do not
 /// need to register anything on their <see cref="JsonSerializerOptions"/>.
 ///
 /// <para>

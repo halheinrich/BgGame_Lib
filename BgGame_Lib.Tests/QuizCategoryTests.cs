@@ -25,12 +25,18 @@ public class QuizCategoryTests
     private static BgDecisionData Play => Decision(isCube: false);
     private static BgDecisionData Cube => Decision(isCube: true);
 
-    private static DecisionStats Stats(
+    // Predicates take the (decision, stats) pair as given — the by-key lookup
+    // lives in MixedProblemSetSource — so one representative canonical key
+    // serves every stats fixture here.
+    private static readonly ProblemKey Key =
+        ProblemKey.Parse("0,-2,0,0,0,0,5,0,3,0,0,0,-5,5,0,0,0,-3,0,-5,0,0,0,0,2,0/7a7/1c/31");
+
+    private static ProblemStats Stats(
         int submitted, int correct, double loss, DateTimeOffset lastQuizzed) =>
-        new(Id, new ScoreSegment(submitted, correct, loss), lastQuizzed);
+        new(Key, new ScoreSegment(submitted, correct, loss), lastQuizzed);
 
     private static bool Matches(
-        QuizCategory category, BgDecisionData decision, DecisionStats? stats) =>
+        QuizCategory category, BgDecisionData decision, ProblemStats? stats) =>
         category.BuildPredicate().Matches(decision, stats, Now);
 
     // -----------------------------------------------------------------------

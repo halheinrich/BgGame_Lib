@@ -40,16 +40,24 @@ public class MixedProblemSetSourceTests
 
     private static DecisionId Id(int n) => new XgpDecisionId($"d{n}.xgp");
 
+    /// <summary>
+    /// Synthesized decision <paramref name="n"/>: classification looks its
+    /// lifetime record up by derived <see cref="ProblemKey"/>, so the facts
+    /// must be real and key-derivable — a standard starting board with
+    /// stamped dice, distinguished (and read back by <c>IdsAsync</c>) via the
+    /// away-scores pair <c>n</c>-away/<c>n</c>-away (<c>0a0</c> = money).
+    /// </summary>
     private static BgDecisionData Decision(int n) => new()
     {
         Id = Id(n),
         Position = new PositionData
         {
-            Mop = new int[26],
+            Mop = [0, -2, 0, 0, 0, 0, 5, 0, 3, 0, 0, 0, -5, 5, 0, 0, 0, -3, 0, -5, 0, 0, 0, 0, 2, 0],
             OnRollNeeds = n,
+            OpponentNeeds = n,
             CubeOwner = CubeOwner.Centered,
         },
-        Decision = new DecisionData(),
+        Decision = new DecisionData { Dice = [3, 1] },
         Descriptive = new DescriptiveData(),
         Outcome = new PlayOutcomeData(),
     };
@@ -57,21 +65,28 @@ public class MixedProblemSetSourceTests
     private static IReadOnlyList<BgDecisionData> Decisions(int count) =>
         Enumerable.Range(0, count).Select(Decision).ToList();
 
-    private static DecisionStats SeenCorrect(int n, int daysAgo = 1) =>
-        new(Id(n), new ScoreSegment(1, 1, 0.0), Now - TimeSpan.FromDays(daysAgo));
+    /// <summary>Decision <paramref name="n"/>'s content key, via the one blessed factory.</summary>
+    private static ProblemKey Key(int n)
+    {
+        Assert.True(ProblemKey.TryDerive(Decision(n), out var key));
+        return key!;
+    }
 
-    private static DecisionStats SeenWrong(int n, int daysAgo = 1) =>
-        new(Id(n), new ScoreSegment(1, 0, 0.1), Now - TimeSpan.FromDays(daysAgo));
+    private static ProblemStats SeenCorrect(int n, int daysAgo = 1) =>
+        new(Key(n), new ScoreSegment(1, 1, 0.0), Now - TimeSpan.FromDays(daysAgo));
 
-    private static DecisionStatsDocument Doc(params DecisionStats[] stats) =>
-        DecisionStatsDocument.FromStats(stats);
+    private static ProblemStats SeenWrong(int n, int daysAgo = 1) =>
+        new(Key(n), new ScoreSegment(1, 0, 0.1), Now - TimeSpan.FromDays(daysAgo));
+
+    private static ProblemStatsDocument Doc(params ProblemStats[] stats) =>
+        ProblemStatsDocument.FromStats(stats);
 
     private static QuizMixEntry Entry(QuizCategory category, int percent) =>
         new(category, percent);
 
     private static MixedProblemSetSource Source(
         IReadOnlyList<BgDecisionData> items,
-        DecisionStatsDocument doc,
+        ProblemStatsDocument doc,
         QuizMix mix,
         int seed = 7) =>
         new(new InMemorySource("Test", items), () => doc, mix, Clock, seed);
@@ -93,7 +108,7 @@ public class MixedProblemSetSourceTests
     public async Task BlankMix_PassesEverythingThroughInSourceOrder()
     {
         var items = Decisions(10);
-        var source = Source(items, DecisionStatsDocument.Empty, QuizMix.Empty);
+        var source = Source(items, ProblemStatsDocument.Empty, QuizMix.Empty);
 
         var ids = await IdsAsync(source);
 
@@ -106,7 +121,7 @@ public class MixedProblemSetSourceTests
     {
         // Inert means inert: even duplicate ids stream through unchanged.
         var items = new[] { Decision(0), Decision(0), Decision(1) };
-        var source = Source(items, DecisionStatsDocument.Empty, QuizMix.Empty);
+        var source = Source(items, ProblemStatsDocument.Empty, QuizMix.Empty);
 
         Assert.Equal([0, 0, 1], await IdsAsync(source));
     }
@@ -116,16 +131,16 @@ public class MixedProblemSetSourceTests
     {
         var items = Decisions(10);
 
-        Assert.Equal(10, Source(items, DecisionStatsDocument.Empty, QuizMix.Empty).Count);
+        Assert.Equal(10, Source(items, ProblemStatsDocument.Empty, QuizMix.Empty).Count);
         Assert.Null(Source(
-            items, DecisionStatsDocument.Empty,
+            items, ProblemStatsDocument.Empty,
             new QuizMix([Entry(QuizCategory.NeverSeen, 100)])).Count);
     }
 
     [Fact]
     public void Name_PassesThrough()
     {
-        var source = Source(Decisions(1), DecisionStatsDocument.Empty, QuizMix.Empty);
+        var source = Source(Decisions(1), ProblemStatsDocument.Empty, QuizMix.Empty);
 
         Assert.Equal("Test", source.Name);
     }
@@ -138,7 +153,7 @@ public class MixedProblemSetSourceTests
     public async Task EmptyInnerSource_YieldsNothing_WithHonestTelemetry()
     {
         var mix = new QuizMix([Entry(QuizCategory.NeverSeen, 100)], quizLength: 5);
-        var source = Source([], DecisionStatsDocument.Empty, mix);
+        var source = Source([], ProblemStatsDocument.Empty, mix);
 
         Assert.Empty(await IdsAsync(source));
         Assert.Equal(5, source.LastComposition!.TargetCount);
@@ -152,7 +167,7 @@ public class MixedProblemSetSourceTests
     {
         // Falls out of the null-stats path — no special-casing to trip over.
         var mix = new QuizMix([Entry(QuizCategory.NeverSeen, 100)], randomOrder: false);
-        var source = Source(Decisions(10), DecisionStatsDocument.Empty, mix);
+        var source = Source(Decisions(10), ProblemStatsDocument.Empty, mix);
 
         Assert.Equal(Enumerable.Range(0, 10), await IdsAsync(source));
     }
@@ -161,7 +176,7 @@ public class MixedProblemSetSourceTests
     public async Task SingleDecision_ComposesAOneItemQuiz()
     {
         var mix = new QuizMix([Entry(QuizCategory.NeverSeen, 100)]);
-        var source = Source(Decisions(1), DecisionStatsDocument.Empty, mix);
+        var source = Source(Decisions(1), ProblemStatsDocument.Empty, mix);
 
         Assert.Equal([0], await IdsAsync(source));
         Assert.Equal(1, source.LastComposition!.DrawnCount);
@@ -172,7 +187,7 @@ public class MixedProblemSetSourceTests
     {
         var items = new[] { Decision(0), Decision(0), Decision(1) };
         var mix = new QuizMix([Entry(QuizCategory.NeverSeen, 100)], randomOrder: false);
-        var source = Source(items, DecisionStatsDocument.Empty, mix);
+        var source = Source(items, ProblemStatsDocument.Empty, mix);
 
         Assert.Equal([0, 1], await IdsAsync(source));
     }
@@ -265,7 +280,7 @@ public class MixedProblemSetSourceTests
             Entry(QuizCategory.SeenFewerThan(1), 33),
             Entry(QuizCategory.NotSeenInDays(1), 33),
         ], quizLength: 10, randomOrder: false);
-        var source = Source(Decisions(12), DecisionStatsDocument.Empty, mix);
+        var source = Source(Decisions(12), ProblemStatsDocument.Empty, mix);
 
         var ids = await IdsAsync(source);
 
@@ -281,7 +296,7 @@ public class MixedProblemSetSourceTests
     {
         var mix = new QuizMix(
             [Entry(QuizCategory.NeverSeen, 100)], quizLength: 4, randomOrder: false);
-        var source = Source(Decisions(10), DecisionStatsDocument.Empty, mix);
+        var source = Source(Decisions(10), ProblemStatsDocument.Empty, mix);
 
         Assert.Equal([0, 1, 2, 3], await IdsAsync(source));
     }
@@ -290,7 +305,7 @@ public class MixedProblemSetSourceTests
     public async Task QuizLengthBeyondSupply_DrawsEverythingReachable_AndReportsIt()
     {
         var mix = new QuizMix([Entry(QuizCategory.NeverSeen, 100)], quizLength: 10);
-        var source = Source(Decisions(3), DecisionStatsDocument.Empty, mix);
+        var source = Source(Decisions(3), ProblemStatsDocument.Empty, mix);
 
         var ids = await IdsAsync(source);
 
@@ -346,7 +361,7 @@ public class MixedProblemSetSourceTests
         // Re-enumerating the same instance re-composes and re-shuffles — a
         // Restart is a new draw, not a replay (the shuffled-source precedent).
         var mix = new QuizMix([Entry(QuizCategory.NeverSeen, 100)], quizLength: 10);
-        var source = Source(Decisions(30), DecisionStatsDocument.Empty, mix);
+        var source = Source(Decisions(30), ProblemStatsDocument.Empty, mix);
 
         var first = await IdsAsync(source);
         var second = await IdsAsync(source);
@@ -372,7 +387,7 @@ public class MixedProblemSetSourceTests
     public async Task RandomOrderOn_ShufflesPresentation()
     {
         var mix = new QuizMix([Entry(QuizCategory.NeverSeen, 100)]);
-        var source = Source(Decisions(30), DecisionStatsDocument.Empty, mix, seed: 7);
+        var source = Source(Decisions(30), ProblemStatsDocument.Empty, mix, seed: 7);
 
         var ids = await IdsAsync(source);
 
@@ -390,7 +405,7 @@ public class MixedProblemSetSourceTests
         // The consumer's document advances between passes (folds replace the
         // immutable document); a Restart composes against the current one.
         var items = Decisions(3);
-        var doc = DecisionStatsDocument.Empty;
+        var doc = ProblemStatsDocument.Empty;
         var mix = new QuizMix([Entry(QuizCategory.NeverSeen, 100)], randomOrder: false);
         var source = new MixedProblemSetSource(
             new InMemorySource("Test", items), () => doc, mix, Clock, seed: 7);
@@ -420,7 +435,7 @@ public class MixedProblemSetSourceTests
     public async Task LastComposition_IsAvailableAtTheFirstItem()
     {
         var mix = new QuizMix([Entry(QuizCategory.NeverSeen, 100)]);
-        var source = Source(Decisions(5), DecisionStatsDocument.Empty, mix);
+        var source = Source(Decisions(5), ProblemStatsDocument.Empty, mix);
 
         Assert.Null(source.LastComposition);
 
@@ -439,7 +454,7 @@ public class MixedProblemSetSourceTests
     public void Constructor_RejectsNulls()
     {
         var inner = new InMemorySource("Test", Decisions(1));
-        static DecisionStatsDocument Stats() => DecisionStatsDocument.Empty;
+        static ProblemStatsDocument Stats() => ProblemStatsDocument.Empty;
 
         Assert.Throws<ArgumentNullException>(
             () => new MixedProblemSetSource(null!, Stats, QuizMix.Empty, Clock));
@@ -455,7 +470,7 @@ public class MixedProblemSetSourceTests
     public async Task EnumerateAsync_HonoursCancellation()
     {
         var mix = new QuizMix([Entry(QuizCategory.NeverSeen, 100)]);
-        var source = Source(Decisions(10), DecisionStatsDocument.Empty, mix);
+        var source = Source(Decisions(10), ProblemStatsDocument.Empty, mix);
 
         using var cts = new CancellationTokenSource();
         cts.Cancel();

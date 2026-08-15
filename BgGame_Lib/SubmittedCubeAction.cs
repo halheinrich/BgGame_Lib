@@ -15,14 +15,22 @@ using BgDataTypes_Lib;
 /// <c>BestDoublerAction</c> / <c>BestTakerAction</c>); this type is the carrier
 /// that <see cref="QuizScore.Plus(SubmittedCubeAction)"/> folds in.
 /// </summary>
-/// <param name="DecisionId">Stable identity of the decision this submission answers (from BgDecisionData.Id).</param>
+/// <param name="ProblemKey">
+/// Content identity of the problem this submission answers, derived
+/// producer-side via <see cref="ProblemKey.TryDerive"/> from the quizzed
+/// record's facts. <see langword="null"/> is the no-key rung
+/// (SPEC-stats-identity.md §2): the submission still scores the session
+/// (<see cref="QuizScore"/> never reads the key) but is not recorded in
+/// lifetime stats — <see cref="ProblemStatsDocument.Plus(SubmittedCubeAction, TimeProvider)"/>
+/// skips it.
+/// </param>
 /// <param name="UserDecision">The doubler/taker action pair the user chose.</param>
 /// <param name="DoublerEquityLoss">Equity loss of the user's doubler action vs. the best doubler action (0 if best).</param>
 /// <param name="TakerEquityLoss">Equity loss of the user's taker action vs. the best taker action (0 if best).</param>
 /// <param name="DoublerCorrect">True iff the user's doubler action matched the best doubler action.</param>
 /// <param name="TakerCorrect">True iff the user's taker action matched the best taker action.</param>
 public sealed record SubmittedCubeAction(
-    DecisionId DecisionId,
+    ProblemKey? ProblemKey,
     CubeDecisionPair UserDecision,
     double DoublerEquityLoss,
     double TakerEquityLoss,
