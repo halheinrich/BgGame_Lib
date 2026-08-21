@@ -24,8 +24,11 @@ using BgDataTypes_Lib;
 ///
 /// <code>
 /// {
-///   "schemaVersion": 2,
+///   "schemaVersion": 3,
 ///   "problems": {
+///     "0,-2,0,0,0,0,5,0,3,0,0,0,-5,5,0,0,0,-3,0,-5,0,0,0,0,2,0/0a0j/1c/31": {
+///       "tally": { "submitted": 1, "correct": 1, "totalEquityLoss": 0 },
+///       "lastQuizzed": "2026-07-18T19:04:11+00:00" },
 ///     "0,-2,0,0,0,0,5,0,3,0,0,0,-5,5,0,0,0,-3,0,-5,0,0,0,0,2,0/7a7/1c/31": {
 ///       "tally": { "submitted": 3, "correct": 2, "totalEquityLoss": 0.125 },
 ///       "lastQuizzed": "2026-07-18T19:04:11+00:00" }
@@ -48,20 +51,27 @@ using BgDataTypes_Lib;
 /// version gates how everything after it is parsed, so the reader dispatches
 /// on it before touching anything else; a document whose first property is
 /// anything else is rejected as corrupt or foreign. Every file this library's
-/// writers have ever produced (v1 included) satisfies this.
+/// writers have ever produced — every version, retired ones included —
+/// satisfies this.
 /// </para>
 ///
 /// <para>
-/// <b>Reads are fail-loud, with one deliberate signal.</b> Schema version 1 —
-/// the retired <c>DecisionId</c>-keyed format — is recognised by a shallow
-/// shape check (exactly one further property, <c>decisions</c>, holding an
-/// array whose contents are never parsed; no migration exists) and throws
-/// <see cref="RetiredStatsSchemaException"/> so the consumer can retire the
-/// file honestly instead of surfacing a generic load error
-/// (SPEC-stats-identity.md §3). Everything else throws plain
-/// <see cref="JsonException"/>: a newer or unknown schema version, a missing
-/// required property, an unknown or duplicate property at any level, an
-/// invalid or duplicate key, a malformed date, or an impossible tally
+/// <b>Reads are fail-loud, with one deliberate signal — and the signal covers
+/// every retired version.</b> A recognised version <i>below</i>
+/// <see cref="ProblemStatsDocument.CurrentSchemaVersion"/> is retired: v1 (the
+/// <c>DecisionId</c>-keyed format) and v2 (the <see cref="ProblemKey"/>-keyed
+/// format from before the Jacoby rule entered money keys). Each is recognised
+/// by a shallow shape check — exactly one further property, holding that
+/// version's body container, whose contents are never parsed (no migration
+/// exists) — and throws <see cref="RetiredStatsSchemaException"/> carrying
+/// <b>its own</b> version number, so the consumer can retire the file
+/// honestly, under a per-version name, instead of surfacing a generic load
+/// error (SPEC-stats-identity.md §3). The rule is a range, not a list, so a
+/// version bump retires its predecessor with no second edit — see
+/// <c>IsRetiredSchemaVersion</c>. Everything else throws plain
+/// <see cref="JsonException"/>: a newer or unrecognised schema version, a
+/// missing required property, an unknown or duplicate property at any level,
+/// an invalid or duplicate key, a malformed date, or an impossible tally
 /// (negative counts, correct &gt; submitted, negative equity loss) — corrupt
 /// or foreign stats must never load as quietly-wrong lifetime data.
 /// </para>
@@ -89,14 +99,66 @@ internal sealed class ProblemStatsDocumentJsonConverter : JsonConverter<ProblemS
         reader.Read();
         int version = ReadSchemaVersion(ref reader);
 
-        if (version == RetiredSchemaVersion)
-            ThrowForRetiredVersionDocument(ref reader);
+        if (IsRetiredSchemaVersion(version))
+            ThrowForRetiredVersionDocument(ref reader, version);
 
         return ReadCurrentVersionBody(ref reader);
     }
 
-    /// <summary>The one retired version: the DecisionId-keyed v1 format.</summary>
-    private const int RetiredSchemaVersion = 1;
+    /// <summary>
+    /// The oldest schema version this library recognises at all. Below it a
+    /// document is unrecognised rather than retired, and fails loud exactly as
+    /// a version above the current one does.
+    /// </summary>
+    private const int OldestRecognisedSchemaVersion = 1;
+
+    /// <summary>
+    /// The retirement rule: <b>every recognised version below the current
+    /// one</b> — a range, deliberately, not a list of versions. Bumping
+    /// <see cref="ProblemStatsDocument.CurrentSchemaVersion"/> must retire the
+    /// version it supersedes with no second edit anywhere: an omitted edit
+    /// would drop that version's holders into the generic fail-loud path with
+    /// their stats silently dead — the one outcome SPEC-stats-identity.md
+    /// §3's "deliberate recognition, small and mandatory" ruling exists to
+    /// forbid.
+    /// </summary>
+    private static bool IsRetiredSchemaVersion(int version) =>
+        version >= OldestRecognisedSchemaVersion
+        && version < ProblemStatsDocument.CurrentSchemaVersion;
+
+    /// <summary>
+    /// Shallow recognition data for a retired schema version: the single
+    /// property its body hangs from, that property's container token, and a
+    /// phrase naming the format for the diagnostic. Enough to tell a genuine
+    /// retired document from a corrupt one merely claiming its version — the
+    /// body itself is skipped, never parsed.
+    /// </summary>
+    private readonly record struct RetiredSchemaShape(
+        string BodyProperty,
+        JsonTokenType BodyContainer,
+        string Description)
+    {
+        /// <summary>The body container named for a diagnostic message.</summary>
+        public string ContainerNoun =>
+            BodyContainer == JsonTokenType.StartArray ? "an array" : "an object";
+    }
+
+    /// <summary>
+    /// The retired versions' shapes. Total over
+    /// <see cref="IsRetiredSchemaVersion"/> by construction: the fallback arm
+    /// describes the <c>problems</c>-map body every version from 2 onward
+    /// carries, so a future
+    /// <see cref="ProblemStatsDocument.CurrentSchemaVersion"/> bump retires its
+    /// predecessor correctly without touching this table — a row is added
+    /// only to sharpen the diagnostic.
+    /// </summary>
+    private static RetiredSchemaShape ShapeOfRetired(int version) => version switch
+    {
+        1 => new("decisions", JsonTokenType.StartArray, "the DecisionId-keyed format"),
+        2 => new("problems", JsonTokenType.StartObject,
+                 "the ProblemKey-keyed format from before the Jacoby rule entered money keys"),
+        _ => new("problems", JsonTokenType.StartObject, "a superseded ProblemKey-keyed format"),
+    };
 
     private static int ReadSchemaVersion(ref Utf8JsonReader reader)
     {
@@ -108,44 +170,51 @@ internal sealed class ProblemStatsDocumentJsonConverter : JsonConverter<ProblemS
             throw new JsonException(
                 $"Stats document has schema version {version}, newer than the highest " +
                 $"version this library supports ({ProblemStatsDocument.CurrentSchemaVersion}).");
-        if (version != ProblemStatsDocument.CurrentSchemaVersion
-            && version != RetiredSchemaVersion)
+        if (version < OldestRecognisedSchemaVersion)
             throw new JsonException(
-                $"Stats document has unsupported schema version {version}; " +
-                $"expected {ProblemStatsDocument.CurrentSchemaVersion}.");
+                $"Stats document has unsupported schema version {version}; this library " +
+                $"recognises versions {OldestRecognisedSchemaVersion} through " +
+                $"{ProblemStatsDocument.CurrentSchemaVersion}.");
 
         return version;
     }
 
     /// <summary>
-    /// The deliberate v1 recognition signal — never returns. Positioned after
-    /// the version value, verifies the remainder shallowly against v1's shape
-    /// — exactly one further property, <c>decisions</c>, holding an array
-    /// whose contents are skipped, never parsed (no migration; clean break) —
-    /// and throws <see cref="RetiredStatsSchemaException"/> for the genuine
-    /// article. A document that claims version 1 but is shaped otherwise
-    /// throws plain <see cref="JsonException"/> instead: corrupt, not retired.
+    /// The deliberate retired-version recognition signal — never returns.
+    /// Positioned after the version value, verifies the remainder shallowly
+    /// against <paramref name="version"/>'s own shape — exactly one further
+    /// property, holding that version's body container, whose contents are
+    /// skipped and never parsed (no migration; clean break) — and throws
+    /// <see cref="RetiredStatsSchemaException"/> carrying that version for the
+    /// genuine article. A document that claims a retired version but is shaped
+    /// otherwise throws plain <see cref="JsonException"/> instead: corrupt,
+    /// not retired.
     /// </summary>
     [DoesNotReturn]
-    private static void ThrowForRetiredVersionDocument(ref Utf8JsonReader reader)
+    private static void ThrowForRetiredVersionDocument(ref Utf8JsonReader reader, int version)
     {
+        var shape = ShapeOfRetired(version);
+
         if (!reader.Read() || reader.TokenType != JsonTokenType.PropertyName
-            || reader.GetString() != "decisions")
+            || reader.GetString() != shape.BodyProperty)
             throw new JsonException(
-                "Document claims retired schema version 1 but lacks its 'decisions' property.");
+                $"Document claims retired schema version {version} but lacks its " +
+                $"'{shape.BodyProperty}' property.");
         reader.Read();
-        if (reader.TokenType != JsonTokenType.StartArray)
+        if (reader.TokenType != shape.BodyContainer)
             throw new JsonException(
-                "Document claims retired schema version 1 but 'decisions' is not an array.");
+                $"Document claims retired schema version {version} but " +
+                $"'{shape.BodyProperty}' is not {shape.ContainerNoun}.");
         reader.Skip();
         if (!reader.Read() || reader.TokenType != JsonTokenType.EndObject)
             throw new JsonException(
-                "Document claims retired schema version 1 but carries properties beyond 'decisions'.");
+                $"Document claims retired schema version {version} but carries " +
+                $"properties beyond '{shape.BodyProperty}'.");
 
         throw new RetiredStatsSchemaException(
-            RetiredSchemaVersion,
-            $"Stats document has retired schema version {RetiredSchemaVersion} " +
-            $"(the DecisionId-keyed format). There is no migration: retire the file " +
+            version,
+            $"Stats document has retired schema version {version} " +
+            $"({shape.Description}). There is no migration: retire the file " +
             $"and start a fresh version-{ProblemStatsDocument.CurrentSchemaVersion} document.");
     }
 

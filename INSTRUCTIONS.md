@@ -62,8 +62,8 @@ BgGame_Lib/
   MatchState.cs           — mutable: match length, scores, Crawford
   ProblemStats.cs         — immutable per-problem lifetime record: ProblemKey + ScoreSegment tally + last-quizzed
   ProblemStatsDocument.cs — immutable ProblemKey-keyed collection of ProblemStats; the versioned quiz-stats document
-  ProblemStatsDocumentJsonConverter.cs — bundled converter: pinned v2 wire format, fail-loud reads, retired-v1 signal
-  RetiredStatsSchemaException.cs — the deliberate v1-recognition signal (a JsonException subtype)
+  ProblemStatsDocumentJsonConverter.cs — bundled converter: pinned v3 wire format, fail-loud reads, retired-version signal
+  RetiredStatsSchemaException.cs — the deliberate retired-version signal (a JsonException subtype), carrying that version
   RecordedDiceSource.cs   — replays a fixed roll sequence; throws when exhausted
   SeededDiceSource.cs     — Random(seed)-backed reproducible rolls
   VerifiableDiceSource.cs — key-derived audit-grade rolls (public HMAC-SHA256 stream + rejection sampling)
@@ -587,31 +587,45 @@ asymmetry with `ProblemStats.Plus` (which takes the already-resolved
 so holding the seam there makes ambient-time misuse impossible at the type
 level, while the record-level fold stays a pure value computation.
 
-**Wire format (schema v2 — the #95 clean break).** JSON via the bundled
-internal `ProblemStatsDocumentJsonConverter` (type-level `[JsonConverter]`,
-same pattern as BgDataTypes_Lib's `DecisionIdJsonConverter` — consumers
-register nothing): a `schemaVersion` field (`CurrentSchemaVersion`,
-currently 2) followed by a `problems` **object** keyed by canonical
-`ProblemKey` strings, each value a nested tally object plus the ISO 8601
-last-quizzed date. The map shape is what `ProblemKeyJsonConverter`'s
-property-name support exists for (v1's array-of-elements existed only
-because `DecisionId` lacked it). The converter hand-writes the whole tree
-with fixed property names, ordered by canonical key (ordinal), so the
-persisted format cannot vary with the consumer's `JsonSerializerOptions`.
-`schemaVersion` is **contractually the first property** — the version gates
-how the rest is parsed; every file the v1/v2 writers ever produced satisfies
-this, and anything else reads as corrupt/foreign. Reads are fail-loud with
-one deliberate signal: a **genuine v1 document** (version 1 plus a shallow
-shape check — its `decisions` array's contents are skipped, never parsed; no
-migration exists) throws `RetiredStatsSchemaException`, a `JsonException`
-subtype carrying the retired version, so the consumer can retire the file
-honestly (rename aside, seed fresh, notice) instead of surfacing a generic
-load error. Everything else — newer or unknown schema versions
-(distinguished "newer than this library supports" message), unknown or
-duplicate properties, missing required properties, invalid or duplicate or
-non-canonically-spelled keys, malformed dates, impossible tallies — throws
-plain `JsonException`; a schema-version bump is the format's only evolution
-mechanism.
+**Wire format (schema v3 — the #95 clean break, re-broken for #120's
+money keys).** JSON via the bundled internal
+`ProblemStatsDocumentJsonConverter` (type-level `[JsonConverter]`, same
+pattern as BgDataTypes_Lib's `DecisionIdJsonConverter` — consumers register
+nothing): a `schemaVersion` field (`CurrentSchemaVersion`, currently 3)
+followed by a `problems` **object** keyed by canonical `ProblemKey` strings,
+each value a nested tally object plus the ISO 8601 last-quizzed date. The
+key grammar itself is BgDataTypes_Lib's — see `ProblemKey`'s type docs for
+the single authoritative statement of it, including the money-only Jacoby
+suffix that v3 exists for; never restate it here. The map shape is what
+`ProblemKeyJsonConverter`'s property-name support exists for (v1's
+array-of-elements existed only because `DecisionId` lacked it). The
+converter hand-writes the whole tree with fixed property names, ordered by
+canonical key (ordinal), so the persisted format cannot vary with the
+consumer's `JsonSerializerOptions`. `schemaVersion` is **contractually the
+first property** — the version gates how the rest is parsed; every file any
+of this library's writers ever produced satisfies this, and anything else
+reads as corrupt/foreign.
+
+Reads are fail-loud with one deliberate signal, and the signal covers
+**every recognised version below the current one** — the rule is the range
+`[1, CurrentSchemaVersion)`, deliberately not a list, so a version bump
+retires its predecessor with no second edit. A genuine retired document
+(its version plus a shallow shape check — exactly one further property
+holding that version's body container, `decisions` array for v1 and
+`problems` object for v2 onward, whose contents are skipped and never
+parsed; no migration exists) throws `RetiredStatsSchemaException`, a
+`JsonException` subtype carrying **its own** version, so the consumer can
+retire the file honestly under a per-version name (rename aside, seed fresh,
+notice) instead of surfacing a generic load error. v1 is the `DecisionId`-keyed
+format; v2 is the `ProblemKey`-keyed format from before Jacoby entered money
+keys — its match keys are spelled exactly as v3 spells them, but selective
+carry-forward was weighed and rejected (SPEC-stats-identity.md §3), so a v2
+file is set aside whole. Everything else — newer or unrecognised schema
+versions (distinguished "newer than this library supports" message), unknown
+or duplicate properties, missing required properties, invalid or duplicate or
+non-canonically-spelled keys (a v2 money key is now one of these), malformed
+dates, impossible tallies — throws plain `JsonException`; a schema-version
+bump is the format's only evolution mechanism.
 
 ### Stats-weighted quiz categories
 
@@ -1126,7 +1140,7 @@ public sealed record ProblemStats(ProblemKey Key, ScoreSegment Tally, DateTimeOf
 [JsonConverter(typeof(ProblemStatsDocumentJsonConverter))]    // bundled; consumers register nothing
 public sealed class ProblemStatsDocument                      // immutable; reference equality (see Pitfalls)
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;   // every recognised version below it is retired
     public static ProblemStatsDocument Empty { get; }
     public static ProblemStatsDocument FromStats(IEnumerable<ProblemStats> stats);   // ArgumentException on duplicate key
     public int Count { get; }
@@ -1136,12 +1150,12 @@ public sealed class ProblemStatsDocument                      // immutable; refe
                                                                                      //   null-key submission → same document
 }
 
-// The deliberate v1-recognition signal (see the stats wire-format section):
-// catch BEFORE the general JsonException to retire a v1 file honestly.
+// The deliberate retired-version signal (see the stats wire-format section):
+// catch BEFORE the general JsonException to retire an old file honestly.
 public sealed class RetiredStatsSchemaException : JsonException
 {
-    public int SchemaVersion { get; }          // the retired version the document declared (1)
-    public RetiredStatsSchemaException(int schemaVersion, string message);
+    public int SchemaVersion { get; }          // the retired version the document declared (1 or 2);
+    public RetiredStatsSchemaException(int schemaVersion, string message);   // name the set-aside file from it
 }
 
 // Stats-weighted quiz categories (predicates over a decision's lifetime stats)
@@ -1319,9 +1333,12 @@ public sealed record AnswerTypeDistribution(
   duplicate keys, malformed dates, and impossible tallies all throw
   `JsonException` — a version bump is the format's only evolution mechanism;
   do not add tolerant-read behavior. The one carve-out is deliberate: a
-  genuine v1 document throws `RetiredStatsSchemaException`, and a consumer
+  genuine document in **any** retired version (every recognised version below
+  `CurrentSchemaVersion`) throws `RetiredStatsSchemaException`, and a consumer
   that wants the honest retire-and-restart path must catch it **before** the
-  general `JsonException` (it derives from it — catch order matters).
+  general `JsonException` (it derives from it — catch order matters) and must
+  name the file it sets aside from `SchemaVersion`, not from a constant —
+  otherwise a tester carrying two retired formats loses one to the other.
 - **No-key submissions vanish from lifetime stats silently — by ruling.**
   `ProblemStatsDocument.Plus` with a null `ProblemKey` returns the *same*
   document (degrade, never block); nothing throws and no counter ticks. That

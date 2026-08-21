@@ -6,9 +6,15 @@ using BgDataTypes_Lib;
 /// <summary>
 /// Thrown by <see cref="ProblemStatsDocumentJsonConverter"/> when a stats
 /// document read recognises a genuine document in a <b>retired</b> schema
-/// version — currently only version 1, the <c>DecisionId</c>-keyed format
-/// retired by the clean break to <see cref="ProblemKey"/> keying
-/// (SPEC-stats-identity.md §3; halheinrich/backgammon#95).
+/// version — <i>every</i> recognised version below
+/// <see cref="ProblemStatsDocument.CurrentSchemaVersion"/>, not one pinned
+/// version: today version 1 (the <c>DecisionId</c>-keyed format, retired by
+/// the clean break to <see cref="ProblemKey"/> keying —
+/// halheinrich/backgammon#95) and version 2 (the <see cref="ProblemKey"/>-keyed
+/// format from before the Jacoby rule entered money keys —
+/// halheinrich/backgammon#120). Each throws carrying its <b>own</b>
+/// <see cref="SchemaVersion"/>, which is what lets a consumer name the file it
+/// sets aside per version (SPEC-stats-identity.md §3).
 ///
 /// <para>
 /// This is the deliberate recognition signal that separates "your stats file
@@ -16,10 +22,11 @@ using BgDataTypes_Lib;
 /// a retired document must not surface as a generic hard load error, which
 /// would strand existing users on a dead stats file with no honest notice.
 /// The consumer catches this type <i>before</i> the general
-/// <see cref="JsonException"/> and retires the file (rename aside, seed a
-/// fresh current-version document, tell the user stats restarted). Recognition
-/// is shallow and shape-based — the retired content itself is never parsed;
-/// there is no migration.
+/// <see cref="JsonException"/> and retires the file (rename aside — under a
+/// name derived from <see cref="SchemaVersion"/>, so two retired formats
+/// cannot overwrite one another — seed a fresh current-version document, tell
+/// the user stats restarted). Recognition is shallow and shape-based — the
+/// retired content itself is never parsed; there is no migration.
 /// </para>
 ///
 /// <para>
@@ -31,7 +38,11 @@ using BgDataTypes_Lib;
 /// </summary>
 public sealed class RetiredStatsSchemaException : JsonException
 {
-    /// <summary>The retired schema version the document declared.</summary>
+    /// <summary>
+    /// The retired schema version the document declared — the specific
+    /// version, never a placeholder: the consumer's set-aside name is derived
+    /// from it.
+    /// </summary>
     public int SchemaVersion { get; }
 
     /// <summary>Construct for a recognised document of retired <paramref name="schemaVersion"/>.</summary>

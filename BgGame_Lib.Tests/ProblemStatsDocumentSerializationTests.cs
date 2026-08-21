@@ -12,8 +12,18 @@ public class ProblemStatsDocumentSerializationTests
     private const string PlayKeyText = $"{Board}/7a7/1c/31";
     private const string CubeKeyText = $"{Board}/7a7/1c";
 
+    // v3's money keys. The Jacoby rule is a money-only suffix, so a money
+    // problem has exactly two spellings — one per polarity — and the v2 money
+    // spelling (silent about Jacoby) is not in the v3 grammar at all. Match
+    // keys above are byte-identical to what the v2 writer emitted.
+    private const string MoneyJacobyKeyText = $"{Board}/0a0j/1c/31";
+    private const string MoneyNoJacobyKeyText = $"{Board}/0a0nj/1c/31";
+    private const string RetiredV2MoneyKeyText = $"{Board}/0a0/1c/31";
+
     private static readonly ProblemKey PlayKey = ProblemKey.Parse(PlayKeyText);
     private static readonly ProblemKey CubeKey = ProblemKey.Parse(CubeKeyText);
+    private static readonly ProblemKey MoneyJacobyKey = ProblemKey.Parse(MoneyJacobyKeyText);
+    private static readonly ProblemKey MoneyNoJacobyKey = ProblemKey.Parse(MoneyNoJacobyKeyText);
 
     private static readonly DateTimeOffset T1 = new(2026, 7, 18, 19, 4, 11, TimeSpan.Zero);
     private static readonly DateTimeOffset T2 = new(2026, 7, 19, 8, 30, 0, TimeSpan.FromHours(-7));
@@ -27,6 +37,8 @@ public class ProblemStatsDocumentSerializationTests
         [
             new ProblemStats(PlayKey, new ScoreSegment(3, 2, 0.125), T1),
             new ProblemStats(CubeKey, new ScoreSegment(2, 1, 0.08), T2),
+            new ProblemStats(MoneyJacobyKey, new ScoreSegment(1, 1, 0.0), T1),
+            new ProblemStats(MoneyNoJacobyKey, new ScoreSegment(4, 1, 0.5), T2),
         ]);
 
     // ------------------------------------------------------------------
@@ -42,7 +54,7 @@ public class ProblemStatsDocumentSerializationTests
 
         Assert.NotNull(back);
         Assert.Equal(0, back.Count);
-        Assert.Equal("""{"schemaVersion":2,"problems":{}}""", json);
+        Assert.Equal("""{"schemaVersion":3,"problems":{}}""", json);
     }
 
     [Fact]
@@ -57,6 +69,8 @@ public class ProblemStatsDocumentSerializationTests
         Assert.Equal(doc.Count, back.Count);
         Assert.Equal(doc.Problems[PlayKey], back.Problems[PlayKey]);   // record equality: key + tally + date
         Assert.Equal(doc.Problems[CubeKey], back.Problems[CubeKey]);   // incl. the non-UTC offset on T2
+        Assert.Equal(doc.Problems[MoneyJacobyKey], back.Problems[MoneyJacobyKey]);
+        Assert.Equal(doc.Problems[MoneyNoJacobyKey], back.Problems[MoneyNoJacobyKey]);
     }
 
     [Fact]
@@ -66,6 +80,31 @@ public class ProblemStatsDocumentSerializationTests
 
         Assert.Contains($"\"{PlayKeyText}\":", json);
         Assert.Contains($"\"{CubeKeyText}\":", json);
+    }
+
+    [Fact]
+    public void Serialize_MoneyKeysCarryTheirJacobySuffix_InBothPolarities()
+    {
+        var json = JsonSerializer.Serialize(PopulatedDocument());
+
+        Assert.Contains($"\"{MoneyJacobyKeyText}\":", json);
+        Assert.Contains($"\"{MoneyNoJacobyKeyText}\":", json);
+        // The v2 money spelling is gone from the written format entirely —
+        // that persisted-format change is what the v3 bump exists for.
+        Assert.DoesNotContain($"\"{RetiredV2MoneyKeyText}\":", json);
+    }
+
+    [Fact]
+    public void Serialize_MatchKeys_AreSpelledExactlyAsV2SpelledThem()
+    {
+        // The Jacoby suffix is money-only by ruling (SPEC-stats-identity.md
+        // §2), so nothing about a match key moved between v2 and v3. Pinning
+        // it here keeps a future "make it a field on every key" refactor from
+        // silently respelling the whole match population.
+        var json = JsonSerializer.Serialize(PopulatedDocument());
+
+        Assert.Contains($"\"{Board}/7a7/1c/31\":", json);
+        Assert.Contains($"\"{Board}/7a7/1c\":", json);
     }
 
     [Fact]
@@ -104,36 +143,79 @@ public class ProblemStatsDocumentSerializationTests
     }
 
     // ------------------------------------------------------------------
-    //  Retired v1 recognition — the deliberate signal. Three directions:
-    //  a genuine v1 document signals retirement; a document that merely
-    //  claims v1 reads as corrupt; foreign JSON reads as corrupt. The
-    //  corrupt/foreign assertions use Assert.Throws<JsonException>, which
-    //  demands the exact type — a RetiredStatsSchemaException there would
-    //  fail the test, so the discrimination is pinned in both directions.
+    //  Retired-version recognition — the deliberate signal, which covers
+    //  EVERY recognised version below the current one, each carrying its own
+    //  version number (the consumer names the file it sets aside from it).
+    //  Three directions: a genuine retired document signals retirement; a
+    //  document that merely claims a retired version reads as corrupt;
+    //  foreign JSON reads as corrupt. The corrupt/foreign assertions use
+    //  Assert.Throws<JsonException>, which demands the exact type — a
+    //  RetiredStatsSchemaException there would fail the test, so the
+    //  discrimination is pinned in both directions.
     // ------------------------------------------------------------------
 
+    /// <summary>
+    /// Genuine documents in each retired version, labeled by the version they
+    /// must report. Retiring v2 must not cost v1 its own signal — a single
+    /// retired-version constant would drop every remaining v1 holder into the
+    /// generic fail-loud path, which is exactly what the deliberate-
+    /// recognition ruling forbids (SPEC-stats-identity.md §3).
+    /// </summary>
+    public static TheoryData<int, string> GenuineRetiredDocuments => new()
+    {
+        { 1, """{"schemaVersion":1,"decisions":[]}""" },
+        { 1, """{"schemaVersion":1,"decisions":[{"id":"problem.xgp","tally":{"submitted":1,"correct":1,"totalEquityLoss":0},"lastQuizzed":"2026-07-18T19:04:11+00:00"}]}""" },
+        // Recognition is shallow: the body's contents are skipped, never
+        // parsed, so even garbage inside it still reads as genuine.
+        { 1, """{"schemaVersion":1,"decisions":[{"garbage":true},42,"x"]}""" },
+        { 2, """{"schemaVersion":2,"problems":{}}""" },
+        { 2, $$$"""{"schemaVersion":2,"problems":{"{{{PlayKeyText}}}":{{{ValidRecord}}}}}""" },
+        // ... including a v2 money key, whose spelling the v3 grammar no
+        // longer admits — the read side must retire the file, never
+        // reinterpret it.
+        { 2, $$$"""{"schemaVersion":2,"problems":{"{{{RetiredV2MoneyKeyText}}}":{{{ValidRecord}}}}}""" },
+        { 2, """{"schemaVersion":2,"problems":{"not even a key":42}}""" },
+    };
+
     [Theory]
-    [InlineData("""{"schemaVersion":1,"decisions":[]}""")]
-    [InlineData("""{"schemaVersion":1,"decisions":[{"id":"problem.xgp","tally":{"submitted":1,"correct":1,"totalEquityLoss":0},"lastQuizzed":"2026-07-18T19:04:11+00:00"}]}""")]
-    // Recognition is shallow: array contents are skipped, never parsed, so
-    // even garbage inside 'decisions' still reads as a genuine v1 document.
-    [InlineData("""{"schemaVersion":1,"decisions":[{"garbage":true},42,"x"]}""")]
-    public void Deserialize_GenuineV1Document_SignalsRetiredSchema(string json)
+    [MemberData(nameof(GenuineRetiredDocuments))]
+    public void Deserialize_GenuineRetiredDocument_SignalsItsOwnSchemaVersion(
+        int version, string json)
     {
         var ex = Assert.Throws<RetiredStatsSchemaException>(
             () => JsonSerializer.Deserialize<ProblemStatsDocument>(json));
 
-        Assert.Equal(1, ex.SchemaVersion);
+        Assert.Equal(version, ex.SchemaVersion);
+        Assert.Contains(
+            version.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ex.Message,
+            StringComparison.Ordinal);
     }
 
     [Fact]
-    public void RetiredSignal_IsCatchableAsJsonException_SoGenericFailLoudStillHolds()
+    public void TheVersionJustSuperseded_IsRetired_CarryingItsOwnNumber()
+    {
+        // The retirement rule is a range — "every recognised version below
+        // current" — so this survives the next bump untouched: whatever v3
+        // becomes v-previous, its problems-map body still reads as retired.
+        int superseded = ProblemStatsDocument.CurrentSchemaVersion - 1;
+
+        var ex = Assert.Throws<RetiredStatsSchemaException>(
+            () => JsonSerializer.Deserialize<ProblemStatsDocument>(
+                $$$"""{"schemaVersion":{{{superseded}}},"problems":{}}"""));
+
+        Assert.Equal(superseded, ex.SchemaVersion);
+    }
+
+    [Theory]
+    [InlineData("""{"schemaVersion":1,"decisions":[]}""")]
+    [InlineData("""{"schemaVersion":2,"problems":{}}""")]
+    public void RetiredSignal_IsCatchableAsJsonException_SoGenericFailLoudStillHolds(string json)
     {
         // A consumer that only knows the general fail-loud contract must
-        // still fail loud on a v1 file, not load it quietly.
+        // still fail loud on a retired file, not load it quietly.
         var ex = Assert.ThrowsAny<JsonException>(
-            () => JsonSerializer.Deserialize<ProblemStatsDocument>(
-                """{"schemaVersion":1,"decisions":[]}"""));
+            () => JsonSerializer.Deserialize<ProblemStatsDocument>(json));
 
         Assert.IsType<RetiredStatsSchemaException>(ex);
     }
@@ -146,8 +228,15 @@ public class ProblemStatsDocumentSerializationTests
     [InlineData("""{"schemaVersion":1,"decisions":{}}""")]             // decisions not an array
     [InlineData("""{"schemaVersion":1,"decisions":[],"extra":0}""")]   // property beyond decisions
     [InlineData("""{"decisions":[],"schemaVersion":1}""")]             // version not first
-    [InlineData("""{"schemaVersion":1,"problems":{}}""")]              // v2 body under a v1 version
-    public void Deserialize_ClaimsV1ButNotV1Shaped_ThrowsPlainJsonException_NotRetired(string json)
+    [InlineData("""{"schemaVersion":1,"problems":{}}""")]              // a v2+ body under a v1 version
+    [InlineData("""{"schemaVersion":2}""")]                            // missing problems
+    [InlineData("""{"schemaVersion":2,"problems":[]}""")]              // problems not an object
+    [InlineData("""{"schemaVersion":2,"problems":{},"extra":0}""")]    // property beyond problems
+    [InlineData("""{"schemaVersion":2,"problems":{},"problems":{}}""")]  // duplicate problems
+    [InlineData("""{"problems":{},"schemaVersion":2}""")]              // version not first
+    [InlineData("""{"schemaVersion":2,"decisions":[]}""")]             // a v1 body under a v2 version
+    public void Deserialize_ClaimsARetiredVersionButIsNotShapedLikeIt_ThrowsPlainJsonException(
+        string json)
     {
         DeserializeThrows(json);
     }
@@ -170,11 +259,11 @@ public class ProblemStatsDocumentSerializationTests
     [Fact]
     public void Deserialize_NewerSchemaVersion_ThrowsNamingBothVersions()
     {
-        var ex = DeserializeThrows("""{"schemaVersion":3,"problems":{}}""");
+        var ex = DeserializeThrows("""{"schemaVersion":4,"problems":{}}""");
 
         Assert.Contains("newer", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("4", ex.Message, StringComparison.Ordinal);
         Assert.Contains("3", ex.Message, StringComparison.Ordinal);
-        Assert.Contains("2", ex.Message, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -189,12 +278,12 @@ public class ProblemStatsDocumentSerializationTests
 
     [Theory]
     [InlineData("""{"problems":{}}""")]                                   // missing schemaVersion
-    [InlineData("""{"schemaVersion":2}""")]                               // missing problems
-    [InlineData("""{"schemaVersion":"2","problems":{}}""")]               // version not a number
-    [InlineData("""{"schemaVersion":2,"problems":[]}""")]                 // problems not an object
-    [InlineData("""{"schemaVersion":2,"problems":{},"extra":0}""")]       // unknown root property
-    [InlineData("""{"schemaVersion":2,"problems":{},"problems":{}}""")]   // duplicate problems
-    [InlineData("""{"schemaVersion":2,"schemaVersion":2,"problems":{}}""")]   // duplicate version
+    [InlineData("""{"schemaVersion":3}""")]                               // missing problems
+    [InlineData("""{"schemaVersion":"3","problems":{}}""")]               // version not a number
+    [InlineData("""{"schemaVersion":3,"problems":[]}""")]                 // problems not an object
+    [InlineData("""{"schemaVersion":3,"problems":{},"extra":0}""")]       // unknown root property
+    [InlineData("""{"schemaVersion":3,"problems":{},"problems":{}}""")]   // duplicate problems
+    [InlineData("""{"schemaVersion":3,"schemaVersion":3,"problems":{}}""")]   // duplicate version
     public void Deserialize_MalformedDocumentShape_Throws(string json)
     {
         DeserializeThrows(json);
@@ -204,7 +293,7 @@ public class ProblemStatsDocumentSerializationTests
     public void Deserialize_DuplicateProblemKey_Throws()
     {
         var ex = DeserializeThrows($$$"""
-            {"schemaVersion":2,"problems":{
+            {"schemaVersion":3,"problems":{
               "{{{PlayKeyText}}}":{{{ValidRecord}}},
               "{{{PlayKeyText}}}":{{{ValidRecord}}}
             }}
@@ -218,9 +307,10 @@ public class ProblemStatsDocumentSerializationTests
     [InlineData("bad key")]             // not the canonical grammar
     [InlineData("problem.xgp")]         // a v1 DecisionId is not a key
     [InlineData("XGID=-b----E-C---eE---c-e----B-:0:0:1:31:0:0:0:7:10")]   // raw XGID is an identity nowhere
+    [InlineData(RetiredV2MoneyKeyText)] // the v2 money spelling is not in the v3 grammar
     public void Deserialize_InvalidProblemKey_Throws(string key)
     {
-        DeserializeThrows($$$"""{"schemaVersion":2,"problems":{"{{{key}}}":{{{ValidRecord}}}}}""");
+        DeserializeThrows($$$"""{"schemaVersion":3,"problems":{"{{{key}}}":{{{ValidRecord}}}}}""");
     }
 
     [Fact]
@@ -230,7 +320,7 @@ public class ProblemStatsDocumentSerializationTests
         // wrongly, so the strict parse — and therefore the document read —
         // must reject them or one problem could split across two map entries.
         DeserializeThrows(
-            $$$"""{"schemaVersion":2,"problems":{"{{{Board}}}/7a7/1c/13":{{{ValidRecord}}}}}""");
+            $$$"""{"schemaVersion":3,"problems":{"{{{Board}}}/7a7/1c/13":{{{ValidRecord}}}}}""");
     }
 
     /// <summary>
@@ -266,6 +356,6 @@ public class ProblemStatsDocumentSerializationTests
     public void Deserialize_MalformedProblemRecord_Throws(string label, string record)
 #pragma warning restore xUnit1026
     {
-        DeserializeThrows($$$"""{"schemaVersion":2,"problems":{"{{{PlayKeyText}}}":{{{record}}}}}""");
+        DeserializeThrows($$$"""{"schemaVersion":3,"problems":{"{{{PlayKeyText}}}":{{{record}}}}}""");
     }
 }

@@ -54,12 +54,16 @@ using BgDataTypes_Lib;
 public sealed class ProblemStatsDocument
 {
     /// <summary>
-    /// The schema version this library reads and writes. Version 1 (the
-    /// retired <c>DecisionId</c>-keyed format) is recognised and signalled
-    /// via <see cref="RetiredStatsSchemaException"/>; any other version is
-    /// rejected fail-loud. See <see cref="ProblemStatsDocumentJsonConverter"/>.
+    /// The schema version this library reads and writes. <b>Every</b>
+    /// recognised version below it is retired — version 1 (the
+    /// <c>DecisionId</c>-keyed format) and version 2 (the
+    /// <see cref="ProblemKey"/>-keyed format from before the Jacoby rule
+    /// entered money keys) — each recognised and signalled via
+    /// <see cref="RetiredStatsSchemaException"/> carrying its own version
+    /// number; anything older or newer is rejected fail-loud. See
+    /// <see cref="ProblemStatsDocumentJsonConverter"/>.
     /// </summary>
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     private readonly ImmutableDictionary<ProblemKey, ProblemStats> _problems;
 
