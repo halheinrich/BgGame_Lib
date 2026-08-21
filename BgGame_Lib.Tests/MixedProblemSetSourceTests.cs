@@ -46,6 +46,15 @@ public class MixedProblemSetSourceTests
     /// must be real and key-derivable — a standard starting board with
     /// stamped dice, distinguished (and read back by <c>IdsAsync</c>) via the
     /// away-scores pair <c>n</c>-away/<c>n</c>-away (<c>0a0</c> = money).
+    ///
+    /// <para>
+    /// <c>n == 0</c> is therefore a <b>money</b> fixture, and money is the one
+    /// score the key grammar spells the Jacoby rule for — an unstamped money
+    /// record has no key at all (the no-key rung), so this fixture must say
+    /// which rule it means. It means Jacoby on; the value is arbitrary here,
+    /// the stamp is not. Off money the fact is meaningless, so match fixtures
+    /// stay unstamped rather than carrying noise.
+    /// </para>
     /// </summary>
     private static BgDecisionData Decision(int n) => new()
     {
@@ -56,6 +65,7 @@ public class MixedProblemSetSourceTests
             OnRollNeeds = n,
             OpponentNeeds = n,
             CubeOwner = CubeOwner.Centered,
+            IsJacoby = n == 0 ? true : null,
         },
         Decision = new DecisionData { Dice = [3, 1] },
         Descriptive = new DescriptiveData(),
