@@ -154,15 +154,55 @@ public class QuizMixSerializationTests
         Assert.Throws<JsonException>(() => QuizMix.FromJson(json));
     }
 
+    // The 'kind' token is read by exact declaration-name search, the inverse of
+    // what Write emits (halheinrich/backgammon#164). Every non-name spelling is
+    // rejected here — including the undefined ordinals, which the previous
+    // TryParse-plus-round-trip guard admitted (they were caught further down by
+    // QuizCategory.Create's unknown-kind arm, so this pins the rejection at the
+    // reader where the claim is made).
     [Theory]
     [InlineData("\"neverSeen\"")]   // case variant
-    [InlineData("\"1\"")]           // numeric string — Enum.TryParse alone would accept it
+    [InlineData("\"NEVERSEEN\"")]   // case variant
+    [InlineData("\"1\"")]           // defined ordinal, as a string
+    [InlineData("\"0\"")]           // undefined ordinal — below the declared range
+    [InlineData("\"-1\"")]          // undefined ordinal — negative
+    [InlineData("\"99\"")]          // undefined ordinal — above the declared range
+    [InlineData("\"NeverSeen, GotWrong\"")]  // comma list: Enum.TryParse accepts these
+    [InlineData("\" NeverSeen \"")]  // surrounding whitespace
     [InlineData("\"NoSuchKind\"")]
+    [InlineData("\"\"")]            // empty token
     public void Read_RejectsInvalidKind(string kind)
     {
         var json = Valid().Replace("\"kind\":\"NeverSeen\"", $"\"kind\":{kind}");
 
         Assert.Throws<JsonException>(() => QuizMix.FromJson(json));
+    }
+
+    /// <summary>
+    /// The other half of the exact-name contract: strictness costs no
+    /// legitimate token. Every declared kind — not just the sampled ones — is
+    /// accepted under the spelling Write emits, so the name search can never
+    /// silently drop a member as it is added
+    /// (halheinrich/backgammon#164).
+    /// </summary>
+    [Fact]
+    public void Read_AcceptsEveryDeclaredKind_UnderTheSpellingWriteEmits()
+    {
+        foreach (QuizCategoryKind declared in Enum.GetValues<QuizCategoryKind>())
+        {
+            var json = Valid().Replace("\"kind\":\"NeverSeen\"", $"\"kind\":\"{declared}\"");
+
+            // Parameterized kinds need their value; this test is about the kind
+            // token alone, so only the parameterless ones round-trip whole.
+            // The rest must at minimum get PAST the kind read — which a
+            // missing-value failure proves, and an unknown-kind failure would
+            // not.
+            var ex = Record.Exception(() => QuizMix.FromJson(json));
+
+            Assert.DoesNotContain(
+                "Unknown quiz-category kind",
+                ex?.Message ?? string.Empty);
+        }
     }
 
     [Fact]

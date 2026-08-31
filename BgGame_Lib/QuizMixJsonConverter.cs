@@ -258,12 +258,37 @@ internal sealed class QuizMixJsonConverter : JsonConverter<QuizMix>
             throw new JsonException($"Expected string for 'kind', got {reader.TokenType}.");
 
         var s = reader.GetString();
-        // Exact declaration-name match only: Enum.TryParse alone would also
-        // accept numeric strings and case variants.
-        if (s is null || !Enum.TryParse<QuizCategoryKind>(s, out var kind) || kind.ToString() != s)
-            throw new JsonException($"Unknown quiz-category kind '{s}'.");
 
-        return kind;
+        // Exact declaration-name match only — the inverse of what Write emits
+        // (Kind.ToString()). Resolved by searching the declared members rather
+        // than by Enum.TryParse, which would also accept numeric strings and
+        // case variants (halheinrich/backgammon#164).
+        //
+        // The previous spelling guarded TryParse with `kind.ToString() != s`,
+        // which claimed to be an exact-name match but was not: measured on
+        // net10.0, it rejected the DEFINED ordinals ("1" parses to NeverSeen,
+        // whose name is not "1") while admitting every UNDEFINED one — "0",
+        // "-1" and "99" all parse, and ToString() on an undefined value returns
+        // the number back, so the comparison succeeded. Those reached
+        // QuizCategory.Create and died on its unknown-kind arm, so no bad mix
+        // was ever built; the hole was masked by a downstream guard rather than
+        // closed here. A name search has no such round-trip quirk to reason
+        // about.
+        if (s is not null)
+        {
+            foreach (QuizCategoryKind candidate in Enum.GetValues<QuizCategoryKind>())
+            {
+                // Ordinal, not IgnoreCase: this format is case-exact by
+                // contract — "neverSeen" is a rejected token, pinned in
+                // QuizMixSerializationTests.
+                if (string.Equals(s, candidate.ToString(), StringComparison.Ordinal))
+                {
+                    return candidate;
+                }
+            }
+        }
+
+        throw new JsonException($"Unknown quiz-category kind '{s}'.");
     }
 
     public override void Write(
