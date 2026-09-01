@@ -75,9 +75,23 @@ using BgDataTypes_Lib;
 /// (negative counts, correct &gt; submitted, negative equity loss) — corrupt
 /// or foreign stats must never load as quietly-wrong lifetime data.
 /// </para>
+///
+/// <para>
+/// Public, like every converter a type-level <c>[JsonConverter]</c> here
+/// names (halheinrich/backgammon#129): a downstream
+/// <see cref="JsonSerializerContext"/> that declares
+/// <see cref="ProblemStatsDocument"/> instantiates this converter from its
+/// own generated code, so an internal converter would fail the
+/// <i>consumer's</i> compile with SYSLIB1220/SYSLIB1030 — and BgQuiz's stats
+/// store is exactly that consumer. Stateless and sealed — the public
+/// <c>[JsonConverter]</c> attribute on <see cref="ProblemStatsDocument"/>
+/// already named it, so this publishes no decision that was not already
+/// contractual.
+/// </para>
 /// </summary>
-internal sealed class ProblemStatsDocumentJsonConverter : JsonConverter<ProblemStatsDocument>
+public sealed class ProblemStatsDocumentJsonConverter : JsonConverter<ProblemStatsDocument>
 {
+    /// <inheritdoc/>
     public override ProblemStatsDocument? Read(
         ref Utf8JsonReader reader,
         Type typeToConvert,
@@ -371,6 +385,7 @@ internal sealed class ProblemStatsDocumentJsonConverter : JsonConverter<ProblemS
         return value;
     }
 
+    /// <inheritdoc/>
     public override void Write(
         Utf8JsonWriter writer,
         ProblemStatsDocument value,

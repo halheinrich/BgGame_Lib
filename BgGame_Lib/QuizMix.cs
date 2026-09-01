@@ -37,7 +37,7 @@ using System.Text.Json.Serialization;
 /// </para>
 ///
 /// <para>
-/// <b>Wire format.</b> JSON via the bundled internal
+/// <b>Wire format.</b> JSON via the bundled
 /// <see cref="QuizMixJsonConverter"/> (type-level <c>[JsonConverter]</c> —
 /// consumers register nothing) with schema version
 /// <see cref="CurrentSchemaVersion"/>; fixed property names, fail-loud reads,
@@ -45,7 +45,10 @@ using System.Text.Json.Serialization;
 /// persist a mix (e.g. browser localStorage) round-trip through
 /// <see cref="ToJson"/> / <see cref="FromJson"/>, with
 /// <see cref="TryFromJson"/> as the absent-or-corrupt-restores-to-default
-/// path — the <c>FilterConfig</c> persistence trio.
+/// path — the <c>FilterConfig</c> persistence trio. All three resolve their
+/// metadata from <see cref="BgGameJsonContext"/> rather than by runtime
+/// reflection, so the trio is trim-safe from here without a consumer naming
+/// anything (halheinrich/backgammon#129).
 /// </para>
 ///
 /// <para>
@@ -232,7 +235,7 @@ public sealed class QuizMix : IEquatable<QuizMix>
     /// the pinned wire format.
     /// </summary>
     /// <returns>A JSON object string carrying every property of this instance.</returns>
-    public string ToJson() => JsonSerializer.Serialize(this);
+    public string ToJson() => JsonSerializer.Serialize(this, BgGameJsonContext.Default.QuizMix);
 
     /// <summary>
     /// Deserializes a <see cref="QuizMix"/> from its canonical JSON
@@ -251,7 +254,7 @@ public sealed class QuizMix : IEquatable<QuizMix>
     {
         ArgumentNullException.ThrowIfNull(json);
 
-        return JsonSerializer.Deserialize<QuizMix>(json)
+        return JsonSerializer.Deserialize(json, BgGameJsonContext.Default.QuizMix)
             ?? throw new ArgumentException(
                 "JSON deserialized to a null mix; expected a QuizMix object.",
                 nameof(json));
@@ -285,7 +288,7 @@ public sealed class QuizMix : IEquatable<QuizMix>
         {
             try
             {
-                if (JsonSerializer.Deserialize<QuizMix>(json) is { } parsed)
+                if (JsonSerializer.Deserialize(json, BgGameJsonContext.Default.QuizMix) is { } parsed)
                 {
                     mix = parsed;
                     return true;

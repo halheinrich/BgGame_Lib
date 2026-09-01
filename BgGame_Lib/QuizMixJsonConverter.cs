@@ -53,9 +53,21 @@ using System.Text.Json.Serialization;
 /// never load as a quietly-different composition.
 /// <see cref="QuizMix.TryFromJson"/> is the tolerant restore path.
 /// </para>
+///
+/// <para>
+/// Public, like every converter a type-level <c>[JsonConverter]</c> here
+/// names (halheinrich/backgammon#129): a downstream
+/// <see cref="JsonSerializerContext"/> that declares
+/// <see cref="QuizMix"/> instantiates this converter from its own generated
+/// code, so an internal converter would fail the <i>consumer's</i> compile
+/// with SYSLIB1220/SYSLIB1030. Stateless and sealed — the public
+/// <c>[JsonConverter]</c> attribute on <see cref="QuizMix"/> already named
+/// it, so this publishes no decision that was not already contractual.
+/// </para>
 /// </summary>
-internal sealed class QuizMixJsonConverter : JsonConverter<QuizMix>
+public sealed class QuizMixJsonConverter : JsonConverter<QuizMix>
 {
+    /// <inheritdoc/>
     public override QuizMix? Read(
         ref Utf8JsonReader reader,
         Type typeToConvert,
@@ -291,6 +303,7 @@ internal sealed class QuizMixJsonConverter : JsonConverter<QuizMix>
         throw new JsonException($"Unknown quiz-category kind '{s}'.");
     }
 
+    /// <inheritdoc/>
     public override void Write(
         Utf8JsonWriter writer,
         QuizMix value,

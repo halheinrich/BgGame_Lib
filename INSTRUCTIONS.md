@@ -38,6 +38,7 @@ BgGame_Lib/
   BgGame_Lib.csproj
   AgentContractViolationException.cs — seat + kind + offending value; thrown by MatchRunner
   AnswerTypeDistribution.cs — immutable per-pool answer-type tally: checker plays + the four cube best-pairs
+  BgGameJsonContext.cs    — source-generated JsonSerializerContext over the wire surface (see "Source generation & trimming")
   CooperativeYielder.cs   — time-budgeted cooperative-yield gate (TimeProvider seam) for long WASM loops
   DistinctPositionProblemSetSource.cs — IProblemSetSource decorator: one survivor per ProblemKey; duplicate-class telemetry
   DuplicatePositionClass.cs — telemetry record: one multi-copy content class (key + member DecisionIds)
@@ -62,7 +63,7 @@ BgGame_Lib/
   MatchState.cs           — mutable: match length, scores, Crawford
   ProblemStats.cs         — immutable per-problem lifetime record: ProblemKey + ScoreSegment tally + last-quizzed
   ProblemStatsDocument.cs — immutable ProblemKey-keyed collection of ProblemStats; the versioned quiz-stats document
-  ProblemStatsDocumentJsonConverter.cs — bundled converter: pinned v3 wire format, fail-loud reads, retired-version signal
+  ProblemStatsDocumentJsonConverter.cs — bundled converter (public): pinned v3 wire format, fail-loud reads, retired-version signal
   RetiredStatsSchemaException.cs — the deliberate retired-version signal (a JsonException subtype), carrying that version
   RecordedDiceSource.cs   — replays a fixed roll sequence; throws when exhausted
   SeededDiceSource.cs     — Random(seed)-backed reproducible rolls
@@ -74,7 +75,7 @@ BgGame_Lib/
   QuizCategoryPredicates.cs — internal behavior half: IQuizCategoryPredicate + per-kind predicate types
   QuizMix.cs              — immutable stats-weighted composition config: ordered entries + optional length + random toggle
   QuizMixEntry.cs         — one mix line: category + percent (1–100, validated in its own ctor)
-  QuizMixJsonConverter.cs — bundled converter: pinned versioned wire format, fail-loud reads
+  QuizMixJsonConverter.cs — bundled converter (public): pinned versioned wire format, fail-loud reads
   QuizScore.cs            — immutable cumulative score: play / double / take segments + derived total
   Referee.cs              — skeletal: end-of-game, ApplyCubeResponse
   ScoreSegment.cs         — immutable per-category running tally (submitted / correct / equity loss)
@@ -878,6 +879,73 @@ instances combine.
   on `ScoreSegment` / `QuizScore`. Keeping the two apart is why this record
   needs no submission type and no clock.
 
+### Source generation & trimming
+
+`BgGameJsonContext` (halheinrich/backgammon#129 leg 3) is the public
+source-generated `JsonSerializerContext` over this library's wire surface:
+trim-safe serializer metadata produced at compile time, byte-identical to the
+reflection path (pinned by `BgGameJsonContextTests`), both bundled converters
+honored. Its `[JsonSerializable]` roots are this library's two wire units, and
+both are document roots — `ProblemStatsDocument` and `QuizMix`.
+
+**The closure is the roots and nothing else,** by construction rather than by
+luck: both converters write and read their whole trees by hand against a
+`Utf8JsonWriter` / `Utf8JsonReader`, so the serializer is never asked to
+resolve a nested type. `ProblemStats`, `ScoreSegment`, `QuizMixEntry` and
+`QuizCategory` never reach a resolver, and neither does `ProblemKey` — its
+canonical string is written as a raw JSON property name and re-parsed on read.
+That is why this context chains no other, BgDataTypes_Lib's included.
+
+**Public, and load-bearing so.** The arc's standing shape is one public
+context per producer repo; here the consumer is the party that needs it.
+BgQuiz's `QuizStatsStore` names `ProblemStatsDocument` to `JsonSerializer`
+directly, so leg 5 resolves it by chaining, most-derived-first:
+
+```csharp
+var options = new JsonSerializerOptions
+{
+    TypeInfoResolver = JsonTypeInfoResolver.Combine(
+        TheConsumersOwnContext.Default, BgGameJsonContext.Default)
+};
+```
+
+`QuizMix` is declared for the opposite reason: no consumer names it, but its
+own `ToJson` / `FromJson` / `TryFromJson` trio does — those three are this
+library's trim-safe entry points and resolve their metadata here instead of by
+runtime reflection.
+
+The arc's two binding rules both land:
+
+1. **Converters named by a type-level `[JsonConverter]` are public.** A
+   downstream context that declares the annotated type instantiates the
+   converter from its own generated code, so an internal converter fails the
+   *consumer's* compile (SYSLIB1220, then SYSLIB1030 declining the type
+   outright — measured against both converters here). Both are public, sealed
+   and stateless; the public attributes already named them, so nothing became
+   contractual that was not already.
+2. **`GenerationMode = JsonSourceGenerationMode.Metadata`.** Default-mode
+   fast-path serialize handlers bind nested type resolution to the declaring
+   context's own private options and bypass the resolver chain.
+   BgDataTypes_Lib's chained-consumer test pair demonstrates the failure and
+   owns the rule; a test here pins this link's declaration.
+
+No options-level converter registration exists to express, so leg 2's
+containment problem — a parameterized registration
+`[JsonSourceGenerationOptions]` cannot carry, making a context's own options a
+trap — has no instance in this repo.
+
+**Trim posture.** The library declares `IsTrimmable` and runs
+`EnableTrimAnalyzer` in its own build, so under `TreatWarningsAsErrors` a
+reflection-serialization regression is a build error *here* rather than a
+publish-time warning in BgQuiz. Both declarations are pinned by test.
+
+A completeness test keeps the declarations honest, in the
+halheinrich/backgammon#144 intersection pattern: the wire surface derived from
+the assembly (every type carrying a type-level `[JsonConverter]`) must equal
+the roots derived from the context's generated `JsonTypeInfo<T>` properties. A
+third wire unit lands in the first set the moment it is written; a stale
+declaration fails the other way.
+
 ### Why these types live here, not in BgDataTypes_Lib
 
 BgDataTypes_Lib's charter is the shared data layer: types and pure
@@ -1137,7 +1205,7 @@ public sealed record ProblemStats(ProblemKey Key, ScoreSegment Tally, DateTimeOf
     public ProblemStats Plus(SubmittedCubeAction cube, DateTimeOffset quizzedAt); // TWO decisions (per half), as QuizScore
 }
 
-[JsonConverter(typeof(ProblemStatsDocumentJsonConverter))]    // bundled; consumers register nothing
+[JsonConverter(typeof(ProblemStatsDocumentJsonConverter))]    // bundled (public converter); consumers register nothing
 public sealed class ProblemStatsDocument                      // immutable; reference equality (see Pitfalls)
 {
     public const int CurrentSchemaVersion = 3;   // every recognised version below it is retired
@@ -1187,7 +1255,7 @@ public sealed record QuizMixEntry
     public int Percent { get; }
 }
 
-[JsonConverter(typeof(QuizMixJsonConverter))]   // bundled; consumers register nothing
+[JsonConverter(typeof(QuizMixJsonConverter))]   // bundled (public converter); consumers register nothing
 public sealed class QuizMix                     // immutable; reference equality (see Pitfalls)
 {
     public const int CurrentSchemaVersion = 1;
@@ -1202,6 +1270,14 @@ public sealed class QuizMix                     // immutable; reference equality
     public static QuizMix FromJson(string json);                    // fail loud
     public static bool TryFromJson(string? json, out QuizMix mix);  // absent/corrupt → Empty + false
 }
+
+// The source-generated serializer metadata over the two wire units above.
+// Consumers that serialize a BgGame_Lib type themselves chain it, rather than
+// declaring the type in their own context — see "Source generation & trimming".
+[JsonSourceGenerationOptions(GenerationMode = JsonSourceGenerationMode.Metadata)]
+[JsonSerializable(typeof(ProblemStatsDocument))]
+[JsonSerializable(typeof(QuizMix))]
+public sealed partial class BgGameJsonContext : JsonSerializerContext { }
 
 // Stats-weighted composing source (decorator; see Pitfalls for the contracts).
 // Classification looks lifetime records up by each item's derived ProblemKey.
@@ -1339,6 +1415,19 @@ public sealed record AnswerTypeDistribution(
   general `JsonException` (it derives from it — catch order matters) and must
   name the file it sets aside from `SchemaVersion`, not from a constant —
   otherwise a tester carrying two retired formats loses one to the other.
+- **A new wire unit is not done until `BgGameJsonContext` declares it.** A
+  type serialized through a bundled type-level `[JsonConverter]` resolves fine
+  by reflection and fails only once trimming removes what it needed — so the
+  completeness test is the gate, not the build: it derives the wire surface
+  from the assembly and requires the context's declarations to equal it. Two
+  rules come with the declaration. The converter must be **public** (a
+  downstream context instantiates it from generated code; an internal one
+  fails the *consumer's* compile with SYSLIB1220/SYSLIB1030, not this repo's),
+  and it must be declarable — a non-public wire type cannot be declared in a
+  public context at all (CS0053), which is the fork leg 2 hit and resolved by
+  going internal. Adding a wire unit whose converter delegates a nested type
+  to the active options means declaring that type too: nothing here does today
+  (see "Source generation & trimming"), which is why this context chains none.
 - **No-key submissions vanish from lifetime stats silently — by ruling.**
   `ProblemStatsDocument.Plus` with a null `ProblemKey` returns the *same*
   document (degrade, never block); nothing throws and no counter ticks. That

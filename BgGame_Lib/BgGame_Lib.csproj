@@ -3,6 +3,18 @@
   <!-- TargetFramework / Nullable / ImplicitUsings / TreatWarningsAsErrors /
        GenerateDocumentationFile are repo-wide policy in Directory.Build.props. -->
 
+  <!-- This library's half of the trim gate (halheinrich/backgammon#129):
+       the assembly declares itself trim-compatible and runs the trim
+       analyzer in its own build, so a reflection-serialization regression
+       becomes a build error *here* (TreatWarningsAsErrors) rather than a
+       publish-time warning in BgQuiz once that repo's leg flips its
+       suppressions off. Per-project deliberately — the test project is not a
+       shipped surface. -->
+  <PropertyGroup>
+    <IsTrimmable>true</IsTrimmable>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+  </PropertyGroup>
+
   <ItemGroup>
     <InternalsVisibleTo Include="BgGame_Lib.Tests" />
   </ItemGroup>
