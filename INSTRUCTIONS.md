@@ -37,7 +37,7 @@ spec/
 BgGame_Lib/
   BgGame_Lib.csproj
   AgentContractViolationException.cs — seat + kind + offending value; thrown by MatchRunner
-  AnswerTypeDistribution.cs — immutable per-pool answer-type tally: checker plays + the four cube best-pairs
+  AnswerTypeDistribution.cs — immutable per-pool answer-type tally: checker plays + the five cube verdicts
   BgGameJsonContext.cs    — source-generated JsonSerializerContext over the wire surface (see "Source generation & trimming")
   CooperativeYielder.cs   — time-budgeted cooperative-yield gate (TimeProvider seam) for long WASM loops
   DistinctPositionProblemSetSource.cs — IProblemSetSource decorator: one survivor per ProblemKey; duplicate-class telemetry
@@ -875,24 +875,30 @@ stays responsive without paying a per-item cost.
 ### Answer-type distribution over a decision pool
 
 `AnswerTypeDistribution` counts a pool of decisions by the kind of answer each
-one calls for: checker plays, plus one bucket per cube best-pair from
-`CubeDecisionPair`'s closed 2×2 (`NoDoubleTake`, `TooGood`, `DoubleTake`,
-`DoublePass`), with a derived `Total`. It answers a **collection-scoped**
-question — "what is my saved corpus actually made of?", the curation-bias check
-a beta tester asked for (over-saved takes, no too-good positions at all) — not a
+one calls for: checker plays, plus one bucket per cube verdict from
+SPEC-scoring §3's table (`NoDoubleTake`, `DoubleTake`, `DoublePass`,
+`TooGoodPass`, `TooGoodTake` — halheinrich/backgammon#86's claim vocabulary),
+with a derived `Total`. It answers a **collection-scoped** question — "what is
+my saved corpus actually made of?", the curation-bias check a beta tester
+asked for (over-saved takes, no too-good positions at all) — not a
 session-scoped one. Immutable, `ScoreSegment`'s shape throughout: `Empty`, a
 fold returning a new instance, and `operator +` as the single definition of how
 instances combine.
 
-- **The classification lives in the record.** `Add(DecisionData)` branches on
-  `IsCube` first (`BestDoublerAction` / `BestTakerAction` are cube-only surface
-  and throw on a checker play), then keys the bucket by constructing
-  `new CubeDecisionPair(BestDoublerAction, BestTakerAction)` and matching it
-  against the canonical instances — `IsTooGood` for the Too-Good arm. Those
-  atoms are BgDataTypes_Lib's existing SSOT for this classification, so nothing
-  here re-derives a verdict from equities, and consumers stream decisions in
+- **The classification consumes the producer verdict.** `Add(DecisionData)`
+  branches on `IsCube` first (the cube verdict surface throws on a checker
+  play), then keys the bucket by the decision's `BestClaimPair` — the one
+  derivation site of the truth claim, beside `BestDoublerAction` /
+  `BestTakerAction` — and matches its `(Claim, Taker)` halves. Nothing here
+  re-derives a verdict from equities (SPEC-scoring §3, "Answer-type
+  classification consumes the claim"), and consumers stream decisions in
   without owning the bucketing rule. The private one-hot `Classify` is what
-  makes the fold contract structural rather than merely asserted.
+  makes the fold contract structural rather than merely asserted. The 3×2's
+  sixth cell — the incoherent `NoDoublePass` the ruled tie-breaks compose as
+  derived truth at the exact `NoDoubleEquity == 1` boundary — is **just too
+  good** and houses in `TooGoodPass` (SPEC-scoring §3, ruled 2026-09-01):
+  the too-good posture's degenerate point, not a sixth bucket, so the match
+  is total over the closed 3×2 and a legal corpus can never fail to fold.
 - **The fold contract leg 2 depends on: exactly one bucket per `Add`.** Hence
   `Total` equals the number of decisions folded. That is what lets BgQuiz's
   Home derive its "N decisions matched" count from `Total` instead of running a
@@ -1352,16 +1358,17 @@ public sealed record MixCompositionEntry(
     int Drawn);                                      // actual, incl. redistribution top-ups
 
 // Answer-type distribution over a decision pool (collection-scoped, not a score).
-// The four cube buckets are named for the CubeDecisionPair instances they count.
+// The five cube buckets are named for the CubeClaimPair instances they count.
 public sealed record AnswerTypeDistribution(
     int CheckerPlays,
-    int NoDoubleTake, int TooGood, int DoubleTake, int DoublePass)
+    int NoDoubleTake, int DoubleTake, int DoublePass, int TooGoodPass, int TooGoodTake)
 {
     public static AnswerTypeDistribution Empty { get; }
-    public int Total { get; }                        // derived: sum of the five buckets
+    public int Total { get; }                        // derived: sum of the six buckets
     public AnswerTypeDistribution Add(DecisionData decision);
         // increments EXACTLY ONE bucket → Total == decisions folded (see Pitfalls);
-        // cube decisions keyed by new CubeDecisionPair(BestDoublerAction, BestTakerAction)
+        // cube decisions keyed by BestClaimPair (the producer verdict); the
+        // boundary-composed incoherent NoDoublePass houses in TooGoodPass by ruling
     public static AnswerTypeDistribution operator +(
         AnswerTypeDistribution a, AnswerTypeDistribution b);   // null-guards both operands
 }
@@ -1428,7 +1435,7 @@ public sealed record AnswerTypeDistribution(
   Anything that made an `Add` increment zero or two buckets (a "skip
   unclassifiable decisions" escape hatch, a per-half cube fold) would silently
   break that count. `Add` takes the `DecisionData` — `BgDecisionData.Decision`,
-  since `BestDoublerAction` / `BestTakerAction` live there, not on the composite.
+  since `BestClaimPair` lives there, not on the composite.
 - **`ProblemStatsDocument` JSON pins names and ordering, not whitespace.**
   The bundled converter hand-writes fixed property names ordered by canonical
   key, so the consumer's naming policy cannot change the format — but
