@@ -588,9 +588,9 @@ asymmetry with `ProblemStats.Plus` (which takes the already-resolved
 so holding the seam there makes ambient-time misuse impossible at the type
 level, while the record-level fold stays a pure value computation.
 
-**Wire format (schema v4 — the #95 clean break, re-broken for #120's
-money keys, re-broken again for halheinrich/backgammon#86's answer
-kinds).** JSON via the bundled internal
+**Wire format (schema v4 — the halheinrich/backgammon#95 clean break,
+re-broken for halheinrich/backgammon#120's money keys, re-broken again
+for halheinrich/backgammon#86's answer kinds).** JSON via the bundled internal
 `ProblemStatsDocumentJsonConverter` (type-level `[JsonConverter]`, same
 pattern as BgDataTypes_Lib's `DecisionIdJsonConverter` — consumers register
 nothing): a `schemaVersion` field (`CurrentSchemaVersion`, currently 4)
@@ -603,9 +603,10 @@ derivable from the key's own grammar today (dice ride on play keys and only
 there), so the writer derives the token from `ProblemKey.IsCubeDecision`
 and the reader rejects a record whose token disagrees with its key; the
 token is carried anyway because the seam exists for the future where it
-stops being derivable — #62's equity-guess records arrive as sibling kind
-entries under the same key, extending this grammar rather than re-keying
-the document (SPEC-stats-identity.md §3, 2026-08-26 amendment). The
+stops being derivable — halheinrich/backgammon#62's equity-guess records
+arrive as sibling kind entries under the same key, extending this grammar
+rather than re-keying the document (SPEC-stats-identity.md §3, 2026-08-26
+amendment). The
 key grammar itself is BgDataTypes_Lib's — see `ProblemKey`'s type docs for
 the single authoritative statement of it, including the money-only Jacoby
 suffix that v3 introduced; never restate it here. The map shape is what
