@@ -355,6 +355,44 @@ public class MixedProblemSetSourceTests
         Assert.Equal(3, source.LastComposition.Entries[0].Drawn);
     }
 
+    /// <summary>
+    /// halheinrich/backgammon#12: the capped/capless split is the producer's
+    /// to state. The load-bearing case is the third one — a capped mix asking
+    /// for exactly the union count — where every count on the report matches
+    /// the capless composition above it and only this flag tells them apart.
+    /// </summary>
+    [Fact]
+    public async Task HasRequestedLength_RecordsWhereTheTargetCameFrom()
+    {
+        var capless = Source(
+            Decisions(3), ProblemStatsDocument.Empty,
+            new QuizMix([Entry(QuizCategory.NeverSeen, 100)]));
+        await IdsAsync(capless);
+
+        Assert.False(capless.LastComposition!.HasRequestedLength);
+        Assert.Equal(3, capless.LastComposition.TargetCount);   // the reachable union
+
+        var capped = Source(
+            Decisions(3), ProblemStatsDocument.Empty,
+            new QuizMix([Entry(QuizCategory.NeverSeen, 100)], quizLength: 2));
+        await IdsAsync(capped);
+
+        Assert.True(capped.LastComposition!.HasRequestedLength);
+        Assert.Equal(2, capped.LastComposition.TargetCount);
+
+        // Capped at exactly what the union supplies: counts identical to the
+        // capless report, split visible only here.
+        var cappedAtUnion = Source(
+            Decisions(3), ProblemStatsDocument.Empty,
+            new QuizMix([Entry(QuizCategory.NeverSeen, 100)], quizLength: 3));
+        await IdsAsync(cappedAtUnion);
+
+        Assert.True(cappedAtUnion.LastComposition!.HasRequestedLength);
+        Assert.Equal(
+            (capless.LastComposition.TargetCount, capless.LastComposition.DrawnCount),
+            (cappedAtUnion.LastComposition.TargetCount, cappedAtUnion.LastComposition.DrawnCount));
+    }
+
     [Fact]
     public async Task Shortfall_RedistributesToEntriesWithSupply()
     {

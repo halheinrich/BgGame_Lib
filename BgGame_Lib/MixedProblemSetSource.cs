@@ -310,7 +310,13 @@ public sealed class MixedProblemSetSource : IProblemSetSource
             }
         }
 
-        int target = _mix.QuizLength ?? unionCount;
+        // The capped/capless split, read once and reported once
+        // (halheinrich/backgammon#12): the target is the requested length
+        // exactly when the mix set one, and MixComposition carries which —
+        // the counts cannot say, since a capless target *is* unionCount and a
+        // capped one may ask for that same number.
+        int? requestedLength = _mix.QuizLength;
+        int target = requestedLength ?? unionCount;
         int drawGoal = Math.Min(target, unionCount);
 
         var percents = new int[n];
@@ -432,7 +438,11 @@ public sealed class MixedProblemSetSource : IProblemSetSource
                 Requested: requested[i],
                 Drawn: drawnPerEntry[i]);
         }
-        composition = new MixComposition(target, totalDrawn, entryReports);
+        composition = new MixComposition(
+            target,
+            HasRequestedLength: requestedLength is not null,
+            totalDrawn,
+            entryReports);
 
         return result;
     }

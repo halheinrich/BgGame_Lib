@@ -44,7 +44,7 @@ BgGame_Lib/
   DuplicatePositionClass.cs — telemetry record: one multi-copy content class (key + member DecisionIds)
   GameRecord.cs           — one completed game: winner seat + result + transcript
   MixedProblemSetSource.cs — IProblemSetSource decorator: composes a quiz from per-category pools by mix percentages
-  MixComposition.cs       — per-enumeration composition telemetry: target vs drawn + per-entry reports
+  MixComposition.cs       — per-enumeration composition telemetry: target (capped or capless) vs drawn + per-entry reports
   MixCompositionEntry.cs  — one entry's telemetry: pool size, requested, drawn
   GameResult.cs           — record + GameResultKind enum (single / gammon / backgammon)
   GameSnapshot.cs         — immutable record (transcript-friendly)
@@ -769,12 +769,18 @@ for deterministic tests (the shuffled-source pattern).
   input and needs no special-casing.
 - **Telemetry.** `LastComposition` (a `MixComposition`) carries the most
   recent enumeration's requested-vs-actual: overall `TargetCount` /
-  `DrawnCount` plus per-entry (category, percent, pool size, requested,
-  drawn) in declared order. Assigned before the first yield, so the consumer
-  can render an honest shortfall notice at quiz start. `DrawnCount <
-  TargetCount` means the requested length exceeded reachable supply;
-  per-entry `Drawn < Requested` means that entry's pool ran dry and its
-  share was redistributed.
+  `HasRequestedLength` / `DrawnCount` plus per-entry (category, percent, pool
+  size, requested, drawn) in declared order. Assigned before the first yield,
+  so the consumer can render an honest shortfall notice at quiz start.
+  `DrawnCount < TargetCount` means the requested length exceeded reachable
+  supply; per-entry `Drawn < Requested` means that entry's pool ran dry and
+  its share was redistributed. `HasRequestedLength` says which source
+  `TargetCount` came from — the mix's length (capped) or the reachable union
+  (capless) — because the counts cannot: a capless target *is* the union
+  count, and a capped mix may ask for exactly that number, so the two are
+  indistinguishable in the case a notice most needs to get right. The split is
+  the producer's to state, and `LastComposition` is the whole answer about one
+  enumeration (halheinrich/backgammon#12).
 
 ### Position-distinct source (content dedupe)
 
@@ -1313,6 +1319,7 @@ public sealed record DuplicatePositionClass(      // wraps a list → effectivel
 
 public sealed record MixComposition(
     int TargetCount,                                 // QuizLength ?? deduped union of selected pools
+    bool HasRequestedLength,                         // which of the two — capped vs capless; not inferable from the counts
     int DrawnCount,                                  // min(TargetCount, union) — what was actually drawn
     IReadOnlyList<MixCompositionEntry> Entries);     // declared entry order
 public sealed record MixCompositionEntry(
