@@ -215,7 +215,7 @@ public class BgGameJsonContextTests
         using var doc = JsonDocument.Parse(JsonSerializer.Serialize(
             PopulatedDocument(), TypeInfo<ProblemStatsDocument>(ContextOnlyOptions)));
 
-        Assert.Equal(3, doc.RootElement.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(4, doc.RootElement.GetProperty("schemaVersion").GetInt32());
         var keys = doc.RootElement.GetProperty("problems")
             .EnumerateObject().Select(p => p.Name).ToList();
 
@@ -296,11 +296,12 @@ public class BgGameJsonContextTests
     [Theory]
     [InlineData(1)]
     [InlineData(2)]
+    [InlineData(3)]
     public void ContextPath_StillSignalsRetiredSchemaVersions(int version)
     {
         var json = version == 1
             ? """{"schemaVersion":1,"decisions":[]}"""
-            : """{"schemaVersion":2,"problems":{}}""";
+            : $$$"""{"schemaVersion":{{{version}}},"problems":{}}""";
 
         var thrown = Assert.Throws<RetiredStatsSchemaException>(
             () => JsonSerializer.Deserialize(json, TypeInfo<ProblemStatsDocument>(ContextOnlyOptions)));

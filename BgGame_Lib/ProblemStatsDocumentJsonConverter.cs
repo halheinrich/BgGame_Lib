@@ -24,14 +24,16 @@ using BgDataTypes_Lib;
 ///
 /// <code>
 /// {
-///   "schemaVersion": 3,
+///   "schemaVersion": 4,
 ///   "problems": {
-///     "0,-2,0,0,0,0,5,0,3,0,0,0,-5,5,0,0,0,-3,0,-5,0,0,0,0,2,0/0a0j/1c/31": {
-///       "tally": { "submitted": 1, "correct": 1, "totalEquityLoss": 0 },
-///       "lastQuizzed": "2026-07-18T19:04:11+00:00" },
+///     "0,-2,0,0,0,0,5,0,3,0,0,0,-5,5,0,0,0,-3,0,-5,0,0,0,0,2,0/7a7/1c": {
+///       "cubePair": {
+///         "tally": { "submitted": 2, "correct": 1, "totalEquityLoss": 0.08 },
+///         "lastQuizzed": "2026-07-18T19:04:11+00:00" } },
 ///     "0,-2,0,0,0,0,5,0,3,0,0,0,-5,5,0,0,0,-3,0,-5,0,0,0,0,2,0/7a7/1c/31": {
-///       "tally": { "submitted": 3, "correct": 2, "totalEquityLoss": 0.125 },
-///       "lastQuizzed": "2026-07-18T19:04:11+00:00" }
+///       "checkerPlay": {
+///         "tally": { "submitted": 3, "correct": 2, "totalEquityLoss": 0.125 },
+///         "lastQuizzed": "2026-07-18T19:04:11+00:00" } }
 ///   }
 /// }
 /// </code>
@@ -47,6 +49,24 @@ using BgDataTypes_Lib;
 /// </para>
 ///
 /// <para>
+/// <b>Each per-problem record nests under its answer-kind token</b> —
+/// <c>"checkerPlay"</c> or <c>"cubePair"</c>, the v4 addition (SPEC-scoring.md
+/// §4's answer-kind seam via SPEC-stats-identity.md §3's 2026-08-26 amendment;
+/// halheinrich/backgammon#86). Today the kind is derivable from the key's own
+/// grammar (dice ride on a play key and only there), so the wire token is
+/// written from <see cref="ProblemKey.IsCubeDecision"/> and a read rejects a
+/// record whose token disagrees with its key — the two spellings of one fact
+/// must agree or the document is corrupt. The token is carried anyway because
+/// the seam exists for the future where it stops being derivable: the
+/// reserved equity-guess kind (halheinrich/backgammon#62) will let one
+/// problem accrue records of more than one kind, arriving as a sibling kind
+/// entry under the same key — extending this grammar rather than re-keying
+/// the document. Until that arc lands, the read is maximally strict: exactly
+/// one kind entry per problem, and the reserved token is an unknown kind
+/// like any other.
+/// </para>
+///
+/// <para>
 /// <b><c>schemaVersion</c> is contractually the first property.</b> The
 /// version gates how everything after it is parsed, so the reader dispatches
 /// on it before touching anything else; a document whose first property is
@@ -59,8 +79,10 @@ using BgDataTypes_Lib;
 /// <b>Reads are fail-loud, with one deliberate signal — and the signal covers
 /// every retired version.</b> A recognised version <i>below</i>
 /// <see cref="ProblemStatsDocument.CurrentSchemaVersion"/> is retired: v1 (the
-/// <c>DecisionId</c>-keyed format) and v2 (the <see cref="ProblemKey"/>-keyed
-/// format from before the Jacoby rule entered money keys). Each is recognised
+/// <c>DecisionId</c>-keyed format), v2 (the <see cref="ProblemKey"/>-keyed
+/// format from before the Jacoby rule entered money keys), and v3 (the
+/// <see cref="ProblemKey"/>-keyed format from before answer kinds entered the
+/// per-problem records). Each is recognised
 /// by a shallow shape check — exactly one further property, holding that
 /// version's body container, whose contents are never parsed (no migration
 /// exists) — and throws <see cref="RetiredStatsSchemaException"/> carrying
@@ -171,6 +193,8 @@ public sealed class ProblemStatsDocumentJsonConverter : JsonConverter<ProblemSta
         1 => new("decisions", JsonTokenType.StartArray, "the DecisionId-keyed format"),
         2 => new("problems", JsonTokenType.StartObject,
                  "the ProblemKey-keyed format from before the Jacoby rule entered money keys"),
+        3 => new("problems", JsonTokenType.StartObject,
+                 "the ProblemKey-keyed format from before answer kinds entered the per-problem records"),
         _ => new("problems", JsonTokenType.StartObject, "a superseded ProblemKey-keyed format"),
     };
 
@@ -283,11 +307,68 @@ public sealed class ProblemStatsDocumentJsonConverter : JsonConverter<ProblemSta
         return problems;
     }
 
+    /// <summary>
+    /// The answer-kind wire tokens (SPEC-scoring.md §4's kinds; the
+    /// equity-guess kind is <i>reserved</i> there, not spelled here — until
+    /// its arc lands, its token is an unknown kind like any other).
+    /// Hand-written property names, deliberately not a serializer-routed
+    /// enum: this converter owns its whole tree, and the context's closure
+    /// test pins that nothing here routes through the options.
+    /// </summary>
+    private const string CheckerPlayKindToken = "checkerPlay";
+
+    /// <inheritdoc cref="CheckerPlayKindToken"/>
+    private const string CubePairKindToken = "cubePair";
+
+    /// <summary>
+    /// The kind token a key's record writes under — the one derivation of
+    /// kind from the key's own grammar (dice ride on a play key and only
+    /// there, so <see cref="ProblemKey.IsCubeDecision"/> is the fact's
+    /// key-side spelling). The read side holds each record's token against
+    /// this same derivation, so the two spellings cannot drift.
+    /// </summary>
+    private static string KindTokenFor(ProblemKey key) =>
+        key.IsCubeDecision ? CubePairKindToken : CheckerPlayKindToken;
+
+    /// <summary>
+    /// One problem's value: an object holding <b>exactly one</b> answer-kind
+    /// entry whose token must agree with the key's grammar. Anything else —
+    /// no kind entry, a second one, an unknown token, a token disagreeing
+    /// with the key — is corrupt. When the reserved equity-guess kind
+    /// arrives, this is the read that widens (a second sibling entry under
+    /// the same key) — the document shape does not change again.
+    /// </summary>
     private static ProblemStats ReadProblemRecord(ref Utf8JsonReader reader, ProblemKey key)
     {
         if (reader.TokenType != JsonTokenType.StartObject)
             throw new JsonException(
                 $"Expected object for problem '{key}', got {reader.TokenType}.");
+
+        if (!reader.Read() || reader.TokenType != JsonTokenType.PropertyName)
+            throw new JsonException($"Problem '{key}' is missing its answer-kind record.");
+
+        var kind = reader.GetString();
+        if (kind is not (CheckerPlayKindToken or CubePairKindToken))
+            throw new JsonException($"Unknown answer kind '{kind}' for problem '{key}'.");
+        if (kind != KindTokenFor(key))
+            throw new JsonException(
+                $"Problem '{key}' is a {(key.IsCubeDecision ? "cube decision" : "checker play")} " +
+                $"but its record is under answer kind '{kind}'.");
+
+        reader.Read();
+        var stats = ReadKindRecord(ref reader, key);
+
+        if (!reader.Read() || reader.TokenType != JsonTokenType.EndObject)
+            throw new JsonException($"Problem '{key}' carries more than one answer-kind record.");
+
+        return stats;
+    }
+
+    private static ProblemStats ReadKindRecord(ref Utf8JsonReader reader, ProblemKey key)
+    {
+        if (reader.TokenType != JsonTokenType.StartObject)
+            throw new JsonException(
+                $"Expected object for problem '{key}'s answer-kind record, got {reader.TokenType}.");
 
         ScoreSegment? tally = null;
         DateTimeOffset? lastQuizzed = null;
@@ -398,12 +479,14 @@ public sealed class ProblemStatsDocumentJsonConverter : JsonConverter<ProblemSta
         foreach (var stats in value.Problems.Values.OrderBy(s => s.Key))
         {
             writer.WriteStartObject(stats.Key.ToString());
+            writer.WriteStartObject(KindTokenFor(stats.Key));
             writer.WriteStartObject("tally");
             writer.WriteNumber("submitted", stats.Tally.Submitted);
             writer.WriteNumber("correct", stats.Tally.Correct);
             writer.WriteNumber("totalEquityLoss", stats.Tally.TotalEquityLoss);
             writer.WriteEndObject();
             writer.WriteString("lastQuizzed", stats.LastQuizzed);
+            writer.WriteEndObject();
             writer.WriteEndObject();
         }
 

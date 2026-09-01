@@ -10,9 +10,12 @@ using BgDataTypes_Lib;
 /// <see cref="ProblemStatsDocument.CurrentSchemaVersion"/>, not one pinned
 /// version: today version 1 (the <c>DecisionId</c>-keyed format, retired by
 /// the clean break to <see cref="ProblemKey"/> keying —
-/// halheinrich/backgammon#95) and version 2 (the <see cref="ProblemKey"/>-keyed
+/// halheinrich/backgammon#95), version 2 (the <see cref="ProblemKey"/>-keyed
 /// format from before the Jacoby rule entered money keys —
-/// halheinrich/backgammon#120). Each throws carrying its <b>own</b>
+/// halheinrich/backgammon#120), and version 3 (the
+/// <see cref="ProblemKey"/>-keyed format from before answer kinds entered the
+/// per-problem records — halheinrich/backgammon#86). Each throws carrying its
+/// <b>own</b>
 /// <see cref="SchemaVersion"/>, which is what lets a consumer name the file it
 /// sets aside per version (SPEC-stats-identity.md §3).
 ///

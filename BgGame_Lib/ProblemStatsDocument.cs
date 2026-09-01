@@ -56,14 +56,29 @@ public sealed class ProblemStatsDocument
     /// <summary>
     /// The schema version this library reads and writes. <b>Every</b>
     /// recognised version below it is retired — version 1 (the
-    /// <c>DecisionId</c>-keyed format) and version 2 (the
+    /// <c>DecisionId</c>-keyed format), version 2 (the
     /// <see cref="ProblemKey"/>-keyed format from before the Jacoby rule
-    /// entered money keys) — each recognised and signalled via
+    /// entered money keys), and version 3 (the <see cref="ProblemKey"/>-keyed
+    /// format from before answer kinds entered the per-problem records —
+    /// halheinrich/backgammon#86) — each recognised and signalled via
     /// <see cref="RetiredStatsSchemaException"/> carrying its own version
     /// number; anything older or newer is rejected fail-loud. See
     /// <see cref="ProblemStatsDocumentJsonConverter"/>.
     /// </summary>
-    public const int CurrentSchemaVersion = 3;
+    /// <remarks>
+    /// v3 retired for two reasons, one visible in the bytes and one not. The
+    /// visible one: v4 nests each per-problem record under its answer-kind
+    /// token (SPEC-scoring.md §4's seam — see the converter). The invisible
+    /// one is why v3's <i>content</i> is not worth carrying even where it
+    /// would parse: from the halheinrich/backgammon#86 arc on, the doubler
+    /// half of a cube answer scores claim-vs-claim (SPEC-scoring.md §3), so
+    /// a v3 tally's correct-counts — accrued when that half scored
+    /// action-vs-action — are not comparable with what folds after. Losing
+    /// them is ruled acceptable; blending two scoring regimes in one
+    /// lifetime tally is not (schema evolution is unconstrained by stats
+    /// preservation — SPEC-scoring.md §4, ruled 2026-08-26).
+    /// </remarks>
+    public const int CurrentSchemaVersion = 4;
 
     private readonly ImmutableDictionary<ProblemKey, ProblemStats> _problems;
 

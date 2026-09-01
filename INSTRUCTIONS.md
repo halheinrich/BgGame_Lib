@@ -588,16 +588,27 @@ asymmetry with `ProblemStats.Plus` (which takes the already-resolved
 so holding the seam there makes ambient-time misuse impossible at the type
 level, while the record-level fold stays a pure value computation.
 
-**Wire format (schema v3 — the #95 clean break, re-broken for #120's
-money keys).** JSON via the bundled internal
+**Wire format (schema v4 — the #95 clean break, re-broken for #120's
+money keys, re-broken again for halheinrich/backgammon#86's answer
+kinds).** JSON via the bundled internal
 `ProblemStatsDocumentJsonConverter` (type-level `[JsonConverter]`, same
 pattern as BgDataTypes_Lib's `DecisionIdJsonConverter` — consumers register
-nothing): a `schemaVersion` field (`CurrentSchemaVersion`, currently 3)
+nothing): a `schemaVersion` field (`CurrentSchemaVersion`, currently 4)
 followed by a `problems` **object** keyed by canonical `ProblemKey` strings,
-each value a nested tally object plus the ISO 8601 last-quizzed date. The
+each value an object holding **exactly one answer-kind record** —
+`"checkerPlay"` or `"cubePair"` (SPEC-scoring.md §4's kinds; the
+equity-guess kind is reserved there, not in this grammar) — whose body is
+the nested tally object plus the ISO 8601 last-quizzed date. The kind is
+derivable from the key's own grammar today (dice ride on play keys and only
+there), so the writer derives the token from `ProblemKey.IsCubeDecision`
+and the reader rejects a record whose token disagrees with its key; the
+token is carried anyway because the seam exists for the future where it
+stops being derivable — #62's equity-guess records arrive as sibling kind
+entries under the same key, extending this grammar rather than re-keying
+the document (SPEC-stats-identity.md §3, 2026-08-26 amendment). The
 key grammar itself is BgDataTypes_Lib's — see `ProblemKey`'s type docs for
 the single authoritative statement of it, including the money-only Jacoby
-suffix that v3 exists for; never restate it here. The map shape is what
+suffix that v3 introduced; never restate it here. The map shape is what
 `ProblemKeyJsonConverter`'s property-name support exists for (v1's
 array-of-elements existed only because `DecisionId` lacked it). The
 converter hand-writes the whole tree with fixed property names, ordered by
@@ -619,14 +630,23 @@ parsed; no migration exists) throws `RetiredStatsSchemaException`, a
 retire the file honestly under a per-version name (rename aside, seed fresh,
 notice) instead of surfacing a generic load error. v1 is the `DecisionId`-keyed
 format; v2 is the `ProblemKey`-keyed format from before Jacoby entered money
-keys — its match keys are spelled exactly as v3 spells them, but selective
-carry-forward was weighed and rejected (SPEC-stats-identity.md §3), so a v2
-file is set aside whole. Everything else — newer or unrecognised schema
-versions (distinguished "newer than this library supports" message), unknown
-or duplicate properties, missing required properties, invalid or duplicate or
-non-canonically-spelled keys (a v2 money key is now one of these), malformed
-dates, impossible tallies — throws plain `JsonException`; a schema-version
-bump is the format's only evolution mechanism.
+keys — its match keys are spelled exactly as later versions spell them, but
+selective carry-forward was weighed and rejected (SPEC-stats-identity.md §3),
+so a v2 file is set aside whole; v3 is the `ProblemKey`-keyed format from
+before answer kinds entered the per-problem records — retired both for the
+shape and because its cube tallies accrued doubler-half correctness under
+action-vs-action scoring, which halheinrich/backgammon#86's claim-vs-claim
+model makes incomparable with what folds after (blending the regimes in one
+lifetime tally would be quietly wrong; losing the counts is ruled
+acceptable, SPEC-scoring.md §4). Everything else — newer or unrecognised
+schema versions (distinguished "newer than this library supports" message),
+unknown or duplicate properties, missing required properties, invalid or
+duplicate or non-canonically-spelled keys (a v2 money key is now one of
+these), malformed dates, impossible tallies, and every violation of the
+answer-kind layer (no kind record, a second one, an unknown or reserved
+token, a token disagreeing with its key's grammar) — throws plain
+`JsonException`; a schema-version bump is the format's only evolution
+mechanism.
 
 ### Stats-weighted quiz categories
 
@@ -1217,7 +1237,7 @@ public sealed record ProblemStats(ProblemKey Key, ScoreSegment Tally, DateTimeOf
 [JsonConverter(typeof(ProblemStatsDocumentJsonConverter))]    // bundled (public converter); consumers register nothing
 public sealed class ProblemStatsDocument                      // immutable; reference equality (see Pitfalls)
 {
-    public const int CurrentSchemaVersion = 3;   // every recognised version below it is retired
+    public const int CurrentSchemaVersion = 4;   // every recognised version below it is retired
     public static ProblemStatsDocument Empty { get; }
     public static ProblemStatsDocument FromStats(IEnumerable<ProblemStats> stats);   // ArgumentException on duplicate key
     public int Count { get; }
