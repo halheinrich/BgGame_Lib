@@ -18,7 +18,7 @@ public class ProblemStatsTests
     private static readonly DateTimeOffset T2 = new(2026, 7, 19, 12, 0, 0, TimeSpan.Zero);
 
     private static SubmittedPlay Play(ProblemKey? key, double equityLoss, bool correct) =>
-        new(key, new Play(), MatchedCandidateIndex: correct ? 0 : 1,
+        new(key, UserPlay: [], MatchedCandidateIndex: correct ? 0 : 1,
             EquityLoss: equityLoss, IsCorrect: correct);
 
     private static SubmittedCubeAction Cube(

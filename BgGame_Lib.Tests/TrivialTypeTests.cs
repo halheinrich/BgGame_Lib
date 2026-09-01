@@ -37,8 +37,7 @@ public class TrivialTypeTests
     [Fact]
     public void SubmittedPlay_RecordEqualityHoldsByValue()
     {
-        var play = new Play();
-        play.Add(new Move(13, 7));
+        Play play = [new(13, 7)];
 
         var a = new SubmittedPlay(KeyA, play, MatchedCandidateIndex: 0, EquityLoss: 0.0, IsCorrect: true);
         var b = new SubmittedPlay(KeyA, play, MatchedCandidateIndex: 0, EquityLoss: 0.0, IsCorrect: true);
@@ -49,8 +48,7 @@ public class TrivialTypeTests
     [Fact]
     public void SubmittedPlay_ProblemKeyParticipatesInEquality()
     {
-        var play = new Play();
-        play.Add(new Move(13, 7));
+        Play play = [new(13, 7)];
 
         var a = new SubmittedPlay(KeyA, play, MatchedCandidateIndex: 0, EquityLoss: 0.0, IsCorrect: true);
         var b = new SubmittedPlay(KeyB, play, MatchedCandidateIndex: 0, EquityLoss: 0.0, IsCorrect: true);

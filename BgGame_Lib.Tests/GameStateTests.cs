@@ -213,8 +213,7 @@ public class GameStateTests
         var cubeOwnerBefore = game.CubeOwner;
 
         // 13→7 takes a 6, but dice are 3-1 — illegal.
-        var illegal = new Play();
-        illegal.Add(new Move(13, 7));
+        Play illegal = [new(13, 7)];
 
         Assert.Throws<ArgumentException>(() => game.ApplyPlay(illegal, 3, 1));
 

@@ -42,7 +42,7 @@ public class PlayAgentContractTests
     {
         var match = MatchState.NewMatch(7);
         var game = GameState.NewGame(match);
-        var agent = new FixedPlayAgent(new Play());
+        var agent = new FixedPlayAgent([]);
 
         using var cts = new CancellationTokenSource();
         cts.Cancel();
@@ -57,7 +57,7 @@ public class PlayAgentContractTests
         // Verify the contract enables synchronous completion: in-memory agents
         // should be able to return ValueTask<Play>.FromResult without forcing
         // an async state machine.
-        var agent = new FixedPlayAgent(new Play());
+        var agent = new FixedPlayAgent([]);
         var match = MatchState.NewMatch(7);
         var game = GameState.NewGame(match);
 

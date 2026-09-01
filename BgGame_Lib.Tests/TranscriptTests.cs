@@ -28,8 +28,7 @@ public class TranscriptTests
         var snap1 = game.Snapshot();
         var snap2 = game.Snapshot();
 
-        var play = new Play();
-        play.Add(new Move(13, 7));
+        Play play = [new(13, 7)];
 
         t.Append(new PlayTranscriptEntry(snap1, MatchSeat.One, 6, 4, play));
         t.Append(new CubeTranscriptEntry(snap2, MatchSeat.Two, CubeAction.Double));
@@ -47,8 +46,7 @@ public class TranscriptTests
         var game = GameState.NewGame(match);
         var snap = game.Snapshot();
 
-        var play = new Play();
-        play.Add(new Move(8, 5));
+        Play play = [new(8, 5)];
 
         t.Append(new PlayTranscriptEntry(snap, MatchSeat.One, 3, 1, play));
         t.Append(new CubeTranscriptEntry(snap, MatchSeat.Two, CubeAction.NoDouble));

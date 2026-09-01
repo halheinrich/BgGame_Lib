@@ -25,7 +25,7 @@ public class ProblemStatsDocumentTests
     }
 
     private static SubmittedPlay Play(ProblemKey? key, double equityLoss, bool correct) =>
-        new(key, new Play(), MatchedCandidateIndex: correct ? 0 : 1,
+        new(key, UserPlay: [], MatchedCandidateIndex: correct ? 0 : 1,
             EquityLoss: equityLoss, IsCorrect: correct);
 
     private static SubmittedCubeAction Cube(

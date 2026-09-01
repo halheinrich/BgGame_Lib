@@ -9,7 +9,7 @@ public class QuizScoreTests
     // even a no-key (null) submission folds. Null here keeps every folding
     // assertion below unchanged in intent while pinning that independence.
     private static SubmittedPlay Play(double equityLoss, bool correct) =>
-        new(ProblemKey: null, new Play(), MatchedCandidateIndex: correct ? 0 : 1,
+        new(ProblemKey: null, UserPlay: [], MatchedCandidateIndex: correct ? 0 : 1,
             EquityLoss: equityLoss, IsCorrect: correct);
 
     private static SubmittedCubeAction Cube(

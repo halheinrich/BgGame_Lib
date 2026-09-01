@@ -474,8 +474,7 @@ public class MatchRunnerTests
     public async Task IllegalPlay_ThrowsViolation_WithSeatAndPlay()
     {
         // Seat One wins the opening (6,5) and returns a play its dice can't make.
-        var badPlay = new Play();
-        badPlay.Add(new Move(13, 12));   // a 1 — dice are (6,5)
+        Play badPlay = [new(13, 12)];   // a 1 — dice are (6,5)
 
         var runner = new MatchRunner(new RecordedDiceSource([(6, 5)]));
         var one = Participant(new DelegatePlayAgent((_, _, _) => badPlay), CubeAgents.Never());
