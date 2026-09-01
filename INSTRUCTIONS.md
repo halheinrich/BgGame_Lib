@@ -682,9 +682,12 @@ composes quizzes from them (BgQuiz Phase 2+ selection).
 
 `QuizMix` / `QuizMixEntry` are the composition config the composing decorator
 reads: an **ordered** list of (category, percent) lines, an optional quiz
-length, and the random toggle (default true). Immutable; `QuizMix` is a class
-with reference equality (it wraps a list — the `ProblemStatsDocument`
-rationale), while `QuizMixEntry` is a record with full value equality.
+length, and the random toggle (default true). Immutable; both are value-equal:
+`QuizMixEntry` is a record, and `QuizMix` is a class with **hand-written value
+equality over the full member surface** — `Entries` as an ordered sequence
+plus `QuizLength` and `RandomOrder` (a record would compare the wrapped list
+by reference and report identical configs unequal, so the class hand-rolls
+`IEquatable<QuizMix>`, `==`/`!=`, and a consistent hash).
 
 - **Validation split.** The per-entry rule (percent 1–100) lives in
   `QuizMixEntry`'s own constructor — the earliest construction point, so an
@@ -1262,8 +1265,8 @@ public sealed record QuizMixEntry
 }
 
 [JsonConverter(typeof(QuizMixJsonConverter))]   // bundled (public converter); consumers register nothing
-public sealed class QuizMix                     // immutable; reference equality (see Pitfalls)
-{
+public sealed class QuizMix : IEquatable<QuizMix>   // immutable; hand-written value equality — Entries
+{                                                   // as an ordered sequence + both scalars (see Pitfalls)
     public const int CurrentSchemaVersion = 1;
     public static QuizMix Empty { get; }        // blank: composition layer fully inert
     public QuizMix(IEnumerable<QuizMixEntry> entries, int? quizLength = null, bool randomOrder = true);
@@ -1453,13 +1456,17 @@ public sealed record AnswerTypeDistribution(
   0–100 points. `EverythingElse` has no standalone predicate — the internal
   `BuildPredicate()` throws for it; gate on `IsResidual` (it means "matched by
   no other selected entry", computable only with the whole mix in hand).
-- **`QuizMix` entry order is semantically meaningful, and the mix has no
-  value equality.** Under overlapping categories, composition draws entries in
+- **`QuizMix` entry order is semantically meaningful — and participates in
+  equality.** Under overlapping categories, composition draws entries in
   declared order — contested decisions go to the earlier entry — so reordering
   a mix's entries changes the quiz it composes; preserve order when rendering
-  or persisting (the JSON form does). And like `ProblemStatsDocument`,
-  `QuizMix` is a class wrapping a list: instances compare by reference;
-  compare `Entries` content (`QuizMixEntry` is a value-equal record). Reads
+  or persisting (the JSON form does). Equality honours the same contract:
+  `QuizMix` has hand-written value equality over `Entries` as an **ordered
+  sequence** plus `QuizLength` and `RandomOrder`, so the same entries
+  reordered are a *different* mix — one `==` answers "does the draft differ
+  from the committed mix?". Unlike `ProblemStatsDocument` (which stays
+  reference-equal), the class hand-rolls the comparison because the
+  record-generated form would compare the wrapped list by reference. Reads
   are strict per the same converter posture — a corrupt or foreign mix throws
   `JsonException` rather than loading quietly different; `TryFromJson` is the
   restore-to-default path and yields `Empty`, never a partially-read mix.
