@@ -1,5 +1,7 @@
 namespace BgGame_Lib;
 
+using BgDataTypes_Lib;
+
 /// <summary>
 /// Cumulative quiz score split into three independently-tracked segments —
 /// play decisions, double (cube-offer) decisions, and take (cube-response)
@@ -45,6 +47,18 @@ public sealed record QuizScore(
     /// <see cref="TakeDecisions"/>. A cube position contributes exactly one
     /// submission to each of the two cube segments.
     /// </summary>
+    /// <remarks>
+    /// The doubler half is scored <b>claim vs. claim</b> against the
+    /// position's derived truth (<see cref="DecisionData.BestClaimPair"/>,
+    /// carried on the submission), the taker half action vs. action —
+    /// SPEC-scoring §3's ruled comparison, spelled once on
+    /// <see cref="SubmittedCubeAction.DoublerCorrect"/> /
+    /// <see cref="SubmittedCubeAction.TakerCorrect"/> and read here
+    /// (halheinrich/backgammon#86). A wrong claim over the right board action
+    /// therefore folds as one incorrect doubler decision carrying +0.000
+    /// equity loss: the ruled "right action, wrong reason" verdict, with no
+    /// partial-credit tier in between.
+    /// </remarks>
     public QuizScore Plus(SubmittedCubeAction cube)
     {
         ArgumentNullException.ThrowIfNull(cube);

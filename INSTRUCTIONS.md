@@ -80,7 +80,7 @@ BgGame_Lib/
   Referee.cs              — skeletal: end-of-game, ApplyCubeResponse
   ScoreSegment.cs         — immutable per-category running tally (submitted / correct / equity loss)
   ShuffledProblemSetSource.cs — IProblemSetSource decorator: Fisher-Yates; re-shuffles per enumeration
-  SubmittedCubeAction.cs  — record: user cube decision + per-half (doubler/taker) results
+  SubmittedCubeAction.cs  — record: user + truth CubeClaimPairs, per-half equity loss, derived per-half correctness
   SubmittedPlay.cs        — record: user play + matched candidate + equity loss
   Transcript.cs           — append-only ordered list of TranscriptEntry
   TranscriptEntry.cs      — abstract record + Play / Cube / GameEnded subtypes
@@ -504,14 +504,41 @@ candidates: the chosen `Play`, the matched-candidate index (nullable for
 analysis omissions), the equity loss vs. best, and an `IsCorrect` flag.
 
 **`SubmittedCubeAction`** is the cube analog — the scored carrier for one
-cube position. A cube position is two independent atomic decisions (the
-doubler's offer choice and the taker's response choice), so the record holds
-the user's `CubeDecisionPair` plus a per-half result for each side:
-`DoublerEquityLoss` / `TakerEquityLoss` and `DoublerCorrect` / `TakerCorrect`.
-The four result fields are pre-computed consumer-side from the position's
-analysis (`DecisionData.DoublerActionError` / `TakerActionError` against
-`BestDoublerAction` / `BestTakerAction`); this library only carries and
-accumulates them.
+cube position. A cube position is two independent decisions (the doubler's
+three-valued **claim** and the taker's response-if-doubled), so the record
+holds two `CubeClaimPair`s — the user's `UserDecision` and the analysis'
+`BestDecision` — plus `DoublerEquityLoss` / `TakerEquityLoss`.
+`DoublerCorrect` / `TakerCorrect` are **derived** from those two pairs, not
+carried: claim vs. claim on the doubler half, action vs. action on the taker
+half (SPEC-scoring §3, ruled 2026-08-26; halheinrich/backgammon#86).
+
+- **Why claim-vs-claim.** `CubeClaim.NoDouble` and `CubeClaim.TooGood`
+  collapse to the identical board action, so an action-level comparison
+  would score a no-double answer on a too-good position as fully correct —
+  the exact mistake the claim layer exists to catch. A wrong claim over the
+  right action is therefore **incorrect at +0.000**: the claims differ, the
+  equity does not. That "right action, wrong reason" verdict is ruled; no
+  partial-credit tier exists in `ScoreSegment` and none is added. The
+  incoherent `CubeClaimPair.NoDoublePass` is submittable like any other
+  answer and scored by the same rule — right only on the measure-zero
+  `NoDoubleEquity == 1` boundary, where the ruled tie-breaks compose it as
+  the derived truth.
+- **Why correctness is derived and the rest is carried.** The truth pair is
+  a producer fact (`DecisionData.BestClaimPair`, the ecosystem's one
+  derivation site) and the equity losses are facts about the analysis'
+  equities, which this carrier deliberately does not hold — both enter from
+  outside, and nothing here re-derives a claim from equities. Correctness,
+  by contrast, is a pure function of the two pairs the record already holds,
+  so deriving it is what stops a stated verdict from disagreeing with the
+  answer it describes.
+- **`SubmittedCubeAction.From(problemKey, answer, decision)`** is the one
+  construction that reads truth and both losses off a `DecisionData`
+  together — including the claim-to-action collapse
+  (`CubeClaimExtensions.ToCubeAction`) the doubler-side equity read needs.
+  Consumers should build submissions through it rather than assembling the
+  five fields by hand, which is the only way to pair an answer with a truth
+  or a loss belonging to some other decision. It throws
+  `InvalidOperationException` on a checker-play `DecisionData`.
 
 **`ScoreSegment`** is the single accumulation primitive: an immutable
 `(Submitted, Correct, TotalEquityLoss)` tally with derived `AverageEquityLoss`
@@ -531,6 +558,9 @@ Razor's render-state model):
 - `Plus(SubmittedCubeAction)` adds **one submission to each** of
   `DoubleDecisions` and `TakeDecisions` — a cube position scores its doubler
   and taker halves independently; there is no combine rule across the two.
+  Correctness comes from the submission's own claim-vs-claim /
+  action-vs-action derivation, so a wrong claim over the right board action
+  folds as one incorrect doubler decision carrying +0.000 equity loss.
 
 The per-problem history is intentionally not in the score — consumers that
 need it keep an `IReadOnlyList<SubmittedPlay>` / `SubmittedCubeAction`
@@ -1210,9 +1240,15 @@ public sealed record SubmittedPlay(
     Play UserPlay, int? MatchedCandidateIndex, double EquityLoss, bool IsCorrect);
 public sealed record SubmittedCubeAction(
     ProblemKey? ProblemKey,
-    CubeDecisionPair UserDecision,
-    double DoublerEquityLoss, double TakerEquityLoss,
-    bool DoublerCorrect, bool TakerCorrect);
+    CubeClaimPair UserDecision,           // the user's (claim, taker) answer
+    CubeClaimPair BestDecision,           // DecisionData.BestClaimPair — the producer's truth
+    double DoublerEquityLoss, double TakerEquityLoss)
+{
+    public bool DoublerCorrect { get; }   // derived: claim vs claim (NOT action vs action)
+    public bool TakerCorrect { get; }     // derived: taker action vs taker action
+    public static SubmittedCubeAction From(                 // the one producer read; throws on a
+        ProblemKey? problemKey, CubeClaimPair answer, DecisionData decision);  // checker-play decision
+}
 
 public sealed record ScoreSegment(int Submitted, int Correct, double TotalEquityLoss)
 {
@@ -1411,6 +1447,16 @@ public sealed record AnswerTypeDistribution(
   the record self-describing for downstream display. Producers must keep
   the two consistent; consumers should not derive a different correctness
   rule (e.g., "within 0.001 equity").
+- **A cube half's correctness is NOT `EquityLoss == 0.0` — unlike
+  `SubmittedPlay`'s.** On the doubler half the two run apart by ruling: a
+  `NoDouble` answer to a too-good position (or a `TooGood` answer to a
+  plain no-double one) has the right board action and so costs +0.000, yet
+  scores **incorrect**, because the claims differ (SPEC-scoring §3;
+  halheinrich/backgammon#86). Do not "simplify"
+  `SubmittedCubeAction.DoublerCorrect` to a zero-loss test, and do not read
+  a zero doubler loss in a review or stats surface as evidence the user was
+  right. The taker half does still coincide with zero loss, but derive it
+  from `TakerCorrect` anyway so both halves read from one rule.
 - **`ProblemStats` and `QuizScore` count a cube position the same way: TWO
   decisions.** Both fold the doubler half and the taker half as independent
   submissions, so a half-right cube reads **1-of-2, not 0-of-1** — a

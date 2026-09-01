@@ -28,11 +28,19 @@ public class ProblemStatsDocumentTests
         new(key, UserPlay: [], MatchedCandidateIndex: correct ? 0 : 1,
             EquityLoss: equityLoss, IsCorrect: correct);
 
+    // Per-half correctness is derived from the answer/truth pair rather than
+    // stated, so this helper composes pairs that realize the requested
+    // verdicts: the truth is always (Double, Take) and each half of the
+    // answer either matches it or is bent away from it. What this suite
+    // asserts — how a cube submission accumulates — is unchanged by that.
     private static SubmittedCubeAction Cube(
         ProblemKey? key, double doublerLoss, bool doublerCorrect, double takerLoss, bool takerCorrect) =>
-        new(key, new CubeDecisionPair(CubeAction.Double, CubeAction.Take),
-            DoublerEquityLoss: doublerLoss, TakerEquityLoss: takerLoss,
-            DoublerCorrect: doublerCorrect, TakerCorrect: takerCorrect);
+        new(key,
+            new CubeClaimPair(
+                doublerCorrect ? CubeClaim.Double : CubeClaim.NoDouble,
+                takerCorrect ? CubeAction.Take : CubeAction.Pass),
+            CubeClaimPair.DoubleTake,
+            DoublerEquityLoss: doublerLoss, TakerEquityLoss: takerLoss);
 
     [Fact]
     public void Empty_HasNoProblems()

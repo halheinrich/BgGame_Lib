@@ -131,6 +131,15 @@ public sealed record ProblemStats(ProblemKey Key, ScoreSegment Tally, DateTimeOf
     /// accumulated, and <see cref="LastQuizzed"/> advanced to
     /// <paramref name="quizzedAt"/>. A half-right cube therefore reads
     /// 1-of-2, not 0-of-1.
+    ///
+    /// <para>
+    /// "Right" per half is the submission's own claim-vs-claim / action-vs-action
+    /// derivation (<see cref="SubmittedCubeAction.DoublerCorrect"/> /
+    /// <see cref="SubmittedCubeAction.TakerCorrect"/>), the same source
+    /// <see cref="QuizScore.Plus(SubmittedCubeAction)"/> folds — so a wrong
+    /// claim over the right board action folds here too as one wrong half at
+    /// +0.000 (SPEC-scoring §3; halheinrich/backgammon#86).
+    /// </para>
     /// </summary>
     /// <param name="cube">The submission to fold.</param>
     /// <param name="quizzedAt">The resolved fold timestamp.</param>

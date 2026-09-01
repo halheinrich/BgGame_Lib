@@ -21,11 +21,19 @@ public class ProblemStatsTests
         new(key, UserPlay: [], MatchedCandidateIndex: correct ? 0 : 1,
             EquityLoss: equityLoss, IsCorrect: correct);
 
+    // Per-half correctness is derived from the answer/truth pair rather than
+    // stated, so this helper composes pairs that realize the requested
+    // verdicts: the truth is always (Double, Take) and each half of the
+    // answer either matches it or is bent away from it. What this suite
+    // asserts — how a cube submission accumulates — is unchanged by that.
     private static SubmittedCubeAction Cube(
         ProblemKey? key, double doublerLoss, bool doublerCorrect, double takerLoss, bool takerCorrect) =>
-        new(key, new CubeDecisionPair(CubeAction.Double, CubeAction.Take),
-            DoublerEquityLoss: doublerLoss, TakerEquityLoss: takerLoss,
-            DoublerCorrect: doublerCorrect, TakerCorrect: takerCorrect);
+        new(key,
+            new CubeClaimPair(
+                doublerCorrect ? CubeClaim.Double : CubeClaim.NoDouble,
+                takerCorrect ? CubeAction.Take : CubeAction.Pass),
+            CubeClaimPair.DoubleTake,
+            DoublerEquityLoss: doublerLoss, TakerEquityLoss: takerLoss);
 
     [Fact]
     public void FromPlay_Correct_OneSubmittedOneCorrectNoLoss()
@@ -84,6 +92,34 @@ public class ProblemStatsTests
         Assert.Equal(0, s.Tally.Correct);
         Assert.Equal(2, s.Wrong);
         Assert.Equal(0.13, s.Tally.TotalEquityLoss, precision: 9);
+    }
+
+    [Fact]
+    public void FromCube_WrongClaimOverTheRightAction_CountsOneOfTwoAtZeroDoublerLoss()
+    {
+        // The lifetime tally reads the same claim-vs-claim derivation the
+        // session score does (SPEC-scoring §3; halheinrich/backgammon#86): a
+        // no-double answer on a too-good position is one wrong half, and it
+        // costs +0.000 because the board action behind both claims is the
+        // same. Built through SubmittedCubeAction.From so the truth pair and
+        // the loss come from the producer, not from this test.
+        var tooGoodPass = new DecisionData
+        {
+            IsCube = true,
+            NoDoubleEquity = 1.30,
+            DoubleTakeEquity = 1.50,
+        };
+        var submission = SubmittedCubeAction.From(
+            CubeKey, CubeClaimPair.NoDoublePass, tooGoodPass);
+
+        Assert.Equal(CubeClaimPair.TooGoodPass, submission.BestDecision);
+
+        var s = ProblemStats.From(submission, T1);
+
+        Assert.Equal(2, s.Tally.Submitted);
+        Assert.Equal(1, s.Tally.Correct);       // taker half only
+        Assert.Equal(1, s.Wrong);
+        Assert.Equal(0.0, s.Tally.TotalEquityLoss);
     }
 
     [Fact]
