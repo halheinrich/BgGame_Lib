@@ -1,6 +1,7 @@
 namespace BgGame_Lib;
 
 using System.Diagnostics.CodeAnalysis;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using BgDataTypes_Lib;
@@ -24,16 +25,14 @@ using BgDataTypes_Lib;
 ///
 /// <code>
 /// {
-///   "schemaVersion": 4,
+///   "schemaVersion": 3,
 ///   "problems": {
 ///     "0,-2,0,0,0,0,5,0,3,0,0,0,-5,5,0,0,0,-3,0,-5,0,0,0,0,2,0/7a7/1c": {
-///       "cubePair": {
-///         "tally": { "submitted": 2, "correct": 1, "totalEquityLoss": 0.08 },
-///         "lastQuizzed": "2026-07-18T19:04:11+00:00" } },
+///       "tally": { "submitted": 2, "correct": 1, "totalEquityLoss": 0.08 },
+///       "lastQuizzed": "2026-07-18T19:04:11+00:00" },
 ///     "0,-2,0,0,0,0,5,0,3,0,0,0,-5,5,0,0,0,-3,0,-5,0,0,0,0,2,0/7a7/1c/31": {
-///       "checkerPlay": {
-///         "tally": { "submitted": 3, "correct": 2, "totalEquityLoss": 0.125 },
-///         "lastQuizzed": "2026-07-18T19:04:11+00:00" } }
+///       "tally": { "submitted": 3, "correct": 2, "totalEquityLoss": 0.125 },
+///       "lastQuizzed": "2026-07-18T19:04:11+00:00" }
 ///   }
 /// }
 /// </code>
@@ -49,21 +48,31 @@ using BgDataTypes_Lib;
 /// </para>
 ///
 /// <para>
-/// <b>Each per-problem record nests under its answer-kind token</b> —
-/// <c>"checkerPlay"</c> or <c>"cubePair"</c>, the v4 addition (SPEC-scoring.md
-/// §4's answer-kind seam via SPEC-stats-identity.md §3's 2026-08-26 amendment;
-/// halheinrich/backgammon#86). Today the kind is derivable from the key's own
-/// grammar (dice ride on a play key and only there), so the wire token is
-/// written from <see cref="ProblemKey.IsCubeDecision"/> and a read rejects a
-/// record whose token disagrees with its key — the two spellings of one fact
-/// must agree or the document is corrupt. The token is carried anyway because
-/// the seam exists for the future where it stops being derivable: the
-/// reserved equity-guess kind (halheinrich/backgammon#62) will let one
-/// problem accrue records of more than one kind, arriving as a sibling kind
-/// entry under the same key — extending this grammar rather than re-keying
-/// the document. Until that arc lands, the read is maximally strict: exactly
-/// one kind entry per problem, and the reserved token is an unknown kind
-/// like any other.
+/// <b>Each per-problem value is the bare record</b> — the tally object plus
+/// the last-quizzed date, and no answer-kind discriminator. The kind of
+/// decision a record tallies is derivable from its key's own grammar (dice
+/// ride on a play key and only there — <see cref="ProblemKey.IsCubeDecision"/>),
+/// and a second spelling of a fact the key already carries is what the
+/// interim version 4 wrapper was; SPEC-scoring.md §4's 2026-09-02 amendment
+/// retires it and this version-3 shape is reinstated as current
+/// (SPEC-stats-identity.md §3; halheinrich/backgammon#187), byte-identical to
+/// the v3 files in production.
+/// </para>
+///
+/// <para>
+/// <b>Reserved, not built: the equity-estimate fields.</b> SPEC-scoring.md
+/// §4 reserves the equity-estimate mode's stats
+/// (halheinrich/backgammon#62) as flat sibling fields on this same record —
+/// <c>equityEstimates</c> (a count) and <c>totalEquityEstimateError</c> (a
+/// sum of absolute errors, never added to equity loss) — sharing the
+/// record's one <c>lastQuizzed</c>. They are <b>additive under this
+/// version</b>: when they land, the reader treats an absent field as zero
+/// and the schema version does not move, so every v3 file written before
+/// them keeps reading. Nothing added to this reader may make an absent
+/// optional field a break; the fail-loud posture below is about unknown
+/// and malformed content, not about fields a later reader learns to
+/// expect. Until that arc lands the two names are not in the grammar and
+/// read as unknown properties like any other.
 /// </para>
 ///
 /// <para>
@@ -76,26 +85,33 @@ using BgDataTypes_Lib;
 /// </para>
 ///
 /// <para>
-/// <b>Reads are fail-loud, with one deliberate signal — and the signal covers
-/// every retired version.</b> A recognised version <i>below</i>
-/// <see cref="ProblemStatsDocument.CurrentSchemaVersion"/> is retired: v1 (the
-/// <c>DecisionId</c>-keyed format), v2 (the <see cref="ProblemKey"/>-keyed
-/// format from before the Jacoby rule entered money keys), and v3 (the
-/// <see cref="ProblemKey"/>-keyed format from before answer kinds entered the
-/// per-problem records). Each is recognised
-/// by a shallow shape check — exactly one further property, holding that
-/// version's body container, whose contents are never parsed (no migration
-/// exists) — and throws <see cref="RetiredStatsSchemaException"/> carrying
-/// <b>its own</b> version number, so the consumer can retire the file
-/// honestly, under a per-version name, instead of surfacing a generic load
-/// error (SPEC-stats-identity.md §3). The rule is a range, not a list, so a
-/// version bump retires its predecessor with no second edit — see
-/// <c>IsRetiredSchemaVersion</c>. Everything else throws plain
-/// <see cref="JsonException"/>: a newer or unrecognised schema version, a
-/// missing required property, an unknown or duplicate property at any level,
-/// an invalid or duplicate key, a malformed date, or an impossible tally
-/// (negative counts, correct &gt; submitted, negative equity loss) — corrupt
-/// or foreign stats must never load as quietly-wrong lifetime data.
+/// <b>Reads are fail-loud, with two deliberate signals.</b> A recognised
+/// version <i>below</i> <see cref="ProblemStatsDocument.CurrentSchemaVersion"/>
+/// is <b>retired</b>: v1 (the <c>DecisionId</c>-keyed format) and v2 (the
+/// <see cref="ProblemKey"/>-keyed format from before the Jacoby rule entered
+/// money keys). Each is recognised by a shallow shape check — exactly one
+/// further property, holding that version's body container, whose contents
+/// are never parsed (no migration exists) — and throws
+/// <see cref="RetiredStatsSchemaException"/> carrying <b>its own</b> version
+/// number, so the consumer can retire the file honestly, under a per-version
+/// name, instead of surfacing a generic load error (SPEC-stats-identity.md
+/// §3). The rule is a range, not a list, so a version bump retires its
+/// predecessor with no second edit — see <c>IsRetiredSchemaVersion</c>.
+/// Version <see cref="ProblemStatsDocument.FoldableSchemaVersion"/> (4), the
+/// interim answer-kind format that never reached production, is
+/// <b>foldable</b>: the same shallow check, then
+/// <see cref="FoldableStatsSchemaException"/> — the retired signal's sibling
+/// — and the consumer reads the file with
+/// <see cref="ProblemStatsDocument.ReadFoldable(string)"/> and combines it
+/// with <see cref="ProblemStatsDocument.Merge"/>. The dispatch order is the
+/// retired range, then the foldable version, then the newer-than-current
+/// refusal: 4 is the one version above current that is not refused as
+/// newer. Everything else throws plain <see cref="JsonException"/>: a newer
+/// or unrecognised schema version, a missing required property, an unknown
+/// or duplicate property at any level, an invalid or duplicate key, a
+/// malformed date, or an impossible tally (negative counts, correct &gt;
+/// submitted, negative equity loss) — corrupt or foreign stats must never
+/// load as quietly-wrong lifetime data.
 /// </para>
 ///
 /// <para>
@@ -122,6 +138,70 @@ public sealed class ProblemStatsDocumentJsonConverter : JsonConverter<ProblemSta
         if (reader.TokenType == JsonTokenType.Null)
             return null;
 
+        int version = ReadDocumentHead(ref reader);
+
+        if (IsRetiredSchemaVersion(version))
+            ThrowForRetiredVersionDocument(ref reader, version);
+        if (version == ProblemStatsDocument.FoldableSchemaVersion)
+            ThrowForFoldableVersionDocument(ref reader);
+
+        return ReadBody(ref reader, ProblemValueShape.Bare);
+    }
+
+    /// <summary>
+    /// The fold reader behind
+    /// <see cref="ProblemStatsDocument.ReadFoldable(string)"/>: parses a
+    /// whole document text that must declare
+    /// <see cref="ProblemStatsDocument.FoldableSchemaVersion"/>, reading each
+    /// per-problem value through its answer-kind wrapper into the current
+    /// record shape. Its own <see cref="Utf8JsonReader"/>, deliberately not
+    /// a <see cref="JsonSerializer"/> call: the ordinary read path's job is
+    /// to <i>signal</i> a v4, and a converter that read v4 quietly would
+    /// erase the signal the consumer's fold depends on. Rejects trailing
+    /// content after the root object, as the serializer would, and holds
+    /// the serializer's exception contract: malformed JSON <i>text</i>, which
+    /// the reader reports through its own internal
+    /// <see cref="JsonException"/> subtype, is re-thrown as plain
+    /// <see cref="JsonException"/> exactly as
+    /// <see cref="JsonSerializer"/> re-throws it, so a consumer's exact-type
+    /// handling sees one type whichever layer the failure came from.
+    /// </summary>
+    internal static ProblemStatsDocument ReadFoldable(string json)
+    {
+        try
+        {
+            var reader = new Utf8JsonReader(Encoding.UTF8.GetBytes(json));
+            if (!reader.Read())
+                throw new JsonException("Expected a stats document, got no JSON at all.");
+
+            int version = ReadDocumentHead(ref reader);
+            if (version != ProblemStatsDocument.FoldableSchemaVersion)
+                throw new JsonException(
+                    $"ReadFoldable reads schema version {ProblemStatsDocument.FoldableSchemaVersion} " +
+                    $"only; the document declares version {version}.");
+
+            var document = ReadBody(ref reader, ProblemValueShape.AnswerKindWrapped);
+
+            if (reader.Read())
+                throw new JsonException(
+                    $"Stats document is followed by trailing content ({reader.TokenType}).");
+
+            return document;
+        }
+        catch (JsonException ex) when (ex.GetType() != typeof(JsonException))
+        {
+            throw new JsonException(ex.Message, ex);
+        }
+    }
+
+    /// <summary>
+    /// Positioned on the document's first token, requires the root object
+    /// and the version-first property, and returns the schema version after
+    /// <see cref="ReadSchemaVersion"/>'s range checks. Leaves the reader on
+    /// the version value.
+    /// </summary>
+    private static int ReadDocumentHead(ref Utf8JsonReader reader)
+    {
         if (reader.TokenType != JsonTokenType.StartObject)
             throw new JsonException(
                 $"Expected object for ProblemStatsDocument, got {reader.TokenType}.");
@@ -133,12 +213,7 @@ public sealed class ProblemStatsDocumentJsonConverter : JsonConverter<ProblemSta
             throw new JsonException(
                 "Expected 'schemaVersion' as the first property of a stats document.");
         reader.Read();
-        int version = ReadSchemaVersion(ref reader);
-
-        if (IsRetiredSchemaVersion(version))
-            ThrowForRetiredVersionDocument(ref reader, version);
-
-        return ReadCurrentVersionBody(ref reader);
+        return ReadSchemaVersion(ref reader);
     }
 
     /// <summary>
@@ -156,20 +231,24 @@ public sealed class ProblemStatsDocumentJsonConverter : JsonConverter<ProblemSta
     /// would drop that version's holders into the generic fail-loud path with
     /// their stats silently dead — the one outcome SPEC-stats-identity.md
     /// §3's "deliberate recognition, small and mandatory" ruling exists to
-    /// forbid.
+    /// forbid. The foldable version sits above current and is outside this
+    /// range by construction; a future bump past it would fold it into the
+    /// range and retire it, which is that bump's decision to confirm or
+    /// override.
     /// </summary>
     private static bool IsRetiredSchemaVersion(int version) =>
         version >= OldestRecognisedSchemaVersion
         && version < ProblemStatsDocument.CurrentSchemaVersion;
 
     /// <summary>
-    /// Shallow recognition data for a retired schema version: the single
-    /// property its body hangs from, that property's container token, and a
-    /// phrase naming the format for the diagnostic. Enough to tell a genuine
-    /// retired document from a corrupt one merely claiming its version — the
-    /// body itself is skipped, never parsed.
+    /// Shallow recognition data for a schema version the ordinary read path
+    /// signals rather than reads: the single property its body hangs from,
+    /// that property's container token, and a phrase naming the format for
+    /// the diagnostic. Enough to tell a genuine document of that version
+    /// from a corrupt one merely claiming it — the body itself is skipped,
+    /// never parsed here.
     /// </summary>
-    private readonly record struct RetiredSchemaShape(
+    private readonly record struct VersionShape(
         string BodyProperty,
         JsonTokenType BodyContainer,
         string Description)
@@ -188,15 +267,18 @@ public sealed class ProblemStatsDocumentJsonConverter : JsonConverter<ProblemSta
     /// predecessor correctly without touching this table — a row is added
     /// only to sharpen the diagnostic.
     /// </summary>
-    private static RetiredSchemaShape ShapeOfRetired(int version) => version switch
+    private static VersionShape ShapeOfRetired(int version) => version switch
     {
         1 => new("decisions", JsonTokenType.StartArray, "the DecisionId-keyed format"),
         2 => new("problems", JsonTokenType.StartObject,
                  "the ProblemKey-keyed format from before the Jacoby rule entered money keys"),
-        3 => new("problems", JsonTokenType.StartObject,
-                 "the ProblemKey-keyed format from before answer kinds entered the per-problem records"),
         _ => new("problems", JsonTokenType.StartObject, "a superseded ProblemKey-keyed format"),
     };
+
+    /// <summary>The foldable version's shape: the same problems map, each value kind-wrapped.</summary>
+    private static readonly VersionShape FoldableShape = new(
+        "problems", JsonTokenType.StartObject,
+        "the ProblemKey-keyed format with each per-problem record wrapped in its answer kind");
 
     private static int ReadSchemaVersion(ref Utf8JsonReader reader)
     {
@@ -204,7 +286,10 @@ public sealed class ProblemStatsDocumentJsonConverter : JsonConverter<ProblemSta
             throw new JsonException(
                 $"Expected integer for 'schemaVersion', got {reader.TokenType}.");
 
-        if (version > ProblemStatsDocument.CurrentSchemaVersion)
+        // The foldable version is checked before the newer-than-current
+        // refusal: it is the one version above current that is recognised.
+        if (version > ProblemStatsDocument.CurrentSchemaVersion
+            && version != ProblemStatsDocument.FoldableSchemaVersion)
             throw new JsonException(
                 $"Stats document has schema version {version}, newer than the highest " +
                 $"version this library supports ({ProblemStatsDocument.CurrentSchemaVersion}).");
@@ -212,42 +297,51 @@ public sealed class ProblemStatsDocumentJsonConverter : JsonConverter<ProblemSta
             throw new JsonException(
                 $"Stats document has unsupported schema version {version}; this library " +
                 $"recognises versions {OldestRecognisedSchemaVersion} through " +
-                $"{ProblemStatsDocument.CurrentSchemaVersion}.");
+                $"{ProblemStatsDocument.CurrentSchemaVersion}, and folds version " +
+                $"{ProblemStatsDocument.FoldableSchemaVersion}.");
 
         return version;
     }
 
     /// <summary>
-    /// The deliberate retired-version recognition signal — never returns.
     /// Positioned after the version value, verifies the remainder shallowly
-    /// against <paramref name="version"/>'s own shape — exactly one further
-    /// property, holding that version's body container, whose contents are
-    /// skipped and never parsed (no migration; clean break) — and throws
-    /// <see cref="RetiredStatsSchemaException"/> carrying that version for the
-    /// genuine article. A document that claims a retired version but is shaped
-    /// otherwise throws plain <see cref="JsonException"/> instead: corrupt,
-    /// not retired.
+    /// against <paramref name="shape"/> — exactly one further property,
+    /// holding that version's body container, whose contents are skipped and
+    /// never parsed — and leaves the reader on the root object's end. A
+    /// document that claims <paramref name="version"/> but is shaped
+    /// otherwise throws plain <see cref="JsonException"/>: corrupt, not a
+    /// genuine document of that version.
+    /// </summary>
+    private static void RequireShallowShape(ref Utf8JsonReader reader, int version, VersionShape shape)
+    {
+        if (!reader.Read() || reader.TokenType != JsonTokenType.PropertyName
+            || reader.GetString() != shape.BodyProperty)
+            throw new JsonException(
+                $"Document claims schema version {version} but lacks its " +
+                $"'{shape.BodyProperty}' property.");
+        reader.Read();
+        if (reader.TokenType != shape.BodyContainer)
+            throw new JsonException(
+                $"Document claims schema version {version} but " +
+                $"'{shape.BodyProperty}' is not {shape.ContainerNoun}.");
+        reader.Skip();
+        if (!reader.Read() || reader.TokenType != JsonTokenType.EndObject)
+            throw new JsonException(
+                $"Document claims schema version {version} but carries " +
+                $"properties beyond '{shape.BodyProperty}'.");
+    }
+
+    /// <summary>
+    /// The deliberate retired-version recognition signal — never returns.
+    /// Shallow shape check per <see cref="RequireShallowShape"/>, then
+    /// <see cref="RetiredStatsSchemaException"/> carrying
+    /// <paramref name="version"/> (no migration; clean break).
     /// </summary>
     [DoesNotReturn]
     private static void ThrowForRetiredVersionDocument(ref Utf8JsonReader reader, int version)
     {
         var shape = ShapeOfRetired(version);
-
-        if (!reader.Read() || reader.TokenType != JsonTokenType.PropertyName
-            || reader.GetString() != shape.BodyProperty)
-            throw new JsonException(
-                $"Document claims retired schema version {version} but lacks its " +
-                $"'{shape.BodyProperty}' property.");
-        reader.Read();
-        if (reader.TokenType != shape.BodyContainer)
-            throw new JsonException(
-                $"Document claims retired schema version {version} but " +
-                $"'{shape.BodyProperty}' is not {shape.ContainerNoun}.");
-        reader.Skip();
-        if (!reader.Read() || reader.TokenType != JsonTokenType.EndObject)
-            throw new JsonException(
-                $"Document claims retired schema version {version} but carries " +
-                $"properties beyond '{shape.BodyProperty}'.");
+        RequireShallowShape(ref reader, version, shape);
 
         throw new RetiredStatsSchemaException(
             version,
@@ -256,7 +350,49 @@ public sealed class ProblemStatsDocumentJsonConverter : JsonConverter<ProblemSta
             $"and start a fresh version-{ProblemStatsDocument.CurrentSchemaVersion} document.");
     }
 
-    private static ProblemStatsDocument ReadCurrentVersionBody(ref Utf8JsonReader reader)
+    /// <summary>
+    /// The deliberate foldable-version recognition signal — never returns.
+    /// The same shallow shape check as the retired signal, then
+    /// <see cref="FoldableStatsSchemaException"/> carrying
+    /// <see cref="ProblemStatsDocument.FoldableSchemaVersion"/>. Shallow on
+    /// purpose: the records are read, fully validated, on the fold path
+    /// (<see cref="ReadFoldable"/>), where a corrupt v4 surfaces as corrupt.
+    /// </summary>
+    [DoesNotReturn]
+    private static void ThrowForFoldableVersionDocument(ref Utf8JsonReader reader)
+    {
+        const int version = ProblemStatsDocument.FoldableSchemaVersion;
+        RequireShallowShape(ref reader, version, FoldableShape);
+
+        throw new FoldableStatsSchemaException(
+            version,
+            $"Stats document has schema version {version} ({FoldableShape.Description}), " +
+            $"which folds into the current version-{ProblemStatsDocument.CurrentSchemaVersion} " +
+            $"document rather than retiring: read it with ProblemStatsDocument.ReadFoldable " +
+            $"and Merge the result into the current document.");
+    }
+
+    /// <summary>
+    /// How a per-problem value is laid out: the current bare record, or the
+    /// foldable version's record wrapped in its single answer-kind entry.
+    /// The one point where the current and fold reads differ — everything
+    /// above the value (root, map, keys) is shared.
+    /// </summary>
+    private enum ProblemValueShape
+    {
+        /// <summary>The current shape: the record itself.</summary>
+        Bare,
+
+        /// <summary>The foldable v4 shape: one kind entry holding the record.</summary>
+        AnswerKindWrapped,
+    }
+
+    /// <summary>
+    /// Positioned on the version value, reads the rest of the root object —
+    /// the <c>problems</c> map and nothing else — leaving the reader on the
+    /// root object's end.
+    /// </summary>
+    private static ProblemStatsDocument ReadBody(ref Utf8JsonReader reader, ProblemValueShape shape)
     {
         List<ProblemStats>? problems = null;
 
@@ -267,7 +403,7 @@ public sealed class ProblemStatsDocumentJsonConverter : JsonConverter<ProblemSta
             switch (name)
             {
                 case "problems" when problems is null:
-                    problems = ReadProblems(ref reader);
+                    problems = ReadProblems(ref reader, shape);
                     break;
                 case "problems":
                     throw new JsonException("Duplicate ProblemStatsDocument property 'problems'.");
@@ -284,7 +420,7 @@ public sealed class ProblemStatsDocumentJsonConverter : JsonConverter<ProblemSta
         return ProblemStatsDocument.FromStats(problems);
     }
 
-    private static List<ProblemStats> ReadProblems(ref Utf8JsonReader reader)
+    private static List<ProblemStats> ReadProblems(ref Utf8JsonReader reader, ProblemValueShape shape)
     {
         if (reader.TokenType != JsonTokenType.StartObject)
             throw new JsonException(
@@ -301,19 +437,24 @@ public sealed class ProblemStatsDocumentJsonConverter : JsonConverter<ProblemSta
             if (!seen.Add(key))
                 throw new JsonException($"Duplicate problem key '{key}'.");
             reader.Read();
-            problems.Add(ReadProblemRecord(ref reader, key));
+            problems.Add(shape == ProblemValueShape.AnswerKindWrapped
+                ? ReadAnswerKindWrappedRecord(ref reader, key)
+                : ReadRecord(ref reader, key));
         }
 
         return problems;
     }
 
+    // -----------------------------------------------------------------------
+    //  The foldable v4 value layer — read on the fold path only, never
+    //  written.
+    // -----------------------------------------------------------------------
+
     /// <summary>
-    /// The answer-kind wire tokens (SPEC-scoring.md §4's kinds; the
-    /// equity-guess kind is <i>reserved</i> there, not spelled here — until
-    /// its arc lands, its token is an unknown kind like any other).
-    /// Hand-written property names, deliberately not a serializer-routed
-    /// enum: this converter owns its whole tree, and the context's closure
-    /// test pins that nothing here routes through the options.
+    /// The interim version 4's answer-kind wire tokens (SPEC-scoring.md §4's
+    /// kinds as that version spelled them; the equity-guess kind was reserved,
+    /// never spelled). Read by the fold path only: the current format carries
+    /// no kind discriminator and the writer never emits these.
     /// </summary>
     private const string CheckerPlayKindToken = "checkerPlay";
 
@@ -321,24 +462,25 @@ public sealed class ProblemStatsDocumentJsonConverter : JsonConverter<ProblemSta
     private const string CubePairKindToken = "cubePair";
 
     /// <summary>
-    /// The kind token a key's record writes under — the one derivation of
-    /// kind from the key's own grammar (dice ride on a play key and only
-    /// there, so <see cref="ProblemKey.IsCubeDecision"/> is the fact's
-    /// key-side spelling). The read side holds each record's token against
-    /// this same derivation, so the two spellings cannot drift.
+    /// The kind token a v4 record sits under, derived from the key's own
+    /// grammar (dice ride on a play key and only there, so
+    /// <see cref="ProblemKey.IsCubeDecision"/> is the fact's key-side
+    /// spelling) — the same derivation v4's writer used, held against each
+    /// record's token on the fold so a wrapper disagreeing with its key reads
+    /// as corrupt.
     /// </summary>
     private static string KindTokenFor(ProblemKey key) =>
         key.IsCubeDecision ? CubePairKindToken : CheckerPlayKindToken;
 
     /// <summary>
-    /// One problem's value: an object holding <b>exactly one</b> answer-kind
-    /// entry whose token must agree with the key's grammar. Anything else —
-    /// no kind entry, a second one, an unknown token, a token disagreeing
-    /// with the key — is corrupt. When the reserved equity-guess kind
-    /// arrives, this is the read that widens (a second sibling entry under
-    /// the same key) — the document shape does not change again.
+    /// One v4 problem value: an object holding <b>exactly one</b> answer-kind
+    /// entry whose token must agree with the key's grammar, wrapping the
+    /// record. Anything else — no kind entry, a second one, an unknown token
+    /// (the reserved equity-guess token included), a token disagreeing with
+    /// the key, the bare v3 record with no wrapper — is corrupt. As strict as
+    /// v4's own reader was: the fold reads exactly what v4 wrote.
     /// </summary>
-    private static ProblemStats ReadProblemRecord(ref Utf8JsonReader reader, ProblemKey key)
+    private static ProblemStats ReadAnswerKindWrappedRecord(ref Utf8JsonReader reader, ProblemKey key)
     {
         if (reader.TokenType != JsonTokenType.StartObject)
             throw new JsonException(
@@ -356,7 +498,7 @@ public sealed class ProblemStatsDocumentJsonConverter : JsonConverter<ProblemSta
                 $"but its record is under answer kind '{kind}'.");
 
         reader.Read();
-        var stats = ReadKindRecord(ref reader, key);
+        var stats = ReadRecord(ref reader, key);
 
         if (!reader.Read() || reader.TokenType != JsonTokenType.EndObject)
             throw new JsonException($"Problem '{key}' carries more than one answer-kind record.");
@@ -364,11 +506,16 @@ public sealed class ProblemStatsDocumentJsonConverter : JsonConverter<ProblemSta
         return stats;
     }
 
-    private static ProblemStats ReadKindRecord(ref Utf8JsonReader reader, ProblemKey key)
+    // -----------------------------------------------------------------------
+    //  The record — the current per-problem value, and the body of a v4
+    //  kind entry.
+    // -----------------------------------------------------------------------
+
+    private static ProblemStats ReadRecord(ref Utf8JsonReader reader, ProblemKey key)
     {
         if (reader.TokenType != JsonTokenType.StartObject)
             throw new JsonException(
-                $"Expected object for problem '{key}'s answer-kind record, got {reader.TokenType}.");
+                $"Expected object for problem '{key}', got {reader.TokenType}.");
 
         ScoreSegment? tally = null;
         DateTimeOffset? lastQuizzed = null;
@@ -479,14 +626,12 @@ public sealed class ProblemStatsDocumentJsonConverter : JsonConverter<ProblemSta
         foreach (var stats in value.Problems.Values.OrderBy(s => s.Key))
         {
             writer.WriteStartObject(stats.Key.ToString());
-            writer.WriteStartObject(KindTokenFor(stats.Key));
             writer.WriteStartObject("tally");
             writer.WriteNumber("submitted", stats.Tally.Submitted);
             writer.WriteNumber("correct", stats.Tally.Correct);
             writer.WriteNumber("totalEquityLoss", stats.Tally.TotalEquityLoss);
             writer.WriteEndObject();
             writer.WriteString("lastQuizzed", stats.LastQuizzed);
-            writer.WriteEndObject();
             writer.WriteEndObject();
         }
 

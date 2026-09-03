@@ -42,6 +42,7 @@ BgGame_Lib/
   CooperativeYielder.cs   — time-budgeted cooperative-yield gate (TimeProvider seam) for long WASM loops
   DistinctPositionProblemSetSource.cs — IProblemSetSource decorator: one survivor per ProblemKey; duplicate-class telemetry
   DuplicatePositionClass.cs — telemetry record: one multi-copy content class (key + member DecisionIds)
+  FoldableStatsSchemaException.cs — the deliberate foldable-version signal (v4; a JsonException subtype), carrying that version
   GameRecord.cs           — one completed game: winner seat + result + transcript
   MixedProblemSetSource.cs — IProblemSetSource decorator: composes a quiz from per-category pools by mix percentages
   MixComposition.cs       — per-enumeration composition telemetry: target (capped or capless) vs drawn + per-entry reports
@@ -62,8 +63,8 @@ BgGame_Lib/
   MatchSnapshot.cs        — immutable record
   MatchState.cs           — mutable: match length, scores, Crawford
   ProblemStats.cs         — immutable per-problem lifetime record: ProblemKey + ScoreSegment tally + last-quizzed
-  ProblemStatsDocument.cs — immutable ProblemKey-keyed collection of ProblemStats; the versioned quiz-stats document
-  ProblemStatsDocumentJsonConverter.cs — bundled converter (public): pinned v3 wire format, fail-loud reads, retired-version signal
+  ProblemStatsDocument.cs — immutable ProblemKey-keyed collection of ProblemStats; the versioned quiz-stats document; Merge + ReadFoldable
+  ProblemStatsDocumentJsonConverter.cs — bundled converter (public): pinned v3 wire format, fail-loud reads, retired-version and foldable-v4 signals
   RetiredStatsSchemaException.cs — the deliberate retired-version signal (a JsonException subtype), carrying that version
   RecordedDiceSource.cs   — replays a fixed roll sequence; throws when exhausted
   SeededDiceSource.cs     — Random(seed)-backed reproducible rolls
@@ -572,8 +573,9 @@ alongside.
 behind BgQuiz's persistent per-problem stats file (a versioned JSON document
 kept beside the quizzed `.xg`/`.xgp` corpus). The library does no I/O — the
 consumer loads bytes, deserializes, folds submissions in, and serializes back.
-Merge/concurrency machinery is deliberately absent: single-user,
-single-writer.
+Concurrency machinery is deliberately absent (single-user, single-writer);
+the one combine rule the library owns is the pure `Merge` below, which the
+v4 fold path needs.
 
 **Content-keyed (SPEC-stats-identity.md; halheinrich/backgammon#95).** The
 key is `ProblemKey` — the content identity derived from the decision's facts
@@ -618,25 +620,39 @@ asymmetry with `ProblemStats.Plus` (which takes the already-resolved
 so holding the seam there makes ambient-time misuse impossible at the type
 level, while the record-level fold stays a pure value computation.
 
-**Wire format (schema v4 — the halheinrich/backgammon#95 clean break,
-re-broken for halheinrich/backgammon#120's money keys, re-broken again
-for halheinrich/backgammon#86's answer kinds).** JSON via the bundled internal
-`ProblemStatsDocumentJsonConverter` (type-level `[JsonConverter]`, same
-pattern as BgDataTypes_Lib's `DecisionIdJsonConverter` — consumers register
-nothing): a `schemaVersion` field (`CurrentSchemaVersion`, currently 4)
-followed by a `problems` **object** keyed by canonical `ProblemKey` strings,
-each value an object holding **exactly one answer-kind record** —
-`"checkerPlay"` or `"cubePair"` (SPEC-scoring.md §4's kinds; the
-equity-guess kind is reserved there, not in this grammar) — whose body is
-the nested tally object plus the ISO 8601 last-quizzed date. The kind is
-derivable from the key's own grammar today (dice ride on play keys and only
-there), so the writer derives the token from `ProblemKey.IsCubeDecision`
-and the reader rejects a record whose token disagrees with its key; the
-token is carried anyway because the seam exists for the future where it
-stops being derivable — halheinrich/backgammon#62's equity-guess records
-arrive as sibling kind entries under the same key, extending this grammar
-rather than re-keying the document (SPEC-stats-identity.md §3, 2026-08-26
-amendment). The
+**`Merge` is the document algebra** (halheinrich/backgammon#187): `a.Merge(b)`
+returns a new document whose records are, per key, `ProblemStats.Merge` —
+tallies summed field by field through `ScoreSegment`'s `operator +` (the
+single accumulation primitive, restated nowhere), `LastQuizzed` the later of
+the two (same instant: the larger offset, so the tie is symmetric) — with
+keys present on one side only passing through unchanged. Pure: neither
+input is mutated. Commutative and associative by construction (integer
+counts exactly; the equity-loss sum up to floating-point rounding), `Empty`
+the identity on both sides — all pinned. It is a value operation, not a
+conflict resolver: it cannot tell disjoint histories from two copies of one,
+so what is sound to merge is the consumer's call. Today that is the v4 fold
+below (SPEC-stats-identity.md §3, 2026-09-02 amendment), where the two
+documents accrued disjoint sessions and summing is exactly right.
+
+**Wire format (schema v3 — the halheinrich/backgammon#95 clean break,
+re-broken for halheinrich/backgammon#120's money keys; reinstated as
+current by halheinrich/backgammon#187 after the interim v4).** JSON via the
+bundled `ProblemStatsDocumentJsonConverter` (type-level `[JsonConverter]`,
+public — see "Source generation & trimming"; consumers register nothing): a
+`schemaVersion` field (`CurrentSchemaVersion`, currently 3) followed by a
+`problems` **object** keyed by canonical `ProblemKey` strings, each value
+the **bare per-problem record** — the nested tally object plus the ISO 8601
+last-quizzed date, and nothing else. No answer-kind discriminator: the kind
+is derivable from the key's own grammar (dice ride on play keys and only
+there — `ProblemKey.IsCubeDecision`), and the per-record wrapper the interim
+v4 built was a second source of that fact, retired by SPEC-scoring.md §4's
+2026-09-02 amendment. The equity-estimate mode's stats
+(halheinrich/backgammon#62) are **reserved as flat sibling fields on this
+same record** — `equityEstimates` and `totalEquityEstimateError`, sharing
+the record's one `lastQuizzed` — and when they land they are additive under
+this version: absent reads zero, no bump; nothing added to the reader may
+make an absent optional field a break. Until then the two names are not in
+the grammar and read as unknown properties like any other (pinned). The
 key grammar itself is BgDataTypes_Lib's — see `ProblemKey`'s type docs for
 the single authoritative statement of it, including the money-only Jacoby
 suffix that v3 introduced; never restate it here. The map shape is what
@@ -649,7 +665,7 @@ first property** — the version gates how the rest is parsed; every file any
 of this library's writers ever produced satisfies this, and anything else
 reads as corrupt/foreign.
 
-Reads are fail-loud with one deliberate signal, and the signal covers
+Reads are fail-loud with two deliberate signals. **Retired** covers
 **every recognised version below the current one** — the rule is the range
 `[1, CurrentSchemaVersion)`, deliberately not a list, so a version bump
 retires its predecessor with no second edit. A genuine retired document
@@ -663,21 +679,34 @@ notice) instead of surfacing a generic load error. v1 is the `DecisionId`-keyed
 format; v2 is the `ProblemKey`-keyed format from before Jacoby entered money
 keys — its match keys are spelled exactly as later versions spell them, but
 selective carry-forward was weighed and rejected (SPEC-stats-identity.md §3),
-so a v2 file is set aside whole; v3 is the `ProblemKey`-keyed format from
-before answer kinds entered the per-problem records — retired both for the
-shape and because its cube tallies accrued doubler-half correctness under
-action-vs-action scoring, which halheinrich/backgammon#86's claim-vs-claim
-model makes incomparable with what folds after (blending the regimes in one
-lifetime tally would be quietly wrong; losing the counts is ruled
-acceptable, SPEC-scoring.md §4). Everything else — newer or unrecognised
-schema versions (distinguished "newer than this library supports" message),
-unknown or duplicate properties, missing required properties, invalid or
-duplicate or non-canonically-spelled keys (a v2 money key is now one of
-these), malformed dates, impossible tallies, and every violation of the
-answer-kind layer (no kind record, a second one, an unknown or reserved
-token, a token disagreeing with its key's grammar) — throws plain
-`JsonException`; a schema-version bump is the format's only evolution
-mechanism.
+so a v2 file is set aside whole. **Foldable** is version 4 alone
+(`FoldableSchemaVersion`): the interim answer-kind format of the
+halheinrich/backgammon#86 leg, which wrapped each record in its kind token
+and never reached production. A genuine v4 (the same shallow shape check)
+throws `FoldableStatsSchemaException` — the retired signal's exact sibling,
+a `JsonException` carrying `SchemaVersion` 4 — and the consumer reads the
+file with `ProblemStatsDocument.ReadFoldable(json)`, which parses the v4
+body by unwrapping each value's single kind record into the current shape
+(rejecting, as plain `JsonException`, anything but a well-formed v4: another
+version, a missing or second kind record, an unknown or reserved token, a
+token disagreeing with its key's grammar, v3's bare record under a v4
+version, any malformed record, trailing content), then folds the result
+with `Merge`. Two types rather than a disposition flag on one because the
+dispositions differ — retired is set aside unread, foldable is read and
+merged — and a v4's tallies are comparable with v3's under the amended Too
+Good predicate (SPEC-scoring.md §3, consequence (iv)), so losing them is
+not the ruled-acceptable cost it was. The dispatch order is the retired
+range, then the foldable version, then the newer-than-current refusal: 4 is
+the one version above current that is not refused as newer. The file dance
+— which file is the base, the rename-aside as merged — is the consumer's
+(SPEC-stats-identity.md §3, 2026-09-02 amendment). Everything else — newer
+or unrecognised schema versions (distinguished "newer than this library
+supports" message), unknown or duplicate properties, missing required
+properties, invalid or duplicate or non-canonically-spelled keys (a v2
+money key is now one of these), malformed dates, impossible tallies, a v4
+kind wrapper under the current version — throws plain `JsonException`; a
+schema-version bump is the format's only evolution mechanism beyond the
+additive optional fields reserved above.
 
 ### Stats-weighted quiz categories
 
@@ -1283,19 +1312,23 @@ public sealed record ProblemStats(ProblemKey Key, ScoreSegment Tally, DateTimeOf
     public static ProblemStats From(SubmittedCubeAction cube, DateTimeOffset quizzedAt);
     public ProblemStats Plus(SubmittedPlay play, DateTimeOffset quizzedAt);       // ArgumentException on null/mismatched key
     public ProblemStats Plus(SubmittedCubeAction cube, DateTimeOffset quizzedAt); // TWO decisions (per half), as QuizScore
+    public ProblemStats Merge(ProblemStats other);   // same key: tallies summed, LastQuizzed the later; ArgumentException otherwise
 }
 
 [JsonConverter(typeof(ProblemStatsDocumentJsonConverter))]    // bundled (public converter); consumers register nothing
 public sealed class ProblemStatsDocument                      // immutable; reference equality (see Pitfalls)
 {
-    public const int CurrentSchemaVersion = 4;   // every recognised version below it is retired
+    public const int CurrentSchemaVersion = 3;   // every recognised version below it is retired
+    public const int FoldableSchemaVersion = 4;  // the one version above it that folds instead of being refused
     public static ProblemStatsDocument Empty { get; }
     public static ProblemStatsDocument FromStats(IEnumerable<ProblemStats> stats);   // ArgumentException on duplicate key
+    public static ProblemStatsDocument ReadFoldable(string json);   // a well-formed v4 → the current shape; anything else JsonException
     public int Count { get; }
     public IReadOnlyDictionary<ProblemKey, ProblemStats> Problems { get; }
     public ProblemStatsDocument Plus(SubmittedPlay play, TimeProvider clock);        // clock resolved here — the model
     public ProblemStatsDocument Plus(SubmittedCubeAction cube, TimeProvider clock);  //   never reads ambient time;
                                                                                      //   null-key submission → same document
+    public ProblemStatsDocument Merge(ProblemStatsDocument other);   // pure per-key sum; commutative, associative, Empty identity
 }
 
 // The deliberate retired-version signal (see the stats wire-format section):
@@ -1304,6 +1337,14 @@ public sealed class RetiredStatsSchemaException : JsonException
 {
     public int SchemaVersion { get; }          // the retired version the document declared (1 or 2);
     public RetiredStatsSchemaException(int schemaVersion, string message);   // name the set-aside file from it
+}
+
+// Its sibling for the one version that folds instead (v4): catch BEFORE the
+// general JsonException, read with ReadFoldable, Merge, rename aside as merged.
+public sealed class FoldableStatsSchemaException : JsonException
+{
+    public int SchemaVersion { get; }          // 4 — carried, not assumed, exactly as the retired signal's
+    public FoldableStatsSchemaException(int schemaVersion, string message);
 }
 
 // Stats-weighted quiz categories (predicates over a decision's lifetime stats)
@@ -1501,13 +1542,21 @@ public sealed record AnswerTypeDistribution(
   properties, missing required ones, an unknown schema version, invalid or
   duplicate keys, malformed dates, and impossible tallies all throw
   `JsonException` — a version bump is the format's only evolution mechanism;
-  do not add tolerant-read behavior. The one carve-out is deliberate: a
-  genuine document in **any** retired version (every recognised version below
-  `CurrentSchemaVersion`) throws `RetiredStatsSchemaException`, and a consumer
-  that wants the honest retire-and-restart path must catch it **before** the
-  general `JsonException` (it derives from it — catch order matters) and must
-  name the file it sets aside from `SchemaVersion`, not from a constant —
-  otherwise a tester carrying two retired formats loses one to the other.
+  do not add tolerant-read behavior (the reserved equity-estimate fields are
+  the one planned exception, and they are additive optionals under the
+  current version, absent reading zero — not tolerance of the unknown). Two
+  carve-outs are deliberate: a genuine document in **any** retired version
+  (every recognised version below `CurrentSchemaVersion`) throws
+  `RetiredStatsSchemaException`, and a genuine **version-4** document throws
+  its sibling `FoldableStatsSchemaException`. A consumer that wants the
+  honest paths must catch both **before** the general `JsonException` (they
+  derive from it — catch order matters), must name the file it sets aside
+  from `SchemaVersion`, not from a constant — otherwise a tester carrying two
+  retired formats loses one to the other — and must not treat the two alike:
+  a retired file is set aside unread, a foldable file is read with
+  `ReadFoldable`, merged with `Merge`, and only then renamed aside. Catching
+  the foldable signal in a retired handler throws away tallies the amended
+  scoring makes comparable (SPEC-scoring.md §3, consequence (iv)).
 - **A new wire unit is not done until `BgGameJsonContext` declares it.** A
   type serialized through a bundled type-level `[JsonConverter]` resolves fine
   by reflection and fails only once trimming removes what it needed — so the

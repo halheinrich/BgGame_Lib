@@ -162,6 +162,50 @@ public sealed record ProblemStats(ProblemKey Key, ScoreSegment Tally, DateTimeOf
         };
     }
 
+    /// <summary>
+    /// Return a new record combining this one with <paramref name="other"/>,
+    /// a second lifetime record of the <b>same</b> problem: the tallies summed
+    /// field by field (<see cref="ScoreSegment"/>'s <c>operator +</c> — the
+    /// single accumulation primitive, so no field is restated here) and
+    /// <see cref="LastQuizzed"/> the later of the two. The per-record half of
+    /// <see cref="ProblemStatsDocument.Merge"/>, which applies it per shared
+    /// key (halheinrich/backgammon#187). Pure and commutative; associative up
+    /// to floating-point rounding of the equity-loss sum.
+    /// </summary>
+    /// <remarks>
+    /// "Later" compares instants. Two records quizzed at the same instant in
+    /// different offsets tie; the tie goes to the larger offset so the result
+    /// does not depend on which side was the receiver — commutativity holds
+    /// on the offset too, not only on the instant record equality compares.
+    /// </remarks>
+    /// <param name="other">The record to combine with this one.</param>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="other"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// Thrown when <paramref name="other"/> tracks a different
+    /// <see cref="Key"/> — merging records of two problems is data
+    /// corruption, exactly as folding under the wrong key is.
+    /// </exception>
+    public ProblemStats Merge(ProblemStats other)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+        RequireMatchingKey(other.Key, nameof(other));
+        return this with
+        {
+            Tally = Tally + other.Tally,
+            LastQuizzed = Later(LastQuizzed, other.LastQuizzed),
+        };
+    }
+
+    private static DateTimeOffset Later(DateTimeOffset a, DateTimeOffset b)
+    {
+        int byInstant = a.CompareTo(b);
+        if (byInstant != 0)
+            return byInstant > 0 ? a : b;
+        return a.Offset >= b.Offset ? a : b;
+    }
+
     private void RequireMatchingKey(ProblemKey? submissionKey, string paramName)
     {
         if (submissionKey != Key)

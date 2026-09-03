@@ -215,7 +215,7 @@ public class BgGameJsonContextTests
         using var doc = JsonDocument.Parse(JsonSerializer.Serialize(
             PopulatedDocument(), TypeInfo<ProblemStatsDocument>(ContextOnlyOptions)));
 
-        Assert.Equal(4, doc.RootElement.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(3, doc.RootElement.GetProperty("schemaVersion").GetInt32());
         var keys = doc.RootElement.GetProperty("problems")
             .EnumerateObject().Select(p => p.Name).ToList();
 
@@ -296,7 +296,6 @@ public class BgGameJsonContextTests
     [Theory]
     [InlineData(1)]
     [InlineData(2)]
-    [InlineData(3)]
     public void ContextPath_StillSignalsRetiredSchemaVersions(int version)
     {
         var json = version == 1
@@ -307,6 +306,23 @@ public class BgGameJsonContextTests
             () => JsonSerializer.Deserialize(json, TypeInfo<ProblemStatsDocument>(ContextOnlyOptions)));
 
         Assert.Equal(version, thrown.SchemaVersion);
+    }
+
+    /// <summary>
+    /// The retired signal's sibling for the foldable version 4
+    /// (halheinrich/backgammon#187) — the same read-side behaviour, so the
+    /// same mechanism gate: a v4 that folds on the reflection path must fold
+    /// on the shipped one.
+    /// </summary>
+    [Fact]
+    public void ContextPath_StillSignalsTheFoldableSchemaVersion()
+    {
+        var thrown = Assert.Throws<FoldableStatsSchemaException>(
+            () => JsonSerializer.Deserialize(
+                """{"schemaVersion":4,"problems":{}}""",
+                TypeInfo<ProblemStatsDocument>(ContextOnlyOptions)));
+
+        Assert.Equal(ProblemStatsDocument.FoldableSchemaVersion, thrown.SchemaVersion);
     }
 
     // -----------------------------------------------------------------------

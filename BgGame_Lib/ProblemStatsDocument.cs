@@ -1,6 +1,7 @@
 namespace BgGame_Lib;
 
 using System.Collections.Immutable;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using BgDataTypes_Lib;
 
@@ -20,8 +21,10 @@ using BgDataTypes_Lib;
 /// via the bundled <see cref="ProblemStatsDocumentJsonConverter"/> (type-level
 /// <c>[JsonConverter]</c>, so no consumer-side registration) with schema
 /// version <see cref="CurrentSchemaVersion"/>; see the converter for the pinned
-/// wire format, the fail-loud read posture, and the retired-version
-/// recognition signal (<see cref="RetiredStatsSchemaException"/>).
+/// wire format, the fail-loud read posture, and the two recognition signals
+/// (<see cref="RetiredStatsSchemaException"/> for versions set aside unread,
+/// <see cref="FoldableStatsSchemaException"/> for the one version read via
+/// <see cref="ReadFoldable"/> and combined via <see cref="Merge"/>).
 /// </para>
 ///
 /// <para>
@@ -56,29 +59,43 @@ public sealed class ProblemStatsDocument
     /// <summary>
     /// The schema version this library reads and writes. <b>Every</b>
     /// recognised version below it is retired — version 1 (the
-    /// <c>DecisionId</c>-keyed format), version 2 (the
+    /// <c>DecisionId</c>-keyed format) and version 2 (the
     /// <see cref="ProblemKey"/>-keyed format from before the Jacoby rule
-    /// entered money keys), and version 3 (the <see cref="ProblemKey"/>-keyed
-    /// format from before answer kinds entered the per-problem records —
-    /// halheinrich/backgammon#86) — each recognised and signalled via
+    /// entered money keys) — each recognised and signalled via
     /// <see cref="RetiredStatsSchemaException"/> carrying its own version
-    /// number; anything older or newer is rejected fail-loud. See
-    /// <see cref="ProblemStatsDocumentJsonConverter"/>.
+    /// number. Above it, <see cref="FoldableSchemaVersion"/> alone is
+    /// recognised, as foldable; anything older or newer is rejected
+    /// fail-loud. See <see cref="ProblemStatsDocumentJsonConverter"/>.
     /// </summary>
     /// <remarks>
-    /// v3 retired for two reasons, one visible in the bytes and one not. The
-    /// visible one: v4 nests each per-problem record under its answer-kind
-    /// token (SPEC-scoring.md §4's seam — see the converter). The invisible
-    /// one is why v3's <i>content</i> is not worth carrying even where it
-    /// would parse: from the halheinrich/backgammon#86 arc on, the doubler
-    /// half of a cube answer scores claim-vs-claim (SPEC-scoring.md §3), so
-    /// a v3 tally's correct-counts — accrued when that half scored
-    /// action-vs-action — are not comparable with what folds after. Losing
-    /// them is ruled acceptable; blending two scoring regimes in one
-    /// lifetime tally is not (schema evolution is unconstrained by stats
-    /// preservation — SPEC-scoring.md §4, ruled 2026-08-26).
+    /// Version 3 is the <b>reinstated</b> current version
+    /// (SPEC-stats-identity.md §3, amended 2026-09-02;
+    /// halheinrich/backgammon#187). The interim version 4 of the
+    /// halheinrich/backgammon#86 leg wrapped each per-problem record in an
+    /// answer-kind token and retired v3 on the premise that v3's cube
+    /// tallies, accrued under action-vs-action doubler scoring, were not
+    /// comparable with claim-vs-claim tallies. The amended Too Good
+    /// predicate (Too Good requires the pass) makes the two regimes coincide
+    /// on every reachable position, so the premise no longer holds; and the
+    /// kind wrapper was a second source of a fact the key's own grammar
+    /// already carries (SPEC-scoring.md §4, amended 2026-09-02). The flat
+    /// v3 record is therefore current again, byte-for-byte the format
+    /// v1.9.1 ships, and v4 — which never reached production — folds into
+    /// it rather than retiring.
     /// </remarks>
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 3;
+
+    /// <summary>
+    /// The one schema version above <see cref="CurrentSchemaVersion"/> that
+    /// the reader recognises: the interim answer-kind format, which
+    /// <b>folds</b> into the current document instead of being refused as
+    /// newer or set aside as retired. A genuine document in this version
+    /// throws <see cref="FoldableStatsSchemaException"/> on the ordinary read
+    /// path; <see cref="ReadFoldable"/> reads it into the current shape and
+    /// <see cref="Merge"/> combines it (SPEC-stats-identity.md §3, amended
+    /// 2026-09-02; halheinrich/backgammon#187).
+    /// </summary>
+    public const int FoldableSchemaVersion = 4;
 
     private readonly ImmutableDictionary<ProblemKey, ProblemStats> _problems;
 
@@ -113,6 +130,38 @@ public sealed class ProblemStatsDocument
             builder.Add(s.Key, s);
         }
         return builder.Count == 0 ? Empty : new(builder.ToImmutable());
+    }
+
+    /// <summary>
+    /// Read a document in the foldable schema version
+    /// (<see cref="FoldableSchemaVersion"/>, 4) into the current shape: each
+    /// per-problem value's single answer-kind record is unwrapped to the bare
+    /// tally-plus-date record the current format carries. This is the read
+    /// half of the fold path a <see cref="FoldableStatsSchemaException"/>
+    /// names; <see cref="Merge"/> is the combine half, and the file dance
+    /// around them — which file is the base, what the folded file is
+    /// renamed to — is the consumer's (SPEC-stats-identity.md §3, amended
+    /// 2026-09-02; halheinrich/backgammon#187).
+    /// </summary>
+    /// <param name="json">The whole document text.</param>
+    /// <returns>The document's records in the current shape.</returns>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="json"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="JsonException">
+    /// Thrown for anything but a well-formed version-4 document: another
+    /// schema version (the current one included — that is the ordinary
+    /// <see cref="JsonSerializer"/> path's), a malformed answer-kind layer
+    /// (no kind record, a second one, an unknown or reserved token, a token
+    /// disagreeing with its key's grammar, v3's bare record under a v4
+    /// version), any malformed record, invalid or duplicate keys, or
+    /// trailing content. Never the retired or foldable signals: this reader
+    /// is the fold, not the dispatcher.
+    /// </exception>
+    public static ProblemStatsDocument ReadFoldable(string json)
+    {
+        ArgumentNullException.ThrowIfNull(json);
+        return ProblemStatsDocumentJsonConverter.ReadFoldable(json);
     }
 
     /// <summary>Number of problems with a lifetime record in this document.</summary>
@@ -174,5 +223,50 @@ public sealed class ProblemStatsDocument
             ? existing.Plus(cube, quizzedAt)
             : ProblemStats.From(cube, quizzedAt);
         return new(_problems.SetItem(key, updated));
+    }
+
+    /// <summary>
+    /// Return a new document combining this one with <paramref name="other"/>
+    /// — the document algebra behind the fold path, and the one combine rule
+    /// this library owns. Per key: a problem present on both sides merges
+    /// via <see cref="ProblemStats.Merge"/> (tallies summed field by field,
+    /// <see cref="ProblemStats.LastQuizzed"/> the later of the two); a
+    /// problem present on one side only passes through unchanged. Pure:
+    /// neither input is mutated. Commutative and associative by construction
+    /// — integer counts exactly, the equity-loss sum up to floating-point
+    /// rounding — with <see cref="Empty"/> the identity on both sides; all
+    /// pinned by test.
+    /// </summary>
+    /// <remarks>
+    /// This is a value operation over two documents, not a conflict
+    /// resolver: it does not know which file was the base, which is newer, or
+    /// whether the two share a history. Concurrency machinery stays absent
+    /// (single user, single writer). What is sound to merge is the
+    /// consumer's call — today, a folded version-4 document into the set-
+    /// aside version-3 base (SPEC-stats-identity.md §3, amended 2026-09-02;
+    /// halheinrich/backgammon#187), where the two accrued disjoint sessions
+    /// and summing is exactly right. Merging two copies of one history would
+    /// double-count, and nothing here can tell.
+    /// </remarks>
+    /// <param name="other">The document to combine with this one.</param>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="other"/> is <see langword="null"/>.
+    /// </exception>
+    public ProblemStatsDocument Merge(ProblemStatsDocument other)
+    {
+        ArgumentNullException.ThrowIfNull(other);
+        if (other._problems.IsEmpty)
+            return this;
+        if (_problems.IsEmpty)
+            return other;
+
+        var builder = _problems.ToBuilder();
+        foreach (var (key, theirs) in other._problems)
+        {
+            builder[key] = builder.TryGetValue(key, out var mine)
+                ? mine.Merge(theirs)
+                : theirs;
+        }
+        return new(builder.ToImmutable());
     }
 }

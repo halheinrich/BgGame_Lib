@@ -192,4 +192,133 @@ public class ProblemStatsDocumentTests
         Assert.Throws<ArgumentNullException>(() => ProblemStatsDocument.FromStats(null!));
         Assert.Throws<ArgumentException>(() => ProblemStatsDocument.FromStats([null!]));
     }
+
+    // =====================================================================
+    //  Merge — the document algebra behind the v4 fold
+    //  (SPEC-stats-identity.md §3, amended 2026-09-02; halheinrich/backgammon#187)
+    // =====================================================================
+    //
+    // Per key: shared keys merge via ProblemStats.Merge (tallies summed field
+    // by field, LastQuizzed the later), one-sided keys pass through. The
+    // equity losses below are dyadic rationals (0.125, 0.25, 0.5) so the
+    // sums are exact and the associativity pin is a genuine equality, not a
+    // rounding coincidence.
+
+    private static readonly ProblemKey KeyC = ProblemKey.Parse($"{Board}/3a1/1c/42");
+
+    private static ProblemStatsDocument Doc(params ProblemStats[] stats) =>
+        ProblemStatsDocument.FromStats(stats);
+
+    private static void AssertSameRecords(ProblemStatsDocument expected, ProblemStatsDocument actual)
+    {
+        Assert.Equal(expected.Count, actual.Count);
+        foreach (var (key, record) in expected.Problems)
+            Assert.Equal(record, Assert.Contains(key, actual.Problems));
+    }
+
+    [Fact]
+    public void Merge_DisjointKeys_CarriesBothSidesThroughUnchanged()
+    {
+        var a = new ProblemStats(KeyA, new ScoreSegment(3, 2, 0.125), T1);
+        var b = new ProblemStats(KeyB, new ScoreSegment(2, 1, 0.25), T2);
+
+        var merged = Doc(a).Merge(Doc(b));
+
+        AssertSameRecords(Doc(a, b), merged);
+    }
+
+    [Fact]
+    public void Merge_SharedKey_SumsTalliesAndTakesTheLaterLastQuizzed()
+    {
+        var mine = new ProblemStats(KeyA, new ScoreSegment(3, 2, 0.125), T1);
+        var theirs = new ProblemStats(KeyA, new ScoreSegment(2, 0, 0.25), T2);
+
+        var merged = Doc(mine).Merge(Doc(theirs));
+
+        Assert.Equal(1, merged.Count);
+        Assert.Equal(
+            new ProblemStats(KeyA, new ScoreSegment(5, 2, 0.375), T2),
+            merged.Problems[KeyA]);
+    }
+
+    [Fact]
+    public void Merge_SharedAndDisjointKeysTogether()
+    {
+        var left = Doc(
+            new ProblemStats(KeyA, new ScoreSegment(1, 1, 0.0), T1),
+            new ProblemStats(KeyB, new ScoreSegment(2, 1, 0.5), T2));
+        var right = Doc(
+            new ProblemStats(KeyB, new ScoreSegment(4, 3, 0.25), T1),
+            new ProblemStats(KeyC, new ScoreSegment(1, 0, 0.125), T1));
+
+        var merged = left.Merge(right);
+
+        AssertSameRecords(
+            Doc(
+                new ProblemStats(KeyA, new ScoreSegment(1, 1, 0.0), T1),
+                new ProblemStats(KeyB, new ScoreSegment(6, 4, 0.75), T2),
+                new ProblemStats(KeyC, new ScoreSegment(1, 0, 0.125), T1)),
+            merged);
+    }
+
+    [Fact]
+    public void Merge_EmptyIsTheIdentity_OnBothSides()
+    {
+        var doc = Doc(
+            new ProblemStats(KeyA, new ScoreSegment(3, 2, 0.125), T1),
+            new ProblemStats(KeyB, new ScoreSegment(2, 1, 0.25), T2));
+
+        AssertSameRecords(doc, doc.Merge(ProblemStatsDocument.Empty));
+        AssertSameRecords(doc, ProblemStatsDocument.Empty.Merge(doc));
+        Assert.Equal(0, ProblemStatsDocument.Empty.Merge(ProblemStatsDocument.Empty).Count);
+    }
+
+    [Fact]
+    public void Merge_IsCommutative()
+    {
+        var left = Doc(
+            new ProblemStats(KeyA, new ScoreSegment(1, 1, 0.0), T1),
+            new ProblemStats(KeyB, new ScoreSegment(2, 1, 0.5), T2));
+        var right = Doc(
+            new ProblemStats(KeyB, new ScoreSegment(4, 3, 0.25), T1),
+            new ProblemStats(KeyC, new ScoreSegment(1, 0, 0.125), T1));
+
+        AssertSameRecords(left.Merge(right), right.Merge(left));
+    }
+
+    [Fact]
+    public void Merge_IsAssociative()
+    {
+        var a = Doc(new ProblemStats(KeyA, new ScoreSegment(1, 1, 0.125), T1));
+        var b = Doc(
+            new ProblemStats(KeyA, new ScoreSegment(2, 0, 0.25), T2),
+            new ProblemStats(KeyB, new ScoreSegment(1, 1, 0.0), T1));
+        var c = Doc(
+            new ProblemStats(KeyA, new ScoreSegment(4, 4, 0.5), T1),
+            new ProblemStats(KeyC, new ScoreSegment(3, 1, 0.125), T2));
+
+        AssertSameRecords(a.Merge(b).Merge(c), a.Merge(b.Merge(c)));
+    }
+
+    [Fact]
+    public void Merge_LeavesBothInputsUnchanged()
+    {
+        var mine = Doc(new ProblemStats(KeyA, new ScoreSegment(3, 2, 0.125), T1));
+        var theirs = Doc(new ProblemStats(KeyA, new ScoreSegment(2, 0, 0.25), T2));
+
+        var merged = mine.Merge(theirs);
+
+        Assert.NotSame(mine, merged);
+        Assert.NotSame(theirs, merged);
+        Assert.Equal(new ScoreSegment(3, 2, 0.125), mine.Problems[KeyA].Tally);
+        Assert.Equal(T1, mine.Problems[KeyA].LastQuizzed);
+        Assert.Equal(new ScoreSegment(2, 0, 0.25), theirs.Problems[KeyA].Tally);
+        Assert.Equal(new ScoreSegment(5, 2, 0.375), merged.Problems[KeyA].Tally);
+    }
+
+    [Fact]
+    public void Merge_Null_Throws()
+    {
+        Assert.Throws<ArgumentNullException>(() => ProblemStatsDocument.Empty.Merge(null!));
+    }
 }

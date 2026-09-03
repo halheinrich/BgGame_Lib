@@ -29,18 +29,25 @@ public class ProblemStatsDocumentSerializationTests
     private static readonly DateTimeOffset T2 = new(2026, 7, 19, 8, 30, 0, TimeSpan.FromHours(-7));
 
     /// <summary>
-    /// The bare tally-plus-date record body. Under v4 it sits inside a
-    /// problem's answer-kind wrapper; under v2 and v3 it was, verbatim, the
-    /// whole per-problem value (those versions had no kind layer) — the
-    /// genuine retired-document rows reuse it directly, which keeps them
-    /// non-vacuous real documents of their era rather than mocked-up shapes.
+    /// The bare tally-plus-date record: the whole per-problem value under v3
+    /// (current, reinstated by halheinrich/backgammon#187) and, verbatim,
+    /// under v2 too — so the genuine retired-document rows reuse it directly
+    /// and stay non-vacuous real documents of their era. Under the foldable
+    /// v4 it sat inside a problem's answer-kind wrapper, which is what the
+    /// fold path unwraps.
     /// </summary>
     private const string TallyRecord =
         """{"tally":{"submitted":1,"correct":1,"totalEquityLoss":0},"lastQuizzed":"2026-07-18T19:04:11+00:00"}""";
 
-    /// <summary>A well-formed v4 checker-play problem value, for malformed-document scaffolding.</summary>
-    private const string ValidPlayRecord =
-        """{"checkerPlay":{"tally":{"submitted":1,"correct":1,"totalEquityLoss":0},"lastQuizzed":"2026-07-18T19:04:11+00:00"}}""";
+    /// <summary>The record <see cref="TallyRecord"/> spells, for read-back assertions.</summary>
+    private static ProblemStats TallyRecordAs(ProblemKey key) =>
+        new(key, new ScoreSegment(1, 1, 0.0), T1);
+
+    /// <summary>A well-formed v4 checker-play problem value: the record under its kind wrapper.</summary>
+    private const string V4PlayValue = $$"""{"checkerPlay":{{TallyRecord}}}""";
+
+    /// <summary>A well-formed v4 cube-pair problem value.</summary>
+    private const string V4CubeValue = $$"""{"cubePair":{{TallyRecord}}}""";
 
     private static ProblemStatsDocument PopulatedDocument() =>
         ProblemStatsDocument.FromStats(
@@ -50,6 +57,30 @@ public class ProblemStatsDocumentSerializationTests
             new ProblemStats(MoneyJacobyKey, new ScoreSegment(1, 1, 0.0), T1),
             new ProblemStats(MoneyNoJacobyKey, new ScoreSegment(4, 1, 0.5), T2),
         ]);
+
+    /// <summary>
+    /// <see cref="PopulatedDocument"/> as the current writer emits it — the
+    /// pinned v3 wire form, byte for byte: version first, the map ordered by
+    /// canonical key (ordinal: the money keys before the match keys, the cube
+    /// key before the play key it prefixes), each value the bare record.
+    /// </summary>
+    private const string PinnedWireForm =
+        $$$$"""{"schemaVersion":3,"problems":{"{{{{MoneyJacobyKeyText}}}}":{"tally":{"submitted":1,"correct":1,"totalEquityLoss":0},"lastQuizzed":"2026-07-18T19:04:11+00:00"},"{{{{MoneyNoJacobyKeyText}}}}":{"tally":{"submitted":4,"correct":1,"totalEquityLoss":0.5},"lastQuizzed":"2026-07-19T08:30:00-07:00"},"{{{{CubeKeyText}}}}":{"tally":{"submitted":2,"correct":1,"totalEquityLoss":0.08},"lastQuizzed":"2026-07-19T08:30:00-07:00"},"{{{{PlayKeyText}}}}":{"tally":{"submitted":3,"correct":2,"totalEquityLoss":0.125},"lastQuizzed":"2026-07-18T19:04:11+00:00"}}}""";
+
+    /// <summary>
+    /// <see cref="PopulatedDocument"/> as the interim v4 writer emitted it —
+    /// the same records, each wrapped in the kind token its key derives. A
+    /// genuine document of that version, for the fold path.
+    /// </summary>
+    private const string PopulatedV4Document =
+        $$$$$"""{"schemaVersion":4,"problems":{"{{{{{MoneyJacobyKeyText}}}}}":{"checkerPlay":{"tally":{"submitted":1,"correct":1,"totalEquityLoss":0},"lastQuizzed":"2026-07-18T19:04:11+00:00"}},"{{{{{MoneyNoJacobyKeyText}}}}}":{"checkerPlay":{"tally":{"submitted":4,"correct":1,"totalEquityLoss":0.5},"lastQuizzed":"2026-07-19T08:30:00-07:00"}},"{{{{{CubeKeyText}}}}}":{"cubePair":{"tally":{"submitted":2,"correct":1,"totalEquityLoss":0.08},"lastQuizzed":"2026-07-19T08:30:00-07:00"}},"{{{{{PlayKeyText}}}}}":{"checkerPlay":{"tally":{"submitted":3,"correct":2,"totalEquityLoss":0.125},"lastQuizzed":"2026-07-18T19:04:11+00:00"}}}}""";
+
+    private static void AssertSameRecords(ProblemStatsDocument expected, ProblemStatsDocument actual)
+    {
+        Assert.Equal(expected.Count, actual.Count);
+        foreach (var (key, record) in expected.Problems)
+            Assert.Equal(record, Assert.Contains(key, actual.Problems));
+    }
 
     // ------------------------------------------------------------------
     //  Round-trips — plain JsonSerializer, no options: the converter is
@@ -64,7 +95,7 @@ public class ProblemStatsDocumentSerializationTests
 
         Assert.NotNull(back);
         Assert.Equal(0, back.Count);
-        Assert.Equal("""{"schemaVersion":4,"problems":{}}""", json);
+        Assert.Equal("""{"schemaVersion":3,"problems":{}}""", json);
     }
 
     [Fact]
@@ -84,6 +115,16 @@ public class ProblemStatsDocumentSerializationTests
     }
 
     [Fact]
+    public void Serialize_WritesThePinnedWireForm()
+    {
+        // The whole document against a literal: the v3 form v1.9.1 ships,
+        // reinstated as current (SPEC-stats-identity.md §3, amended
+        // 2026-09-02). A tester's live bgquiz-stats.json is this, byte for
+        // byte modulo indentation.
+        Assert.Equal(PinnedWireForm, JsonSerializer.Serialize(PopulatedDocument()));
+    }
+
+    [Fact]
     public void Serialize_KeysTheMapByCanonicalProblemKeyStrings()
     {
         var json = JsonSerializer.Serialize(PopulatedDocument());
@@ -93,17 +134,19 @@ public class ProblemStatsDocumentSerializationTests
     }
 
     [Fact]
-    public void Serialize_NestsEachRecordUnderItsKeyDerivedAnswerKind()
+    public void Serialize_WritesEachRecordBare_NoAnswerKindWrapper()
     {
-        // The kind is derivable from the key's own grammar today (dice ride
-        // on play keys and only there); the wire carries it anyway — the
-        // SPEC-scoring §4 seam v4 exists for — and the written token must be
-        // the key-derived one, per key polarity.
+        // The v4 kind wrapper was a second spelling of a fact the key's own
+        // grammar carries (dice ride on play keys and only there);
+        // SPEC-scoring.md §4's 2026-09-02 amendment retires it. Each value
+        // opens straight on the record, whatever the key's polarity.
         var json = JsonSerializer.Serialize(PopulatedDocument());
 
-        Assert.Contains($"\"{CubeKeyText}\":{{\"cubePair\":", json);
-        Assert.Contains($"\"{PlayKeyText}\":{{\"checkerPlay\":", json);
-        Assert.Contains($"\"{MoneyJacobyKeyText}\":{{\"checkerPlay\":", json);
+        Assert.Contains($"\"{CubeKeyText}\":{{\"tally\":", json);
+        Assert.Contains($"\"{PlayKeyText}\":{{\"tally\":", json);
+        Assert.Contains($"\"{MoneyJacobyKeyText}\":{{\"tally\":", json);
+        Assert.DoesNotContain("\"cubePair\"", json);
+        Assert.DoesNotContain("\"checkerPlay\"", json);
     }
 
     [Fact]
@@ -167,6 +210,35 @@ public class ProblemStatsDocumentSerializationTests
     }
 
     // ------------------------------------------------------------------
+    //  Genuine v3 documents read as current. These rows were the retired-v3
+    //  fixtures of the interim v4 era, promoted: the same bytes a tester's
+    //  live bgquiz-stats.json holds, now the current format again.
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void Deserialize_GenuineEmptyV3Document_ReadsAsCurrent()
+    {
+        var doc = JsonSerializer.Deserialize<ProblemStatsDocument>(
+            """{"schemaVersion":3,"problems":{}}""");
+
+        Assert.NotNull(doc);
+        Assert.Equal(0, doc.Count);
+    }
+
+    [Theory]
+    [InlineData(PlayKeyText)]
+    [InlineData(MoneyJacobyKeyText)]
+    public void Deserialize_GenuineV3Record_ReadsAsCurrent(string keyText)
+    {
+        var doc = JsonSerializer.Deserialize<ProblemStatsDocument>(
+            $$$"""{"schemaVersion":3,"problems":{"{{{keyText}}}":{{{TallyRecord}}}}}""");
+
+        Assert.NotNull(doc);
+        var key = ProblemKey.Parse(keyText);
+        Assert.Equal(TallyRecordAs(key), Assert.Contains(key, doc.Problems));
+    }
+
+    // ------------------------------------------------------------------
     //  Retired-version recognition — the deliberate signal, which covers
     //  EVERY recognised version below the current one, each carrying its own
     //  version number (the consumer names the file it sets aside from it).
@@ -199,12 +271,6 @@ public class ProblemStatsDocumentSerializationTests
         // reinterpret it.
         { 2, $$$"""{"schemaVersion":2,"problems":{"{{{RetiredV2MoneyKeyText}}}":{{{TallyRecord}}}}}""" },
         { 2, """{"schemaVersion":2,"problems":{"not even a key":42}}""" },
-        { 3, """{"schemaVersion":3,"problems":{}}""" },
-        // A real v3 record is the bare tally body with no answer-kind
-        // wrapper — exactly what a tester's live bgquiz-stats.json holds.
-        { 3, $$$"""{"schemaVersion":3,"problems":{"{{{PlayKeyText}}}":{{{TallyRecord}}}}}""" },
-        { 3, $$$"""{"schemaVersion":3,"problems":{"{{{MoneyJacobyKeyText}}}":{{{TallyRecord}}}}}""" },
-        { 3, """{"schemaVersion":3,"problems":{"not even a key":42}}""" },
     };
 
     [Theory]
@@ -226,8 +292,9 @@ public class ProblemStatsDocumentSerializationTests
     public void TheVersionJustSuperseded_IsRetired_CarryingItsOwnNumber()
     {
         // The retirement rule is a range — "every recognised version below
-        // current" — so this survives the next bump untouched: whatever v3
-        // becomes v-previous, its problems-map body still reads as retired.
+        // current" — so this survives the next bump untouched: whatever the
+        // current version, its predecessor's problems-map body still reads
+        // as retired.
         int superseded = ProblemStatsDocument.CurrentSchemaVersion - 1;
 
         var ex = Assert.Throws<RetiredStatsSchemaException>(
@@ -265,11 +332,6 @@ public class ProblemStatsDocumentSerializationTests
     [InlineData("""{"schemaVersion":2,"problems":{},"problems":{}}""")]  // duplicate problems
     [InlineData("""{"problems":{},"schemaVersion":2}""")]              // version not first
     [InlineData("""{"schemaVersion":2,"decisions":[]}""")]             // a v1 body under a v2 version
-    [InlineData("""{"schemaVersion":3}""")]                            // missing problems
-    [InlineData("""{"schemaVersion":3,"problems":[]}""")]              // problems not an object
-    [InlineData("""{"schemaVersion":3,"problems":{},"extra":0}""")]    // property beyond problems
-    [InlineData("""{"problems":{},"schemaVersion":3}""")]              // version not first
-    [InlineData("""{"schemaVersion":3,"decisions":[]}""")]             // a v1 body under a v3 version
     public void Deserialize_ClaimsARetiredVersionButIsNotShapedLikeIt_ThrowsPlainJsonException(
         string json)
     {
@@ -288,17 +350,91 @@ public class ProblemStatsDocumentSerializationTests
     }
 
     // ------------------------------------------------------------------
+    //  Foldable-version recognition — the retired signal's sibling, for the
+    //  one version above current that is read and merged rather than set
+    //  aside (SPEC-stats-identity.md §3, amended 2026-09-02;
+    //  halheinrich/backgammon#187). Same three directions: genuine signals,
+    //  misshapen reads as corrupt, and the signal is catchable generically.
+    // ------------------------------------------------------------------
+
+    /// <summary>
+    /// Genuine v4 documents. Recognition is as shallow as the retired
+    /// signal's: the problems map is skipped, so a v4 whose records are
+    /// corrupt still signals foldable here — the fold path is where its
+    /// content is validated and fails.
+    /// </summary>
+    public static TheoryData<string> GenuineFoldableDocuments => new()
+    {
+        """{"schemaVersion":4,"problems":{}}""",
+        $$$"""{"schemaVersion":4,"problems":{"{{{PlayKeyText}}}":{{{V4PlayValue}}}}}""",
+        $$$"""{"schemaVersion":4,"problems":{"{{{CubeKeyText}}}":{{{V4CubeValue}}}}}""",
+        PopulatedV4Document,
+        """{"schemaVersion":4,"problems":{"not even a key":42}}""",
+    };
+
+    [Theory]
+    [MemberData(nameof(GenuineFoldableDocuments))]
+    public void Deserialize_GenuineFoldableDocument_SignalsFoldable(string json)
+    {
+        var ex = Assert.Throws<FoldableStatsSchemaException>(
+            () => JsonSerializer.Deserialize<ProblemStatsDocument>(json));
+
+        Assert.Equal(ProblemStatsDocument.FoldableSchemaVersion, ex.SchemaVersion);
+        Assert.Equal(4, ex.SchemaVersion);
+        Assert.Contains("4", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("fold", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("ReadFoldable", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FoldableSignal_IsCatchableAsJsonException_SoGenericFailLoudStillHolds()
+    {
+        var ex = Assert.ThrowsAny<JsonException>(
+            () => JsonSerializer.Deserialize<ProblemStatsDocument>(
+                """{"schemaVersion":4,"problems":{}}"""));
+
+        Assert.IsType<FoldableStatsSchemaException>(ex);
+    }
+
+    [Fact]
+    public void FoldableSignal_IsNotTheRetiredSignal()
+    {
+        // The two dispositions differ (set aside unread vs. read and merged),
+        // so a consumer's retired catch must not swallow a v4.
+        var ex = Assert.ThrowsAny<JsonException>(
+            () => JsonSerializer.Deserialize<ProblemStatsDocument>(
+                """{"schemaVersion":4,"problems":{}}"""));
+
+        Assert.IsNotType<RetiredStatsSchemaException>(ex);
+    }
+
+    [Theory]
+    [InlineData("""{"schemaVersion":4}""")]                            // missing problems
+    [InlineData("""{"schemaVersion":4,"problems":[]}""")]              // problems not an object
+    [InlineData("""{"schemaVersion":4,"problems":{},"extra":0}""")]    // property beyond problems
+    [InlineData("""{"schemaVersion":4,"problems":{},"problems":{}}""")]  // duplicate problems
+    [InlineData("""{"problems":{},"schemaVersion":4}""")]              // version not first
+    [InlineData("""{"schemaVersion":4,"decisions":[]}""")]             // a v1 body under a v4 version
+    public void Deserialize_ClaimsTheFoldableVersionButIsNotShapedLikeIt_ThrowsPlainJsonException(
+        string json)
+    {
+        DeserializeThrows(json);
+    }
+
+    // ------------------------------------------------------------------
     //  Fail-loud reads — versions and document shape.
     // ------------------------------------------------------------------
 
     [Fact]
     public void Deserialize_NewerSchemaVersion_ThrowsNamingBothVersions()
     {
+        // 5 is above the foldable 4: newer, refused, plain JsonException —
+        // Assert.Throws demands the exact type, so neither signal fires.
         var ex = DeserializeThrows("""{"schemaVersion":5,"problems":{}}""");
 
         Assert.Contains("newer", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("5", ex.Message, StringComparison.Ordinal);
-        Assert.Contains("4", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("3", ex.Message, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -313,12 +449,14 @@ public class ProblemStatsDocumentSerializationTests
 
     [Theory]
     [InlineData("""{"problems":{}}""")]                                   // missing schemaVersion
-    [InlineData("""{"schemaVersion":4}""")]                               // missing problems
-    [InlineData("""{"schemaVersion":"4","problems":{}}""")]               // version not a number
-    [InlineData("""{"schemaVersion":4,"problems":[]}""")]                 // problems not an object
-    [InlineData("""{"schemaVersion":4,"problems":{},"extra":0}""")]       // unknown root property
-    [InlineData("""{"schemaVersion":4,"problems":{},"problems":{}}""")]   // duplicate problems
-    [InlineData("""{"schemaVersion":4,"schemaVersion":4,"problems":{}}""")]   // duplicate version
+    [InlineData("""{"schemaVersion":3}""")]                               // missing problems
+    [InlineData("""{"schemaVersion":"3","problems":{}}""")]               // version not a number
+    [InlineData("""{"schemaVersion":3,"problems":[]}""")]                 // problems not an object
+    [InlineData("""{"schemaVersion":3,"problems":{},"extra":0}""")]       // unknown root property
+    [InlineData("""{"schemaVersion":3,"problems":{},"problems":{}}""")]   // duplicate problems
+    [InlineData("""{"schemaVersion":3,"schemaVersion":3,"problems":{}}""")]   // duplicate version
+    [InlineData("""{"problems":{},"schemaVersion":3}""")]                 // version not first
+    [InlineData("""{"schemaVersion":3,"decisions":[]}""")]                // a v1 body under the current version
     public void Deserialize_MalformedDocumentShape_Throws(string json)
     {
         DeserializeThrows(json);
@@ -328,9 +466,9 @@ public class ProblemStatsDocumentSerializationTests
     public void Deserialize_DuplicateProblemKey_Throws()
     {
         var ex = DeserializeThrows($$$"""
-            {"schemaVersion":4,"problems":{
-              "{{{PlayKeyText}}}":{{{ValidPlayRecord}}},
-              "{{{PlayKeyText}}}":{{{ValidPlayRecord}}}
+            {"schemaVersion":3,"problems":{
+              "{{{PlayKeyText}}}":{{{TallyRecord}}},
+              "{{{PlayKeyText}}}":{{{TallyRecord}}}
             }}
             """);
 
@@ -345,7 +483,7 @@ public class ProblemStatsDocumentSerializationTests
     [InlineData(RetiredV2MoneyKeyText)] // the v2 money spelling is not in the v3 grammar
     public void Deserialize_InvalidProblemKey_Throws(string key)
     {
-        DeserializeThrows($$$"""{"schemaVersion":4,"problems":{"{{{key}}}":{{{ValidPlayRecord}}}}}""");
+        DeserializeThrows($$$"""{"schemaVersion":3,"problems":{"{{{key}}}":{{{TallyRecord}}}}}""");
     }
 
     [Fact]
@@ -355,56 +493,34 @@ public class ProblemStatsDocumentSerializationTests
         // wrongly, so the strict parse — and therefore the document read —
         // must reject them or one problem could split across two map entries.
         DeserializeThrows(
-            $$$"""{"schemaVersion":4,"problems":{"{{{Board}}}/7a7/1c/13":{{{ValidPlayRecord}}}}}""");
-    }
-
-    /// <summary>
-    /// Problem values that violate v4's answer-kind layer, each labeled by
-    /// the rule it violates. The reserved equity-guess token is deliberately
-    /// among the unknowns: reserved means not yet in the grammar
-    /// (SPEC-scoring.md §4), so until its arc lands it must fail exactly as
-    /// garbage does.
-    /// </summary>
-    public static TheoryData<string, string> MalformedKindLayers => new()
-    {
-        { "problem value not an object", "42" },
-        { "no answer-kind record", "{}" },
-        { "unknown answer kind", $$"""{"bogus":{{TallyRecord}}}""" },
-        { "reserved equity-guess kind not yet in the grammar", $$"""{"equityGuess":{{TallyRecord}}}""" },
-        { "kind token is case-sensitive", $$"""{"CheckerPlay":{{TallyRecord}}}""" },
-        { "kind disagreeing with the key's grammar", $$"""{"cubePair":{{TallyRecord}}}""" },
-        { "a second answer-kind record", $$"""{"checkerPlay":{{TallyRecord}},"checkerPlay":{{TallyRecord}}}""" },
-        { "v3's bare record shape (no kind wrapper)", TallyRecord },
-        { "kind record not an object", """{"checkerPlay":42}""" },
-    };
-
-    [Theory]
-    [MemberData(nameof(MalformedKindLayers))]
-#pragma warning disable xUnit1026 // the label parameter exists to name the case in test output
-    public void Deserialize_MalformedAnswerKindLayer_Throws(string label, string value)
-#pragma warning restore xUnit1026
-    {
-        DeserializeThrows($$$"""{"schemaVersion":4,"problems":{"{{{PlayKeyText}}}":{{{value}}}}}""");
+            $$$"""{"schemaVersion":3,"problems":{"{{{Board}}}/7a7/1c/13":{{{TallyRecord}}}}}""");
     }
 
     [Fact]
-    public void Deserialize_CubeKeyUnderCheckerPlayKind_Throws()
+    public void Deserialize_V4KindWrapperUnderTheCurrentVersion_Throws()
     {
-        // The mirror of the play-key mismatch row above: kind-vs-key
-        // agreement is checked per polarity, not just one way round.
-        var value = $$"""{"checkerPlay":{{TallyRecord}}}""";
-
-        DeserializeThrows($$$"""{"schemaVersion":4,"problems":{"{{{CubeKeyText}}}":{{{value}}}}}""");
+        // The current value is the bare record: a v4 kind wrapper under a v3
+        // version is an unknown record property, not a tolerated alias.
+        DeserializeThrows($$$"""{"schemaVersion":3,"problems":{"{{{PlayKeyText}}}":{{{V4PlayValue}}}}}""");
     }
 
     /// <summary>
-    /// Answer-kind record values that must be rejected, each labeled by the
-    /// rule it violates.
+    /// Per-problem record values that must be rejected, each labeled by the
+    /// rule it violates. The reserved equity-estimate fields
+    /// (SPEC-scoring.md §4; halheinrich/backgammon#62) are deliberately
+    /// among the unknowns: reserved means not yet in the grammar, so until
+    /// their arc lands they fail exactly as any unknown property does — and
+    /// when it lands they become additive optionals under this same version,
+    /// absent reading zero, and these two rows flip to acceptance pins.
     /// </summary>
     public static TheoryData<string, string> MalformedRecords => new()
     {
         { "unknown record property",
           """{"tally":{"submitted":1,"correct":1,"totalEquityLoss":0},"lastQuizzed":"2026-07-18T19:04:11+00:00","extra":0}""" },
+        { "reserved equity-estimate count not yet in the grammar",
+          """{"tally":{"submitted":1,"correct":1,"totalEquityLoss":0},"lastQuizzed":"2026-07-18T19:04:11+00:00","equityEstimates":0}""" },
+        { "reserved equity-estimate error not yet in the grammar",
+          """{"tally":{"submitted":1,"correct":1,"totalEquityLoss":0},"lastQuizzed":"2026-07-18T19:04:11+00:00","totalEquityEstimateError":0}""" },
         { "unknown tally property",
           """{"tally":{"submitted":1,"correct":1,"totalEquityLoss":0,"extra":0},"lastQuizzed":"2026-07-18T19:04:11+00:00"}""" },
         { "correct greater than submitted",
@@ -421,6 +537,7 @@ public class ProblemStatsDocumentSerializationTests
           """{"tally":{"submitted":1,"correct":1,"totalEquityLoss":0}}""" },
         { "tally missing submitted",
           """{"tally":{"correct":1,"totalEquityLoss":0},"lastQuizzed":"2026-07-18T19:04:11+00:00"}""" },
+        { "record not an object", "42" },
     };
 
     [Theory]
@@ -429,8 +546,174 @@ public class ProblemStatsDocumentSerializationTests
     public void Deserialize_MalformedProblemRecord_Throws(string label, string record)
 #pragma warning restore xUnit1026
     {
+        DeserializeThrows($$$"""{"schemaVersion":3,"problems":{"{{{PlayKeyText}}}":{{{record}}}}}""");
+    }
+
+    // ------------------------------------------------------------------
+    //  The fold path — ProblemStatsDocument.ReadFoldable reads a well-formed
+    //  v4 into the current shape and nothing else.
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void ReadFoldable_EmptyV4_ReadsEmpty()
+    {
+        var doc = ProblemStatsDocument.ReadFoldable("""{"schemaVersion":4,"problems":{}}""");
+
+        Assert.Equal(0, doc.Count);
+    }
+
+    [Fact]
+    public void ReadFoldable_PopulatedV4_UnwrapsEveryRecordIntoTheCurrentShape()
+    {
+        // The v4 writer's own emission of PopulatedDocument reads back as
+        // PopulatedDocument: every kind wrapper unwrapped, both key
+        // polarities, the non-UTC offset kept.
+        var doc = ProblemStatsDocument.ReadFoldable(PopulatedV4Document);
+
+        AssertSameRecords(PopulatedDocument(), doc);
+    }
+
+    [Theory]
+    [InlineData(PlayKeyText, V4PlayValue)]
+    [InlineData(MoneyJacobyKeyText, V4PlayValue)]
+    [InlineData(CubeKeyText, V4CubeValue)]
+    public void ReadFoldable_SingleRecord_UnwrapsItsKindWrapper(string keyText, string value)
+    {
+        var doc = ProblemStatsDocument.ReadFoldable(
+            $$$"""{"schemaVersion":4,"problems":{"{{{keyText}}}":{{{value}}}}}""");
+
+        var key = ProblemKey.Parse(keyText);
+        Assert.Equal(TallyRecordAs(key), Assert.Contains(key, doc.Problems));
+    }
+
+    [Fact]
+    public void ReadFoldable_ThenMerge_ThenSerialize_WritesTheCurrentForm()
+    {
+        // The whole fold in this library's terms: a set-aside v3 base, a v4
+        // read foldable, merged per key, written as current. The play key is
+        // on both sides (tallies summed, the later date kept); the cube key
+        // on the v4 side only passes through.
+        var v3Base = JsonSerializer.Deserialize<ProblemStatsDocument>(
+            $$$"""{"schemaVersion":3,"problems":{"{{{PlayKeyText}}}":{{{TallyRecord}}}}}""")!;
+        var v4 = ProblemStatsDocument.ReadFoldable(
+            $$$$$"""{"schemaVersion":4,"problems":{"{{{{{CubeKeyText}}}}}":{"cubePair":{"tally":{"submitted":2,"correct":1,"totalEquityLoss":0.08},"lastQuizzed":"2026-07-19T08:30:00-07:00"}},"{{{{{PlayKeyText}}}}}":{"checkerPlay":{"tally":{"submitted":3,"correct":2,"totalEquityLoss":0.125},"lastQuizzed":"2026-07-19T08:30:00-07:00"}}}}""");
+
+        var json = JsonSerializer.Serialize(v3Base.Merge(v4));
+
+        Assert.Equal(
+            $$$$"""{"schemaVersion":3,"problems":{"{{{{CubeKeyText}}}}":{"tally":{"submitted":2,"correct":1,"totalEquityLoss":0.08},"lastQuizzed":"2026-07-19T08:30:00-07:00"},"{{{{PlayKeyText}}}}":{"tally":{"submitted":4,"correct":3,"totalEquityLoss":0.125},"lastQuizzed":"2026-07-19T08:30:00-07:00"}}}""",
+            json);
+    }
+
+    [Fact]
+    public void ReadFoldable_NullJson_Throws()
+    {
+        Assert.Throws<ArgumentNullException>(() => ProblemStatsDocument.ReadFoldable(null!));
+    }
+
+    private static JsonException ReadFoldableThrows(string json) =>
+        Assert.Throws<JsonException>(() => ProblemStatsDocument.ReadFoldable(json));
+
+    [Theory]
+    [InlineData("""{"schemaVersion":3,"problems":{}}""")]   // the current version: the ordinary path's
+    [InlineData("""{"schemaVersion":2,"problems":{}}""")]   // retired — never a signal from here
+    [InlineData("""{"schemaVersion":1,"decisions":[]}""")]
+    [InlineData("""{"schemaVersion":5,"problems":{}}""")]   // newer
+    [InlineData("""{"schemaVersion":0,"problems":{}}""")]   // unsupported
+    [InlineData("""{"schemaVersion":"4","problems":{}}""")] // version not a number
+    [InlineData("""{"problems":{},"schemaVersion":4}""")]   // version not first
+    [InlineData("null")]
+    [InlineData("{}")]
+    [InlineData("[]")]
+    [InlineData("")]
+    [InlineData("  ")]
+    public void ReadFoldable_NotAVersion4Document_ThrowsPlainJsonException(string json)
+    {
+        // Assert.Throws demands the exact type: the fold reads, it never
+        // signals — a retired or foldable exception here would be a bug.
+        ReadFoldableThrows(json);
+    }
+
+    [Theory]
+    [InlineData("""{"schemaVersion":4}""")]                              // missing problems
+    [InlineData("""{"schemaVersion":4,"problems":[]}""")]                // problems not an object
+    [InlineData("""{"schemaVersion":4,"problems":{},"extra":0}""")]      // unknown root property
+    [InlineData("""{"schemaVersion":4,"problems":{},"problems":{}}""")]  // duplicate problems
+    [InlineData("""{"schemaVersion":4,"problems":{}} x""")]              // trailing content
+    [InlineData("""{"schemaVersion":4,"problems":{}}{}""")]              // a second document
+    public void ReadFoldable_MalformedDocumentShape_Throws(string json)
+    {
+        ReadFoldableThrows(json);
+    }
+
+    [Fact]
+    public void ReadFoldable_DuplicateProblemKey_Throws()
+    {
+        var ex = ReadFoldableThrows($$$"""
+            {"schemaVersion":4,"problems":{
+              "{{{PlayKeyText}}}":{{{V4PlayValue}}},
+              "{{{PlayKeyText}}}":{{{V4PlayValue}}}
+            }}
+            """);
+
+        Assert.Contains("Duplicate", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("bad key")]
+    [InlineData(RetiredV2MoneyKeyText)]
+    public void ReadFoldable_InvalidProblemKey_Throws(string key)
+    {
+        ReadFoldableThrows($$$"""{"schemaVersion":4,"problems":{"{{{key}}}":{{{V4PlayValue}}}}}""");
+    }
+
+    /// <summary>
+    /// Problem values that violate v4's answer-kind layer, each labeled by
+    /// the rule it violates — the interim reader's own strictness, kept on
+    /// the fold path: it reads exactly what v4 wrote. The reserved
+    /// equity-guess token is among the unknowns because v4 never spelled it.
+    /// </summary>
+    public static TheoryData<string, string> MalformedKindLayers => new()
+    {
+        { "problem value not an object", "42" },
+        { "no answer-kind record", "{}" },
+        { "unknown answer kind", $$"""{"bogus":{{TallyRecord}}}""" },
+        { "reserved equity-guess kind v4 never spelled", $$"""{"equityGuess":{{TallyRecord}}}""" },
+        { "kind token is case-sensitive", $$"""{"CheckerPlay":{{TallyRecord}}}""" },
+        { "kind disagreeing with the key's grammar", $$"""{"cubePair":{{TallyRecord}}}""" },
+        { "a second answer-kind record", $$"""{"checkerPlay":{{TallyRecord}},"checkerPlay":{{TallyRecord}}}""" },
+        { "v3's bare record shape (no kind wrapper)", TallyRecord },
+        { "kind record not an object", """{"checkerPlay":42}""" },
+    };
+
+    [Theory]
+    [MemberData(nameof(MalformedKindLayers))]
+#pragma warning disable xUnit1026 // the label parameter exists to name the case in test output
+    public void ReadFoldable_MalformedAnswerKindLayer_Throws(string label, string value)
+#pragma warning restore xUnit1026
+    {
+        ReadFoldableThrows($$$"""{"schemaVersion":4,"problems":{"{{{PlayKeyText}}}":{{{value}}}}}""");
+    }
+
+    [Fact]
+    public void ReadFoldable_CubeKeyUnderCheckerPlayKind_Throws()
+    {
+        // The mirror of the play-key mismatch row above: kind-vs-key
+        // agreement is checked per polarity, not just one way round.
+        ReadFoldableThrows($$$"""{"schemaVersion":4,"problems":{"{{{CubeKeyText}}}":{{{V4PlayValue}}}}}""");
+    }
+
+    [Theory]
+    [MemberData(nameof(MalformedRecords))]
+#pragma warning disable xUnit1026 // the label parameter exists to name the case in test output
+    public void ReadFoldable_MalformedProblemRecord_Throws(string label, string record)
+#pragma warning restore xUnit1026
+    {
+        // The record inside a v4 kind wrapper is held to the same rules as a
+        // current record — the fold validates, it does not launder.
         var value = $$"""{"checkerPlay":{{record}}}""";
 
-        DeserializeThrows($$$"""{"schemaVersion":4,"problems":{"{{{PlayKeyText}}}":{{{value}}}}}""");
+        ReadFoldableThrows($$$"""{"schemaVersion":4,"problems":{"{{{PlayKeyText}}}":{{{value}}}}}""");
     }
 }

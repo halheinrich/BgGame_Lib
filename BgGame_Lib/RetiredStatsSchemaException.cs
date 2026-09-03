@@ -10,12 +10,9 @@ using BgDataTypes_Lib;
 /// <see cref="ProblemStatsDocument.CurrentSchemaVersion"/>, not one pinned
 /// version: today version 1 (the <c>DecisionId</c>-keyed format, retired by
 /// the clean break to <see cref="ProblemKey"/> keying —
-/// halheinrich/backgammon#95), version 2 (the <see cref="ProblemKey"/>-keyed
+/// halheinrich/backgammon#95) and version 2 (the <see cref="ProblemKey"/>-keyed
 /// format from before the Jacoby rule entered money keys —
-/// halheinrich/backgammon#120), and version 3 (the
-/// <see cref="ProblemKey"/>-keyed format from before answer kinds entered the
-/// per-problem records — halheinrich/backgammon#86). Each throws carrying its
-/// <b>own</b>
+/// halheinrich/backgammon#120). Each throws carrying its <b>own</b>
 /// <see cref="SchemaVersion"/>, which is what lets a consumer name the file it
 /// sets aside per version (SPEC-stats-identity.md §3).
 ///
@@ -36,7 +33,15 @@ using BgDataTypes_Lib;
 /// Deriving from <see cref="JsonException"/> is deliberate: a consumer that
 /// only knows the general fail-loud contract still fails loud. Versions
 /// <b>newer</b> than <see cref="ProblemStatsDocument.CurrentSchemaVersion"/>
-/// are not retired and keep the plain fail-loud posture.
+/// are not retired and keep the plain fail-loud posture — with one named
+/// exception: version <see cref="ProblemStatsDocument.FoldableSchemaVersion"/>
+/// (4), the interim answer-kind format, is neither retired nor refused but
+/// <b>folded</b>, and signals through this type's sibling
+/// <see cref="FoldableStatsSchemaException"/> (halheinrich/backgammon#187).
+/// The two are distinct types because the dispositions differ: retired is
+/// set aside unread, foldable is read and merged. A consumer that catches
+/// this type and sets the file aside must not catch the sibling the same
+/// way.
 /// </para>
 /// </summary>
 public sealed class RetiredStatsSchemaException : JsonException

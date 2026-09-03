@@ -200,6 +200,85 @@ public class ProblemStatsTests
         Assert.Throws<ArgumentNullException>(() => s.Plus((SubmittedCubeAction)null!, T2));
     }
 
+    // ---------------------------------------------------------------------
+    //  Merge — the per-record half of ProblemStatsDocument.Merge
+    //  (halheinrich/backgammon#187)
+    // ---------------------------------------------------------------------
+
+    [Fact]
+    public void Merge_SumsTalliesFieldByField_AndTakesTheLaterLastQuizzed()
+    {
+        var mine = new ProblemStats(Key, new ScoreSegment(3, 2, 0.125), T1);
+        var theirs = new ProblemStats(Key, new ScoreSegment(2, 0, 0.25), T2);
+
+        Assert.Equal(new ProblemStats(Key, new ScoreSegment(5, 2, 0.375), T2), mine.Merge(theirs));
+    }
+
+    [Fact]
+    public void Merge_TakesTheLaterLastQuizzed_WhicheverSideCarriesIt()
+    {
+        var earlier = new ProblemStats(Key, new ScoreSegment(1, 1, 0.0), T1);
+        var later = new ProblemStats(Key, new ScoreSegment(1, 0, 0.0), T2);
+
+        Assert.Equal(T2, earlier.Merge(later).LastQuizzed);
+        Assert.Equal(T2, later.Merge(earlier).LastQuizzed);
+    }
+
+    [Fact]
+    public void Merge_IsCommutative()
+    {
+        var a = new ProblemStats(Key, new ScoreSegment(3, 2, 0.125), T1);
+        var b = new ProblemStats(Key, new ScoreSegment(2, 0, 0.25), T2);
+
+        Assert.Equal(a.Merge(b), b.Merge(a));
+    }
+
+    [Fact]
+    public void Merge_SameInstantInDifferentOffsets_IsSymmetricOnTheOffsetToo()
+    {
+        // Record equality compares instants, so the tie could hide an
+        // order-dependent offset; the tie goes to the larger offset so the
+        // serialized date is the same whichever side was the receiver.
+        var utc = new ProblemStats(Key, new ScoreSegment(1, 1, 0.0), T1);
+        var west = new ProblemStats(Key, new ScoreSegment(1, 0, 0.0), T1.ToOffset(TimeSpan.FromHours(-7)));
+
+        Assert.Equal(utc.Merge(west).LastQuizzed.Offset, west.Merge(utc).LastQuizzed.Offset);
+        Assert.Equal(T1, utc.Merge(west).LastQuizzed);
+    }
+
+    [Fact]
+    public void Merge_LeavesBothInputsUnchanged()
+    {
+        var mine = new ProblemStats(Key, new ScoreSegment(3, 2, 0.125), T1);
+        var theirs = new ProblemStats(Key, new ScoreSegment(2, 0, 0.25), T2);
+
+        var merged = mine.Merge(theirs);
+
+        Assert.NotSame(mine, merged);
+        Assert.Equal(new ScoreSegment(3, 2, 0.125), mine.Tally);
+        Assert.Equal(T1, mine.LastQuizzed);
+        Assert.Equal(new ScoreSegment(2, 0, 0.25), theirs.Tally);
+    }
+
+    [Fact]
+    public void Merge_MismatchedKey_Throws()
+    {
+        var s = new ProblemStats(Key, new ScoreSegment(1, 1, 0.0), T1);
+
+        Assert.Throws<ArgumentException>(
+            () => s.Merge(new ProblemStats(OtherKey, new ScoreSegment(1, 1, 0.0), T1)));
+        Assert.Throws<ArgumentException>(
+            () => s.Merge(new ProblemStats(CubeKey, new ScoreSegment(2, 2, 0.0), T1)));
+    }
+
+    [Fact]
+    public void Merge_Null_Throws()
+    {
+        var s = new ProblemStats(Key, new ScoreSegment(1, 1, 0.0), T1);
+
+        Assert.Throws<ArgumentNullException>(() => s.Merge(null!));
+    }
+
     [Fact]
     public void RecordEquality_HoldsByValue()
     {
