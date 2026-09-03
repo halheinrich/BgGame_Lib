@@ -37,7 +37,7 @@ spec/
 BgGame_Lib/
   BgGame_Lib.csproj
   AgentContractViolationException.cs — seat + kind + offending value; thrown by MatchRunner
-  AnswerTypeDistribution.cs — immutable per-pool answer-type tally: checker plays + the five cube verdicts
+  AnswerTypeDistribution.cs — immutable per-pool answer-type tally: checker plays + the four cube verdicts
   BgGameJsonContext.cs    — source-generated JsonSerializerContext over the wire surface (see "Source generation & trimming")
   CooperativeYielder.cs   — time-budgeted cooperative-yield gate (TimeProvider seam) for long WASM loops
   DistinctPositionProblemSetSource.cs — IProblemSetSource decorator: one survivor per ProblemKey; duplicate-class telemetry
@@ -908,8 +908,15 @@ stays responsive without paying a per-item cost.
 `AnswerTypeDistribution` counts a pool of decisions by the kind of answer each
 one calls for: checker plays, plus one bucket per cube verdict from
 SPEC-scoring §3's table (`NoDoubleTake`, `DoubleTake`, `DoublePass`,
-`TooGoodPass`, `TooGoodTake` — halheinrich/backgammon#86's claim vocabulary),
-with a derived `Total`. It answers a **collection-scoped** question — "what is
+`TooGoodPass` — halheinrich/backgammon#86's claim vocabulary, cut to the four
+reachable pairs by halheinrich/backgammon#187's 2026-09-02 amendment: Too
+Good requires the pass, so the `TooGoodTake` bucket of the interim shape is
+retired and its former population — playing on beats being taken, yet the
+opponent takes — is `NoDoubleTake` by ruling), with a derived `Total`. The
+retired pair stays representable in `CubeClaimPair`; the classifier names
+it in a throwing arm rather than housing it, so a producer that started
+deriving it again fails by name instead of counting silently. It answers a
+**collection-scoped** question — "what is
 my saved corpus actually made of?", the curation-bias check a beta tester
 asked for (over-saved takes, no too-good positions at all) — not a
 session-scoped one. Immutable, `ScoreSegment`'s shape throughout: `Empty`, a
@@ -929,7 +936,8 @@ instances combine.
   derived truth at the exact `NoDoubleEquity == 1` boundary — is **just too
   good** and houses in `TooGoodPass` (SPEC-scoring §3, ruled 2026-09-01):
   the too-good posture's degenerate point, not a sixth bucket, so the match
-  is total over the closed 3×2 and a legal corpus can never fail to fold.
+  is total over every pair the producer derives and a legal corpus can never
+  fail to fold.
 - **The fold contract leg 2 depends on: exactly one bucket per `Add`.** Hence
   `Total` equals the number of decisions folded. That is what lets BgQuiz's
   Home derive its "N decisions matched" count from `Total` instead of running a
@@ -1395,17 +1403,18 @@ public sealed record MixCompositionEntry(
     int Drawn);                                      // actual, incl. redistribution top-ups
 
 // Answer-type distribution over a decision pool (collection-scoped, not a score).
-// The five cube buckets are named for the CubeClaimPair instances they count.
+// The four cube buckets are named for the CubeClaimPair instances they count.
 public sealed record AnswerTypeDistribution(
     int CheckerPlays,
-    int NoDoubleTake, int DoubleTake, int DoublePass, int TooGoodPass, int TooGoodTake)
+    int NoDoubleTake, int DoubleTake, int DoublePass, int TooGoodPass)
 {
     public static AnswerTypeDistribution Empty { get; }
-    public int Total { get; }                        // derived: sum of the six buckets
+    public int Total { get; }                        // derived: sum of the five buckets
     public AnswerTypeDistribution Add(DecisionData decision);
         // increments EXACTLY ONE bucket → Total == decisions folded (see Pitfalls);
         // cube decisions keyed by BestClaimPair (the producer verdict); the
-        // boundary-composed incoherent NoDoublePass houses in TooGoodPass by ruling
+        // boundary-composed incoherent NoDoublePass houses in TooGoodPass by ruling;
+        // the retired TooGoodTake (never derived) throws ArgumentOutOfRangeException
     public static AnswerTypeDistribution operator +(
         AnswerTypeDistribution a, AnswerTypeDistribution b);   // null-guards both operands
 }

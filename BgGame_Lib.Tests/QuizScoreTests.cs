@@ -141,8 +141,14 @@ public class QuizScoreTests
     // suite re-derives a claim.
     //
     //   BestDoublerAction = Double  iff min(E_DT, 1) > E_ND
-    //   BestDoublerClaim  = TooGood iff best action is NoDouble and E_ND > 1
     //   BestTakerAction   = Take    iff E_DT < 1
+    //   BestDoublerClaim  = TooGood iff best action is NoDouble and E_ND > 1
+    //                                   and best taker action is Pass
+    //
+    // The third term is the 2026-09-02 amendment (halheinrich/backgammon#187):
+    // Too Good requires the pass, so (Too good, Take) is never derived as
+    // truth — it stays a submittable answer, scored like any other wrong
+    // claim.
 
     private static DecisionData CubeDecision(double noDoubleEquity, double doubleTakeEquity) => new()
     {
@@ -153,11 +159,14 @@ public class QuizScoreTests
 
     /// <summary>
     /// The analysed decision whose derived truth is <paramref name="truth"/> —
-    /// one fixture per cell of <see cref="CubeClaimPair"/>'s closed 3×2. Five
-    /// cells are verdicts off the tie boundaries; the sixth, the incoherent
-    /// (No double, Pass), is reachable as truth only ON the
-    /// <c>NoDoubleEquity == 1</c> boundary, where the ruled tie-breaks compose
-    /// it (SPEC-scoring §3, amended 2026-09-01).
+    /// one fixture per cell of <see cref="CubeClaimPair"/>'s closed 3×2 that
+    /// the producer derives. Four cells are the reachable verdicts off the
+    /// tie boundaries; the incoherent (No double, Pass) is reachable as truth
+    /// only ON the <c>NoDoubleEquity == 1</c> boundary, where the ruled
+    /// tie-breaks compose it (SPEC-scoring §3, amended 2026-09-01). The sixth
+    /// cell, (Too good, Take), has no fixture: since Too Good requires the
+    /// pass (amended 2026-09-02) no equities derive it, and asking for one is
+    /// a suite bug.
     /// </summary>
     private static DecisionData TruthFixture(CubeClaimPair truth) =>
         (truth.Claim, truth.Taker) switch
@@ -166,10 +175,17 @@ public class QuizScoreTests
             (CubeClaim.Double,   CubeAction.Take) => CubeDecision(0.30, 0.60),
             (CubeClaim.Double,   CubeAction.Pass) => CubeDecision(0.50, 1.20),
             (CubeClaim.TooGood,  CubeAction.Pass) => CubeDecision(1.30, 1.50),
-            (CubeClaim.TooGood,  CubeAction.Take) => CubeDecision(1.10, 0.90),
             (CubeClaim.NoDouble, CubeAction.Pass) => CubeDecision(1.00, 1.20),
-            _ => throw new ArgumentOutOfRangeException(nameof(truth), truth, "Not a CubeClaimPair cell."),
+            _ => throw new ArgumentOutOfRangeException(nameof(truth), truth,
+                "Not a CubeClaimPair cell the producer derives as truth."),
         };
+
+    /// <summary>
+    /// XG's "Too good to double/Take" — playing on (1.10) beats being taken
+    /// (0.90) and the opponent takes. Its derived truth is No double / Take by
+    /// the 2026-09-02 ruling; it is the position that decided the amendment.
+    /// </summary>
+    private static DecisionData PlayingOnBeatsBeingTaken => CubeDecision(1.10, 0.90);
 
     /// <summary>The whole closed 3×2 of answers, in the ruled claim-axis order.</summary>
     public static TheoryData<CubeClaim, CubeAction> AllAnswers => new()
@@ -182,6 +198,20 @@ public class QuizScoreTests
         { CubeClaim.TooGood,  CubeAction.Pass },
     };
 
+    /// <summary>
+    /// The cells the producer derives as truth: the four reachable verdicts
+    /// plus the boundary-composed incoherent cell. <see cref="AllAnswers"/>
+    /// minus (Too good, Take).
+    /// </summary>
+    public static TheoryData<CubeClaim, CubeAction> AllTruths => new()
+    {
+        { CubeClaim.NoDouble, CubeAction.Take },
+        { CubeClaim.NoDouble, CubeAction.Pass },
+        { CubeClaim.Double,   CubeAction.Take },
+        { CubeClaim.Double,   CubeAction.Pass },
+        { CubeClaim.TooGood,  CubeAction.Pass },
+    };
+
     private static SubmittedCubeAction Submit(CubeClaimPair truth, CubeClaimPair answer) =>
         SubmittedCubeAction.From(problemKey: null, answer, TruthFixture(truth));
 
@@ -190,7 +220,7 @@ public class QuizScoreTests
     // ---------------------------------------------------------------------
 
     [Theory]
-    [MemberData(nameof(AllAnswers))]
+    [MemberData(nameof(AllTruths))]
     public void TruthFixtures_DeriveTheCellTheyAreIndexedBy(CubeClaim claim, CubeAction taker)
     {
         // A grid failure below can then never be mistaken for a mis-built
@@ -200,8 +230,17 @@ public class QuizScoreTests
         Assert.Equal(cell, TruthFixture(cell).BestClaimPair);
     }
 
+    [Fact]
+    public void PlayingOnBeatsBeingTakenFixture_DerivesNoDoubleTake()
+    {
+        // The retired verdict's former population derives No double / Take
+        // now (SPEC-scoring §3, amended 2026-09-02) — pinned so the scoring
+        // pin below cannot pass on a mis-built fixture.
+        Assert.Equal(CubeClaimPair.NoDoubleTake, PlayingOnBeatsBeingTaken.BestClaimPair);
+    }
+
     // ---------------------------------------------------------------------
-    //  The 6×6 submission-vs-truth grid
+    //  The 5×6 truth-vs-submission grid — five derivable truths, six answers
     // ---------------------------------------------------------------------
 
     /// <summary>
@@ -210,7 +249,8 @@ public class QuizScoreTests
     /// the truth pair. The diagonal is doubly correct; every off-diagonal
     /// cell is wrong on exactly the halves that differ — including the two
     /// no-double claims, which share a board action and are still
-    /// distinguished.
+    /// distinguished. The retired (Too good, Take) appears only as an answer:
+    /// no truth row exists for it, because no position derives it.
     /// </summary>
     [Theory]
     // truth = (No double, Take)   — E_ND 0.20 / E_DT 0.10
@@ -241,13 +281,6 @@ public class QuizScoreTests
     [InlineData(CubeClaim.TooGood,  CubeAction.Pass, CubeClaim.Double,   CubeAction.Pass, false, true)]
     [InlineData(CubeClaim.TooGood,  CubeAction.Pass, CubeClaim.TooGood,  CubeAction.Take, true,  false)]
     [InlineData(CubeClaim.TooGood,  CubeAction.Pass, CubeClaim.TooGood,  CubeAction.Pass, true,  true)]
-    // truth = (Too good, Take)    — E_ND 1.10 / E_DT 0.90 (a match-only verdict)
-    [InlineData(CubeClaim.TooGood,  CubeAction.Take, CubeClaim.NoDouble, CubeAction.Take, false, true)]
-    [InlineData(CubeClaim.TooGood,  CubeAction.Take, CubeClaim.NoDouble, CubeAction.Pass, false, false)]
-    [InlineData(CubeClaim.TooGood,  CubeAction.Take, CubeClaim.Double,   CubeAction.Take, false, true)]
-    [InlineData(CubeClaim.TooGood,  CubeAction.Take, CubeClaim.Double,   CubeAction.Pass, false, false)]
-    [InlineData(CubeClaim.TooGood,  CubeAction.Take, CubeClaim.TooGood,  CubeAction.Take, true,  true)]
-    [InlineData(CubeClaim.TooGood,  CubeAction.Take, CubeClaim.TooGood,  CubeAction.Pass, true,  false)]
     // truth = (No double, Pass)   — E_ND 1.00 / E_DT 1.20, the boundary-composed
     //                               incoherent cell as derived truth
     [InlineData(CubeClaim.NoDouble, CubeAction.Pass, CubeClaim.NoDouble, CubeAction.Take, true,  false)]
@@ -279,12 +312,13 @@ public class QuizScoreTests
     }
 
     [Theory]
-    [MemberData(nameof(AllAnswers))]
+    [MemberData(nameof(AllTruths))]
     public void PlusCube_TheDiagonalIsFullyCorrectAtZeroLoss(CubeClaim claim, CubeAction taker)
     {
         // Answering a position with its own derived truth pair: both halves
         // right, both equity losses zero. True of the boundary-composed
         // incoherent cell too — it is the truth there, so it scores as one.
+        // (Too good, Take) has no diagonal cell: nothing derives it as truth.
         var truth = new CubeClaimPair(claim, taker);
         var s = QuizScore.Empty.Plus(Submit(truth, truth));
 
@@ -306,7 +340,6 @@ public class QuizScoreTests
     // truth claim,                 truth taker,      answered claim
     [InlineData(CubeClaim.NoDouble, CubeAction.Take, CubeClaim.TooGood)]
     [InlineData(CubeClaim.TooGood,  CubeAction.Pass, CubeClaim.NoDouble)]
-    [InlineData(CubeClaim.TooGood,  CubeAction.Take, CubeClaim.NoDouble)]
     [InlineData(CubeClaim.NoDouble, CubeAction.Pass, CubeClaim.TooGood)]
     public void PlusCube_WrongClaimOverTheRightAction_IsIncorrectAtZeroEquityLoss(
         CubeClaim truthClaim, CubeAction truthTaker, CubeClaim answeredClaim)
@@ -318,6 +351,29 @@ public class QuizScoreTests
             answeredClaim.ToCubeAction(),
             TruthFixture(truth).BestDoublerAction);          // same board action ...
         Assert.False(submission.DoublerCorrect);             // ... different claim
+        Assert.Equal(0.0, submission.DoublerEquityLoss);
+
+        var s = QuizScore.Empty.Plus(submission);
+
+        Assert.Equal(new ScoreSegment(Submitted: 1, Correct: 0, TotalEquityLoss: 0.0), s.DoubleDecisions);
+        Assert.Equal(new ScoreSegment(Submitted: 1, Correct: 1, TotalEquityLoss: 0.0), s.TakeDecisions);
+    }
+
+    [Fact]
+    public void PlusCube_RetiredTooGoodTakeAnswer_ScoresAsAnyOtherWrongClaim()
+    {
+        // The type keeps (Too good, Take) representable; the scoring must not
+        // special-case it. Submitted against the very position XG calls "Too
+        // good to double/Take" — No double / Take by the 2026-09-02 ruling —
+        // it is a wrong claim over the right board action: incorrect at
+        // +0.000 on the doubler half, right take on the taker half, the same
+        // segments any other wrong claim over the right action folds to.
+        var submission = SubmittedCubeAction.From(
+            problemKey: null, CubeClaimPair.TooGoodTake, PlayingOnBeatsBeingTaken);
+
+        Assert.Equal(CubeClaimPair.NoDoubleTake, submission.BestDecision);
+        Assert.False(submission.DoublerCorrect);
+        Assert.True(submission.TakerCorrect);
         Assert.Equal(0.0, submission.DoublerEquityLoss);
 
         var s = QuizScore.Empty.Plus(submission);
