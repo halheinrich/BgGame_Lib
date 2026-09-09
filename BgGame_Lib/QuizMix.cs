@@ -3,6 +3,7 @@ namespace BgGame_Lib;
 using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using BgDataTypes_Lib;
 
 /// <summary>
@@ -235,12 +236,21 @@ public sealed class QuizMix : IEquatable<QuizMix>, IJsonDocument<QuizMix>
     public static bool operator !=(QuizMix? left, QuizMix? right) => !(left == right);
 
     /// <summary>
+    /// The single place this type names its serializer metadata: the writer
+    /// and both <see cref="IJsonDocument{TSelf}"/> readers resolve their
+    /// <see cref="JsonTypeInfo{T}"/> from here, so the source-generated
+    /// context is named once rather than at each of the three call sites.
+    /// </summary>
+    private static JsonTypeInfo<QuizMix> CanonicalTypeInfo =>
+        BgGameJsonContext.Default.QuizMix;
+
+    /// <summary>
     /// Serializes this mix to its canonical JSON representation — the inverse
     /// of <see cref="FromJson"/>. See <see cref="QuizMixJsonConverter"/> for
     /// the pinned wire format.
     /// </summary>
     /// <returns>A JSON object string carrying every property of this instance.</returns>
-    public string ToJson() => JsonSerializer.Serialize(this, BgGameJsonContext.Default.QuizMix);
+    public string ToJson() => JsonSerializer.Serialize(this, CanonicalTypeInfo);
 
     /// <summary>
     /// Deserializes a <see cref="QuizMix"/> from its canonical JSON
@@ -266,7 +276,7 @@ public sealed class QuizMix : IEquatable<QuizMix>, IJsonDocument<QuizMix>
     /// </exception>
     /// <exception cref="JsonException"><paramref name="json"/> is malformed or violates the wire contract.</exception>
     public static QuizMix FromJson(string json) =>
-        CanonicalJson.Parse(json, BgGameJsonContext.Default.QuizMix);
+        CanonicalJson.Parse(json, CanonicalTypeInfo);
 
     /// <summary>
     /// Non-throwing counterpart to <see cref="FromJson"/>, and the tolerant
@@ -295,5 +305,5 @@ public sealed class QuizMix : IEquatable<QuizMix>, IJsonDocument<QuizMix>
     /// react to a failed restore without catching exceptions.
     /// </returns>
     public static bool TryFromJson(string? json, out QuizMix mix) =>
-        CanonicalJson.TryParse(json, BgGameJsonContext.Default.QuizMix, Empty, out mix);
+        CanonicalJson.TryParse(json, CanonicalTypeInfo, Empty, out mix);
 }
