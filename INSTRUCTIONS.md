@@ -798,9 +798,13 @@ by reference and report identical configs unequal, so the class hand-rolls
   construction-rule violation — category reconstruction routes through the
   internal `QuizCategory.Create` seam and the mix through the public
   constructor, so wire-level bounds have the same single definition as
-  in-memory ones. Persistence is the `FilterConfig` trio: `ToJson` /
-  `FromJson` (fail loud) / `TryFromJson` (absent or corrupt restores to
-  `Empty` + `false` — the localStorage path).
+  in-memory ones. Persistence is `IJsonDocument<QuizMix>` (BgDataTypes_Lib),
+  which `QuizMix` implements: `ToJson` / `FromJson` (fail loud) /
+  `TryFromJson` (absent or corrupt restores to `Empty` + `false` — the
+  localStorage path). The interface, not a convention copied from a sibling
+  type, is where the restore policy and the exception taxonomy are stated;
+  the two readers forward to `CanonicalJson`, which holds their
+  single-sourced bodies (halheinrich/backgammon#190 leg (C)).
 
 ### Stats-weighted composing source
 
@@ -1377,8 +1381,9 @@ public sealed record QuizMixEntry
 }
 
 [JsonConverter(typeof(QuizMixJsonConverter))]   // bundled (public converter); consumers register nothing
-public sealed class QuizMix : IEquatable<QuizMix>   // immutable; hand-written value equality — Entries
-{                                                   // as an ordered sequence + both scalars (see Pitfalls)
+public sealed class QuizMix                        // immutable; hand-written value equality — Entries
+    : IEquatable<QuizMix>, IJsonDocument<QuizMix>  // as an ordered sequence + both scalars (see Pitfalls)
+{                                                  // IJsonDocument (BgDataTypes_Lib): the three below
     public const int CurrentSchemaVersion = 1;
     public static QuizMix Empty { get; }        // blank: composition layer fully inert
     public QuizMix(IEnumerable<QuizMixEntry> entries, int? quizLength = null, bool randomOrder = true);
@@ -1387,8 +1392,8 @@ public sealed class QuizMix : IEquatable<QuizMix>   // immutable; hand-written v
     public int? QuizLength { get; }             // null = size to the deduped union of selected pools
     public bool RandomOrder { get; }            // default true; false = fully deterministic
     public bool IsPassthrough { get; }          // Entries.Count == 0
-    public string ToJson();
-    public static QuizMix FromJson(string json);                    // fail loud
+    public string ToJson();                                         // canonical form
+    public static QuizMix FromJson(string json);                    // fail loud; → CanonicalJson.Parse
     public static bool TryFromJson(string? json, out QuizMix mix);  // absent/corrupt → Empty + false
 }
 

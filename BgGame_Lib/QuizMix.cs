@@ -3,6 +3,7 @@ namespace BgGame_Lib;
 using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using BgDataTypes_Lib;
 
 /// <summary>
 /// The stats-weighted quiz composition config: an ordered set of
@@ -45,10 +46,14 @@ using System.Text.Json.Serialization;
 /// persist a mix (e.g. browser localStorage) round-trip through
 /// <see cref="ToJson"/> / <see cref="FromJson"/>, with
 /// <see cref="TryFromJson"/> as the absent-or-corrupt-restores-to-default
-/// path — the <c>FilterConfig</c> persistence trio. All three resolve their
-/// metadata from <see cref="BgGameJsonContext"/> rather than by runtime
-/// reflection, so the trio is trim-safe from here without a consumer naming
-/// anything (halheinrich/backgammon#129).
+/// path — the three members of <see cref="IJsonDocument{TSelf}"/>, which this
+/// type implements. That contract — not a convention copied from a sibling
+/// type — is where the restore policy and the exception taxonomy are stated;
+/// the two readers here forward to <see cref="CanonicalJson"/>, which holds
+/// their single-sourced bodies (halheinrich/backgammon#190 leg (C)). All
+/// three resolve their metadata from <see cref="BgGameJsonContext"/> rather
+/// than by runtime reflection, so the trio is trim-safe from here without a
+/// consumer naming anything (halheinrich/backgammon#129).
 /// </para>
 ///
 /// <para>
@@ -65,7 +70,7 @@ using System.Text.Json.Serialization;
 /// </para>
 /// </summary>
 [JsonConverter(typeof(QuizMixJsonConverter))]
-public sealed class QuizMix : IEquatable<QuizMix>
+public sealed class QuizMix : IEquatable<QuizMix>, IJsonDocument<QuizMix>
 {
     /// <summary>
     /// The schema version this library reads and writes. Reads reject any
@@ -239,8 +244,18 @@ public sealed class QuizMix : IEquatable<QuizMix>
 
     /// <summary>
     /// Deserializes a <see cref="QuizMix"/> from its canonical JSON
-    /// representation — the inverse of <see cref="ToJson"/>. Fail-loud: see
-    /// <see cref="QuizMixJsonConverter"/> for everything a read rejects.
+    /// representation — the inverse of <see cref="ToJson"/>. The fail-loud
+    /// half of <see cref="IJsonDocument{TSelf}"/>, whose contract states what
+    /// a read rejects and with which exception; the body forwards to
+    /// <see cref="CanonicalJson.Parse{T}"/>, where that taxonomy is written
+    /// once for every document in the arc.
+    ///
+    /// <para>
+    /// What is this type's own is the wire contract being enforced:
+    /// <see cref="QuizMixJsonConverter"/> pins the property names and the
+    /// schema version, and rejects any other version, so a read that survives
+    /// this call yields a mix that also satisfies the set-level rules.
+    /// </para>
     /// </summary>
     /// <param name="json">A JSON object string, typically produced by <see cref="ToJson"/>.</param>
     /// <returns>The materialized mix.</returns>
@@ -250,24 +265,21 @@ public sealed class QuizMix : IEquatable<QuizMix>
     /// no mix.
     /// </exception>
     /// <exception cref="JsonException"><paramref name="json"/> is malformed or violates the wire contract.</exception>
-    public static QuizMix FromJson(string json)
-    {
-        ArgumentNullException.ThrowIfNull(json);
-
-        return JsonSerializer.Deserialize(json, BgGameJsonContext.Default.QuizMix)
-            ?? throw new ArgumentException(
-                "JSON deserialized to a null mix; expected a QuizMix object.",
-                nameof(json));
-    }
+    public static QuizMix FromJson(string json) =>
+        CanonicalJson.Parse(json, BgGameJsonContext.Default.QuizMix);
 
     /// <summary>
-    /// Non-throwing counterpart to <see cref="FromJson"/>. Absorbs the three
-    /// ways a restore can fail — a null <paramref name="json"/> (e.g. a
-    /// storage key never written), the literal <c>null</c> token, or
-    /// malformed/contract-violating JSON — and yields <see cref="Empty"/> in
-    /// each case. This single-sources the "absent or corrupt input restores
-    /// to the inert default" policy so consumers need no knowledge of the
-    /// JSON representation or its exception taxonomy.
+    /// Non-throwing counterpart to <see cref="FromJson"/>, and the tolerant
+    /// half of <see cref="IJsonDocument{TSelf}"/>: it absorbs the three ways a
+    /// restore can fail — a null <paramref name="json"/> (e.g. a storage key
+    /// never written), the literal <c>null</c> token, or
+    /// malformed/contract-violating JSON — so consumers need no knowledge of
+    /// the JSON representation or its exception taxonomy. The
+    /// absorb-exactly-those-three rule lives in
+    /// <see cref="CanonicalJson.TryParse{T}"/>, which this forwards to; what
+    /// this type supplies is the inert default the contract asks each
+    /// implementer to name — <see cref="Empty"/>, the blank mix, which leaves
+    /// composition fully passthrough.
     /// </summary>
     /// <param name="json">
     /// The candidate JSON, or null. Typically read straight from a
@@ -282,27 +294,6 @@ public sealed class QuizMix : IEquatable<QuizMix>
     /// deserialized; <see langword="false"/> otherwise, letting a caller
     /// react to a failed restore without catching exceptions.
     /// </returns>
-    public static bool TryFromJson(string? json, out QuizMix mix)
-    {
-        if (json is not null)
-        {
-            try
-            {
-                if (JsonSerializer.Deserialize(json, BgGameJsonContext.Default.QuizMix) is { } parsed)
-                {
-                    mix = parsed;
-                    return true;
-                }
-            }
-            catch (JsonException)
-            {
-                // Malformed or contract-violating JSON falls through to the
-                // inert default below; any other (unexpected) exception is
-                // intentionally left to propagate.
-            }
-        }
-
-        mix = Empty;
-        return false;
-    }
+    public static bool TryFromJson(string? json, out QuizMix mix) =>
+        CanonicalJson.TryParse(json, BgGameJsonContext.Default.QuizMix, Empty, out mix);
 }
