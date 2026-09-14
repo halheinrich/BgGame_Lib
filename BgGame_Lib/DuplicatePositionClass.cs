@@ -12,7 +12,7 @@ using BgDataTypes_Lib;
 /// <see cref="DistinctPositionProblemSetSource.LastDuplicateClasses"/>.
 ///
 /// <para>
-/// This is the producer-side telemetry seam ruled to ride the #95 identity
+/// This is the producer-side telemetry seam ruled to ride the halheinrich/backgammon#95 identity
 /// arc (SPEC-stats-identity.md §4): the dedupe enumeration already holds the
 /// equivalence classes in hand, and exposing them here is the SSOT-correct
 /// base for a future "which files hold the same position" report

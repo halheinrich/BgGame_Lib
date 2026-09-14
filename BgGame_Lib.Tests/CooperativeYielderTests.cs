@@ -39,7 +39,7 @@ public class CooperativeYielderTests
     // true. Asserting that is race-free, and the not-due tests below still do.
     //
     // The reverse — reading IsCompleted == false to prove a yield DID happen —
-    // is not sound, and was the flake behind umbrella issue #40. The yield path
+    // is not sound, and was the flake behind umbrella issue halheinrich/backgammon#40. The yield path
     // is an `async ValueTask` whose Task.Yield() continuation is posted to the
     // ambient scheduler; it can therefore run on another thread and complete the
     // ValueTask between the call returning and the test reading the flag. The

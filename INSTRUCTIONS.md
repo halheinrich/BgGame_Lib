@@ -895,7 +895,8 @@ match lengths unify, mirror-turn duplicates unify — the ratified consequence.
   `DuplicatePositionClass` — key + member `DecisionId`s, survivor first — per
   key with ≥ 2 copies; singletons never appear), assigned before the first
   yield. The ruled producer-side seam for a future "which files hold the same
-  position" report (#104 related work); no report UI exists anywhere yet.
+  position" report (halheinrich/backgammon#104 related work); no report UI
+  exists anywhere yet.
 - **Contract plumbing.** `Name` passes through; `Count` is always null (how
   many problems collapse is unknowable before enumeration); each enumeration
   re-drains the inner source and recomputes survivors and classes fresh.

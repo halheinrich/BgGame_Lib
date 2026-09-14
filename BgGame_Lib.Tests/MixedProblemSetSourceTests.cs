@@ -535,7 +535,7 @@ public class MixedProblemSetSourceTests
         // The lifetime record was earned quizzing SOME copy of problem 0; the
         // source holds a content-equal copy under a different DecisionId.
         // GotWrong must still claim it — under v1's id-keyed stats this copy
-        // carried no record and fell out of the pool (the #95 defect).
+        // carried no record and fell out of the pool (the halheinrich/backgammon#95 defect).
         var doc = Doc(SeenWrong(0));
         var mix = new QuizMix([Entry(QuizCategory.GotWrong, 100)], randomOrder: false);
         var source = Source([Copy(0, "other-file.xgp"), Decision(1)], doc, mix);
