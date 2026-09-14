@@ -17,7 +17,7 @@ using BgDataTypes_Lib;
 /// the same match under two filenames — or the same early position reached
 /// in different matches — carries distinct ids yet renders the same problem.
 /// The key collapses strictly more than the raw XGID string did (the
-/// pre-#95 dedupe key): same-away positions from different match lengths
+/// dedupe key before halheinrich/backgammon#95): same-away positions from different match lengths
 /// unify, and mirror-turn duplicates unify — the ratified consequence, not a
 /// defect. The XGID string is display/provenance only, an identity nowhere.
 /// This layer is distinct from <see cref="MixedProblemSetSource"/>'s internal
@@ -39,7 +39,7 @@ using BgDataTypes_Lib;
 /// occurrence is yielded and later copies are dropped — for display and
 /// provenance only, since nothing downstream keys on the surviving copy's
 /// identity: lifetime stats are content-keyed, so every copy folds into and
-/// reads the same record. (The pre-#95 survivor-preference seam existed
+/// reads the same record. (The survivor-preference seam from before halheinrich/backgammon#95 existed
 /// solely to keep id-keyed stats reachable and is deleted, not bypassed.)
 /// </para>
 ///

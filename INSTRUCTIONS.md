@@ -876,9 +876,10 @@ decorator-family member: it presents each distinct problem exactly once,
 wherever the copies came from. The dedupe key is the derived `ProblemKey`
 (SPEC-stats-identity.md §4; halheinrich/backgammon#95) — content identity,
 not the file-relative `DecisionId` and **not the raw XGID string** (the
-pre-#95 key, now display/provenance only, an identity nowhere). The key
-collapses strictly more than XGID did: same-away positions from different
-match lengths unify, mirror-turn duplicates unify — the ratified consequence.
+key before halheinrich/backgammon#95, now display/provenance only, an
+identity nowhere). The key collapses strictly more than XGID did: same-away
+positions from different match lengths unify, mirror-turn duplicates unify —
+the ratified consequence.
 
 - **First occurrence survives, unconditionally.** With stats content-keyed,
   every copy folds into and reads the same lifetime record, so survivor
