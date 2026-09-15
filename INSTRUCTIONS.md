@@ -27,95 +27,61 @@ https://github.com/halheinrich/BgGame_Lib — branch `main`.
 - **BgMoveGen** — `MoveGenerator` (legal-play enumeration and the
   validating turn-boundary `MoveGenerator.ApplyPlay`).
 
-## Directory tree
+## Layout
 
-```
-BgGame_Lib.slnx
-Directory.Packages.props  — central package-version management (CPM)
-spec/
-  verifiable-dice-vectors.json — committed cross-language dice vectors (the PROTOCOL.md contract)
-BgGame_Lib/
-  BgGame_Lib.csproj
-  AgentContractViolationException.cs — seat + kind + offending value; thrown by MatchRunner
-  AnswerTypeDistribution.cs — immutable per-pool answer-type tally: checker plays + the four cube verdicts
-  BgGameJsonContext.cs    — source-generated JsonSerializerContext over the wire surface (see "Source generation & trimming")
-  CooperativeYielder.cs   — time-budgeted cooperative-yield gate (TimeProvider seam) for long WASM loops
-  DistinctPositionProblemSetSource.cs — IProblemSetSource decorator: one survivor per ProblemKey; duplicate-class telemetry
-  DuplicatePositionClass.cs — telemetry record: one multi-copy content class (key + member DecisionIds)
-  FoldableStatsSchemaException.cs — the deliberate foldable-version signal (v4; a JsonException subtype), carrying that version
-  GameRecord.cs           — one completed game: winner seat + result + transcript
-  MixedProblemSetSource.cs — IProblemSetSource decorator: composes a quiz from per-category pools by mix percentages
-  MixComposition.cs       — per-enumeration composition telemetry: target (capped or capless) vs drawn + per-entry reports
-  MixCompositionEntry.cs  — one entry's telemetry: pool size, requested, drawn
-  GameResult.cs           — record + GameResultKind enum (single / gammon / backgammon)
-  GameSnapshot.cs         — immutable record (transcript-friendly)
-  GameStartContext.cs     — frame-free OnGameStarted payload (seat scores + Crawford)
-  GameState.cs            — mutable: Board + cube state; aggregates a MatchState
-  ICubeAgent.cs           — two-method interface (offer / response)
-  IDiceSource.cs          — dice seam: Roll() → (Die1, Die2); driver-side only
-  IMatchObserver.cs       — live per-move view of one RunMatchAsync run (transcript stream + lifecycle)
-  IPlayAgent.cs           — async Play decision interface
-  IProblemSetSource.cs    — re-iterable IAsyncEnumerable<BgDecisionData>
-  MatchParticipant.cs     — one entrant: IPlayAgent + ICubeAgent bundle
-  MatchResult.cs          — winner seat (nullable) + seat scores + game records
-  MatchRunner.cs          — unattended match loop over two participants
-  MatchSeat.cs            — enum One/Two + Other() extension; seat-keyed results
-  MatchSnapshot.cs        — immutable record
-  MatchState.cs           — mutable: match length, scores, Crawford
-  ProblemStats.cs         — immutable per-problem lifetime record: ProblemKey + ScoreSegment tally + last-quizzed
-  ProblemStatsDocument.cs — immutable ProblemKey-keyed collection of ProblemStats; the versioned quiz-stats document; Merge + ReadFoldable
-  ProblemStatsDocumentJsonConverter.cs — bundled converter (public): pinned v3 wire format, fail-loud reads, retired-version and foldable-v4 signals
-  RetiredStatsSchemaException.cs — the deliberate retired-version signal (a JsonException subtype), carrying that version
-  RecordedDiceSource.cs   — replays a fixed roll sequence; throws when exhausted
-  SeededDiceSource.cs     — Random(seed)-backed reproducible rolls
-  VerifiableDiceSource.cs — key-derived audit-grade rolls (public HMAC-SHA256 stream + rejection sampling)
-  DiceKey.cs              — immutable 256-bit key: Generate() + Commit(context)
-  DiceCommitment.cs       — immutable SHA-256 commitment: Verifies(key, context)
-  QuizCategoryKind.cs     — enum: which lifetime-stats predicate a quiz category applies
-  QuizCategory.cs         — kind + validated-parameter DTO; internal BuildPredicate() is the one kind→behavior switch
-  QuizCategoryPredicates.cs — internal behavior half: IQuizCategoryPredicate + per-kind predicate types
-  QuizMix.cs              — immutable stats-weighted composition config: ordered entries + optional length + random toggle
-  QuizMixEntry.cs         — one mix line: category + percent (1–100, validated in its own ctor)
-  QuizMixJsonConverter.cs — bundled converter (public): pinned versioned wire format, fail-loud reads
-  QuizScore.cs            — immutable cumulative score: play / double / take segments + derived total
-  Referee.cs              — skeletal: end-of-game, ApplyCubeResponse
-  ScoreSegment.cs         — immutable per-category running tally (submitted / correct / equity loss)
-  ShuffledProblemSetSource.cs — IProblemSetSource decorator: Fisher-Yates; re-shuffles per enumeration
-  SubmittedCubeAction.cs  — record: user + truth CubeClaimPairs, per-half equity loss, derived per-half correctness
-  SubmittedPlay.cs        — record: user play + matched candidate + equity loss
-  Transcript.cs           — append-only ordered list of TranscriptEntry
-  TranscriptEntry.cs      — abstract record + Play / Cube / GameEnded subtypes
-BgGame_Lib.Tests/
-  BgGame_Lib.Tests.csproj
-  CubeAgentContractTests.cs
-  DiceSourceTests.cs
-  DiceKeyTests.cs             — key generation / validation / commitment
-  DiceCommitmentTests.cs      — commitment round-trip / reveal verification
-  VerifiableDiceSourceTests.cs — vector pinning / determinism / rejection sampling
-  VerifiableDiceVectors.cs    — loads spec/verifiable-dice-vectors.json (consumed in place)
-  GameStateTests.cs
-  MatchRunnerTests.cs
-  MatchStateTests.cs
-  TestAgents.cs           — in-proc baseline bots (random/first/delegate agents)
-  PlayAgentContractTests.cs
-  ProblemSetSourceContractTests.cs
-  CooperativeYielderTests.cs
-  ShuffledProblemSetSourceTests.cs
-  DistinctPositionProblemSetSourceTests.cs
-  ProblemStatsTests.cs
-  ProblemStatsDocumentTests.cs
-  ProblemStatsDocumentSerializationTests.cs
-  QuizCategoryTests.cs
-  QuizMixTests.cs
-  QuizMixSerializationTests.cs
-  MixedProblemSetSourceTests.cs
-  QuizScoreTests.cs
-  ScoreSegmentTests.cs
-  AnswerTypeDistributionTests.cs
-  RefereeTests.cs
-  TranscriptTests.cs
-  TrivialTypeTests.cs
-```
+Two projects under `BgGame_Lib.slnx`, governed by repo-root
+`Directory.Build.props` (TFM, `TreatWarningsAsErrors`, XML doc generation)
+and `Directory.Packages.props` (Central Package Management).
+
+**`BgGame_Lib/`** — the library, one flat namespace. Eight areas:
+
+- **Match and game state** — `MatchState` and `GameState`, the mutable,
+  on-roll-relative live state; `MatchSnapshot` and `GameSnapshot`, their
+  immutable captures; `MatchSeat`, the fixed seat identity results are keyed
+  by; `GameResult`, how a game ended.
+- **Agents and the match loop** — `IPlayAgent` and `ICubeAgent`, bundled per
+  entrant as a `MatchParticipant`; `MatchRunner`, the unattended loop over
+  two participants, with `IMatchObserver` (the live per-move view),
+  `GameStartContext`, and its outputs `MatchResult` / `GameRecord`;
+  `AgentContractViolationException`, what the runner throws when an agent
+  answers outside its contract; `Referee`, the skeletal end-of-game and
+  cube-response arbiter.
+- **Transcripts** — `Transcript`, the append-only record of a game, and
+  `TranscriptEntry` with its play, cube and game-ended subtypes.
+- **Dice** — `IDiceSource`, the one seam randomness enters by (driver-side
+  only), and its implementations: `RecordedDiceSource`, `SeededDiceSource`,
+  and `VerifiableDiceSource` with its commit-and-reveal pair `DiceKey` /
+  `DiceCommitment`.
+- **Problem sources** — `IProblemSetSource`, the re-iterable async problem
+  stream, and its decorators: `ShuffledProblemSetSource`,
+  `DistinctPositionProblemSetSource` (with its `DuplicatePositionClass`
+  telemetry) and `MixedProblemSetSource` (with its `MixComposition` /
+  `MixCompositionEntry` telemetry).
+- **Quiz scoring** — `SubmittedPlay` and `SubmittedCubeAction`, the scored
+  submissions; `ScoreSegment` and `QuizScore`, the running tallies;
+  `AnswerTypeDistribution`, a pool counted by the answer each decision calls
+  for.
+- **Lifetime stats and the weighted mix** — `ProblemStats` and
+  `ProblemStatsDocument`, the persistent per-problem record, with the
+  document's bundled converter and its two version signals
+  (`RetiredStatsSchemaException`, `FoldableStatsSchemaException`);
+  `QuizCategory` / `QuizCategoryKind` and the behaviour half,
+  `QuizCategoryPredicates`; `QuizMix` / `QuizMixEntry` and the mix's bundled
+  converter.
+- **Infrastructure** — `BgGameJsonContext`, the source-generated JSON
+  metadata for the wire surface; `CooperativeYielder`, the time-budgeted
+  yield gate for long loops on a single-threaded scheduler.
+
+**`spec/`** — `verifiable-dice-vectors.json`: the committed cross-language
+vectors pinning the verifiable-dice algorithm, generated by an independent
+Python reference and cross-checked against openssl. BgTournament's
+`PROTOCOL.md` cites them; the test project reads them in place.
+
+**`BgGame_Lib.Tests/`** — xUnit, one class per type or contract: the agent
+and problem-source contracts, dice (the vectors pinned), state, the runner,
+scoring, stats and the mix (their wire bytes pinned), and the
+source-generation gate. Two helpers: `TestAgents`, in-process baseline bots,
+and `VerifiableDiceVectors`, the loader for `spec/`.
 
 ## Architecture
 
