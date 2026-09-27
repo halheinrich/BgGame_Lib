@@ -239,6 +239,26 @@ public class PlaySubmissionTests
         Assert.False(submitted.UserPlay.IsSameEncoding(EightFiveSixFive));
     }
 
+    [Fact]
+    public void Score_CarriesThePositionThePlayReaches()
+    {
+        // The play's identity is the board it leaves: the matched candidate's
+        // after-board, which is the board applying the user's own encoding
+        // leaves. 13/10 6/5 is neither the stored first nor the best, so
+        // neither can stand in for it.
+        var decision = Opening;
+        Play reversed = [new(6, 5), new(13, 10)];
+        var applied = new BoardState(decision.Board);
+        applied.ApplyPlay(reversed);
+
+        var submitted = Scored(PlaySubmission.Score(reversed, decision, PlayRanking.Equity));
+
+        Assert.Equal(1, submitted.MatchedCandidateIndex);
+        Assert.Equal(decision.AfterBoardOf(1), submitted.AfterBoard);
+        Assert.Equal(applied.ToPosition(), submitted.AfterBoard);
+        Assert.NotEqual(decision.AfterBoardOf(0), submitted.AfterBoard);
+    }
+
     // -----------------------------------------------------------------------
     //  Matched by position, not by encoding
     // -----------------------------------------------------------------------
@@ -392,18 +412,23 @@ public class PlaySubmissionTests
     }
 
     // -----------------------------------------------------------------------
-    //  SubmittedPlay equality: the problem, the matched candidate and the
-    //  result, never plays (Hal's ruling on halheinrich/backgammon#273)
+    //  SubmittedPlay identity: the same problem and the same play (Hal's
+    //  ruling of 2026-09-27 on halheinrich/backgammon#273). The index, the
+    //  encoding, the ranking, the error and the verdict are facts, outside it.
     // -----------------------------------------------------------------------
 
-    [Fact]
-    public void SubmittedPlay_TwoEncodingsOfOnePlay_AreEqual_AndHashAlike()
-    {
-        // A play has no equality — Equals throws — so this passes only if the
-        // submission's equality never reaches its play.
-        var a = Scored(PlaySubmission.Score([new(8, 5), new(6, 5)], Opening, PlayRanking.Equity));
-        var b = Scored(PlaySubmission.Score([new(6, 5), new(8, 5)], Opening, PlayRanking.Equity));
+    /// <summary>
+    /// The opening 3-1 — the default problem, so every such record has one
+    /// key — analysed as <paramref name="candidates"/>, in that stored order,
+    /// all at one depth, so both rankings score every candidate.
+    /// </summary>
+    private static CheckerPlayDecision OpeningWith(params (Play Play, double Equity)[] candidates) =>
+        TestRecords.CheckerPlay(decision: TestRecords.CheckerPlayData(
+            plays: [.. candidates.Select(c => TestRecords.Candidate(play: c.Play, equity: c.Equity))]));
 
+    /// <summary>Equal through every door: both Equals, both operators, the hash, and a set.</summary>
+    private static void AssertSameSubmittedPlay(SubmittedPlay a, SubmittedPlay b)
+    {
         Assert.Equal(a, b);
         Assert.True(a == b);
         Assert.False(a != b);
@@ -412,65 +437,137 @@ public class PlaySubmissionTests
         Assert.Single(new HashSet<SubmittedPlay> { a, b });
     }
 
-    [Fact]
-    public void SubmittedPlay_TheProblemParticipates()
+    /// <summary>Unequal through every door: both Equals, both operators, and a set.</summary>
+    private static void AssertDifferentSubmittedPlays(SubmittedPlay a, SubmittedPlay b)
     {
-        // The same play of the same board and roll at another score: another
-        // problem, with the same candidate, ranking and error.
-        var a = Scored(PlaySubmission.Score(EightFiveSixFive, Opening, PlayRanking.Equity));
-        var b = Scored(PlaySubmission.Score(EightFiveSixFive, OpeningElsewhere, PlayRanking.Equity));
-
-        Assert.Equal(a.MatchedCandidateIndex, b.MatchedCandidateIndex);
-        Assert.Equal(a.EquityLoss, b.EquityLoss);
         Assert.NotEqual(a, b);
+        Assert.False(a == b);
         Assert.True(a != b);
+        Assert.False(a.Equals((object)b));
+        Assert.Equal(2, new HashSet<SubmittedPlay> { a, b }.Count);
     }
 
     [Fact]
-    public void SubmittedPlay_TheMatchedCandidateParticipates()
+    public void SubmittedPlay_TwoEncodingsOfOnePlay_AreTheSameSubmittedPlay()
     {
-        // Two candidates at one error (a tie): only the candidate tells them apart.
-        var decision = TestRecords.CheckerPlay(decision: TestRecords.CheckerPlayData(plays:
-        [
-            TestRecords.Candidate(play: EightFiveSixFive, equity: 0.1),
-            TestRecords.Candidate(play: ThirteenTenSixFive, equity: 0.1),
-        ]));
+        // A play has no equality — Equals throws — so this passes only if the
+        // submission's equality never reaches its play; and the encodings
+        // differ, so it fails if equality compares them.
+        var a = Scored(PlaySubmission.Score([new(8, 5), new(6, 5)], Opening, PlayRanking.Equity));
+        var b = Scored(PlaySubmission.Score([new(6, 5), new(8, 5)], Opening, PlayRanking.Equity));
 
-        var a = Scored(PlaySubmission.Score(EightFiveSixFive, decision, PlayRanking.Equity));
-        var b = Scored(PlaySubmission.Score(ThirteenTenSixFive, decision, PlayRanking.Equity));
-
-        Assert.Equal(a.EquityLoss, b.EquityLoss);
-        Assert.NotEqual(a, b);
+        Assert.False(a.UserPlay.IsSameEncoding(b.UserPlay));
+        AssertSameSubmittedPlay(a, b);
     }
 
     [Fact]
-    public void SubmittedPlay_TheRankingParticipates()
+    public void SubmittedPlay_ContentEqualRecordsListingTheCandidatesInAnotherOrder_AreTheSameSubmittedPlay()
+    {
+        // One analysis, stored in two orders: the same play matches another
+        // row of each, and that row is all that differs.
+        var stored = OpeningWith(
+            (EightFiveSixFive, 0.20), (ThirteenTenSixFive, 0.10), (TwentyFourTwentyThreeThirteenTen, 0.05));
+        var reordered = OpeningWith(
+            (TwentyFourTwentyThreeThirteenTen, 0.05), (ThirteenTenSixFive, 0.10), (EightFiveSixFive, 0.20));
+
+        var a = Scored(PlaySubmission.Score(EightFiveSixFive, stored, PlayRanking.Equity));
+        var b = Scored(PlaySubmission.Score(EightFiveSixFive, reordered, PlayRanking.Equity));
+
+        Assert.Equal(0, a.MatchedCandidateIndex);
+        Assert.Equal(2, b.MatchedCandidateIndex);
+        Assert.Equal(a.EquityLoss, b.EquityLoss);
+        AssertSameSubmittedPlay(a, b);
+    }
+
+    [Fact]
+    public void SubmittedPlay_UnderEitherRanking_IsTheSameSubmittedPlay()
     {
         // The opening's candidates share one depth, so both rankings agree on
         // every error: the best play is 0 under each. Only the ranking differs.
         var equity = Scored(PlaySubmission.Score(EightFiveSixFive, Opening, PlayRanking.Equity));
         var depth = Scored(PlaySubmission.Score(EightFiveSixFive, Opening, PlayRanking.DepthFirst));
 
+        Assert.NotEqual(equity.Ranking, depth.Ranking);
         Assert.Equal(equity.MatchedCandidateIndex, depth.MatchedCandidateIndex);
         Assert.Equal(equity.EquityLoss, depth.EquityLoss);
-        Assert.NotEqual(equity, depth);
+        AssertSameSubmittedPlay(equity, depth);
     }
 
     [Fact]
-    public void SubmittedPlay_TheErrorParticipates()
+    public void SubmittedPlay_UnderAnotherAnalysis_IsTheSameSubmittedPlay()
     {
-        // One problem, one candidate, one ranking, two analyses of it.
-        static CheckerPlayDecision WithSecondAt(double equity) => TestRecords.CheckerPlay(
-            decision: TestRecords.CheckerPlayData(plays:
-            [
-                TestRecords.Candidate(play: EightFiveSixFive, equity: 0.2),
-                TestRecords.Candidate(play: ThirteenTenSixFive, equity: equity),
-            ]));
+        // One problem, one play, one ranking, one row; three analyses give it
+        // three results. The first two differ in the error alone, the first
+        // and the third in the verdict too.
+        var slightlyWorse = OpeningWith((EightFiveSixFive, 0.2), (ThirteenTenSixFive, 0.1));
+        var muchWorse = OpeningWith((EightFiveSixFive, 0.2), (ThirteenTenSixFive, 0.0));
+        var best = OpeningWith((EightFiveSixFive, 0.2), (ThirteenTenSixFive, 0.3));
 
-        var a = Scored(PlaySubmission.Score(ThirteenTenSixFive, WithSecondAt(0.1), PlayRanking.Equity));
-        var b = Scored(PlaySubmission.Score(ThirteenTenSixFive, WithSecondAt(0.0), PlayRanking.Equity));
+        var a = Scored(PlaySubmission.Score(ThirteenTenSixFive, slightlyWorse, PlayRanking.Equity));
+        var b = Scored(PlaySubmission.Score(ThirteenTenSixFive, muchWorse, PlayRanking.Equity));
+        var c = Scored(PlaySubmission.Score(ThirteenTenSixFive, best, PlayRanking.Equity));
 
-        Assert.NotEqual(a, b);
+        Assert.NotEqual(a.EquityLoss, b.EquityLoss);
+        Assert.Equal(a.IsCorrect, b.IsCorrect);
+        Assert.NotEqual(a.IsCorrect, c.IsCorrect);
+        AssertSameSubmittedPlay(a, b);
+        AssertSameSubmittedPlay(a, c);
+    }
+
+    [Fact]
+    public void SubmittedPlay_EveryFactButTheProblemAndThePlayDiffers_StillTheSameSubmittedPlay()
+    {
+        // Same problem, same play = same submitted play. Here the index, the
+        // encoding, the ranking, the error and the verdict all differ at once.
+        var first = OpeningWith((EightFiveSixFive, 0.2), (ThirteenTenSixFive, 0.1));
+        var second = OpeningWith((ThirteenTenSixFive, 0.3), (EightFiveSixFive, 0.2));
+
+        var a = Scored(PlaySubmission.Score(ThirteenTenSixFive, first, PlayRanking.Equity));
+        var b = Scored(PlaySubmission.Score([new(6, 5), new(13, 10)], second, PlayRanking.DepthFirst));
+
+        Assert.NotEqual(a.MatchedCandidateIndex, b.MatchedCandidateIndex);
+        Assert.False(a.UserPlay.IsSameEncoding(b.UserPlay));
+        Assert.NotEqual(a.Ranking, b.Ranking);
+        Assert.NotEqual(a.EquityLoss, b.EquityLoss);
+        Assert.NotEqual(a.IsCorrect, b.IsCorrect);
+        AssertSameSubmittedPlay(a, b);
+    }
+
+    [Fact]
+    public void SubmittedPlay_ADifferentPlayOfTheSameProblem_IsADifferentSubmittedPlay()
+    {
+        // Two analyses of one problem, each with its best play first: every
+        // fact but the play is alike — problem, row, ranking, error, verdict —
+        // so only the play tells them apart. (The equality this replaced
+        // compared the row, the ranking and the error, and called them equal.)
+        var first = OpeningWith((EightFiveSixFive, 0.1), (ThirteenTenSixFive, 0.0));
+        var second = OpeningWith((ThirteenTenSixFive, 0.1), (EightFiveSixFive, 0.0));
+
+        var a = Scored(PlaySubmission.Score(EightFiveSixFive, first, PlayRanking.Equity));
+        var b = Scored(PlaySubmission.Score(ThirteenTenSixFive, second, PlayRanking.Equity));
+
+        Assert.Equal(a.ProblemKey, b.ProblemKey);
+        Assert.Equal(a.MatchedCandidateIndex, b.MatchedCandidateIndex);
+        Assert.Equal(a.Ranking, b.Ranking);
+        Assert.Equal(a.EquityLoss, b.EquityLoss);
+        Assert.NotEqual(a.AfterBoard, b.AfterBoard);
+        AssertDifferentSubmittedPlays(a, b);
+    }
+
+    [Fact]
+    public void SubmittedPlay_TheSamePlayOfAnotherProblem_IsADifferentSubmittedPlay()
+    {
+        // The same board and roll at another score: the play reaches the same
+        // position with the same row and error, so only the problem tells
+        // them apart.
+        var a = Scored(PlaySubmission.Score(EightFiveSixFive, Opening, PlayRanking.Equity));
+        var b = Scored(PlaySubmission.Score(EightFiveSixFive, OpeningElsewhere, PlayRanking.Equity));
+
+        Assert.NotEqual(a.ProblemKey, b.ProblemKey);
+        Assert.Equal(a.AfterBoard, b.AfterBoard);
+        Assert.Equal(a.MatchedCandidateIndex, b.MatchedCandidateIndex);
+        Assert.Equal(a.EquityLoss, b.EquityLoss);
+        AssertDifferentSubmittedPlays(a, b);
     }
 
     [Fact]
@@ -495,6 +592,15 @@ public class PlaySubmissionTests
         Assert.Equal(
             PlaySubmission.Score(EightFiveSixFive, Opening, PlayRanking.Equity),
             PlaySubmission.Score([new(6, 5), new(8, 5)], Opening, PlayRanking.Equity));
+        // A scored outcome compares its submitted play's identity, so the same
+        // play of one problem is the same outcome whichever row it matched.
+        Assert.Equal(
+            PlaySubmission.Score(
+                EightFiveSixFive, OpeningWith((EightFiveSixFive, 0.2), (ThirteenTenSixFive, 0.1)),
+                PlayRanking.Equity),
+            PlaySubmission.Score(
+                EightFiveSixFive, OpeningWith((ThirteenTenSixFive, 0.1), (EightFiveSixFive, 0.2)),
+                PlayRanking.Equity));
         // The two skips carry no problem: a not-scored outcome is its case and
         // candidate index, an off-list one its case alone.
         Assert.Equal(

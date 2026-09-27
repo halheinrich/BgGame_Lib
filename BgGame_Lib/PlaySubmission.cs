@@ -38,10 +38,11 @@ public enum PlaySubmissionKind
 /// <b>One place, one derivation.</b> <see cref="Score"/> finds the candidate
 /// the play is and reads that candidate's error off the ranking
 /// (<see cref="CheckerPlayDecisionData.RankedBy"/>, SPEC-scoring §2a)
-/// together, and takes the problem's key from the same record
-/// (<see cref="ProblemKey.From"/>), so the problem, the matched candidate,
-/// the error and the correctness of a scored submission all come from the
-/// producer's derivations and never from a caller.
+/// together, and takes the problem's key (<see cref="ProblemKey.From"/>) and
+/// the board the play leaves (<see cref="CheckerPlayDecision.AfterBoardOf"/>)
+/// from the same record, so the problem, the play's identity, the matched
+/// candidate, the error and the correctness of a scored submission all come
+/// from the producer's derivations and never from a caller.
 /// </para>
 /// <para>
 /// <b>Two cases yield no scored submission</b>, and both are skips of record
@@ -52,9 +53,11 @@ public enum PlaySubmissionKind
 /// hands each case exactly what it has.
 /// </para>
 /// <para>
-/// Immutable, with value equality: the same case, and for a scored play the
-/// same <see cref="SubmittedPlay"/> (its own equality), for a not-scored one
-/// the same candidate.
+/// Immutable, with value equality over the case and what it carries: for a
+/// scored play an equal <see cref="SubmittedPlay"/> — the same problem and
+/// the same play, whatever the index, encoding, ranking or error (its own
+/// equality) — for a not-scored one the same candidate index, and for an
+/// off-list one the case alone.
 /// </para>
 /// </remarks>
 public sealed class PlaySubmission : IEquatable<PlaySubmission>
@@ -95,21 +98,24 @@ public sealed class PlaySubmission : IEquatable<PlaySubmission>
     /// A matched candidate's error, and whether the ranking scores it, are the
     /// ranking's (<see cref="RankedPlays.ForCandidate"/>). A scored
     /// candidate yields a <see cref="SubmittedPlay"/> carrying the record's
-    /// key, the candidate's index, its error and <paramref name="ranking"/>;
-    /// a candidate the ranking does not score yields
-    /// <see cref="PlaySubmissionKind.NotScored"/> with its index.
+    /// key, the candidate's after-board, its index, its error and
+    /// <paramref name="ranking"/>; a candidate the ranking does not score
+    /// yields <see cref="PlaySubmissionKind.NotScored"/> with its index.
     /// </para>
     /// <para>
     /// The key is the record's own (<see cref="ProblemKey.From"/>), derived
     /// here rather than taken from a caller, so a submission cannot name
     /// another problem. Every record has one (SPEC-stats-identity.md §2,
-    /// amended 2026-09-27), so there is no keyless case.
+    /// amended 2026-09-27), so there is no keyless case. The key and the
+    /// matched candidate's after-board (<see cref="CheckerPlayDecision.AfterBoardOf"/>,
+    /// the position the play reaches) are the scored submission's identity:
+    /// the same problem and the same play.
     /// </para>
     /// </remarks>
     /// <param name="play">The play the user submitted.</param>
     /// <param name="decision">
     /// The analysed checker-play decision answered: its position to match the
-    /// play from, its candidates to rank, and its key.
+    /// play from, its candidates to rank and their after-boards, and its key.
     /// </param>
     /// <param name="ranking">The quiz's ranking, which decides the best play and every error.</param>
     /// <returns>The submission's outcome under <paramref name="ranking"/>.</returns>
@@ -134,7 +140,8 @@ public sealed class PlaySubmission : IEquatable<PlaySubmission>
         return ranked.ForCandidate(index).Error is double error
             ? new PlaySubmission(
                 PlaySubmissionKind.Scored,
-                new SubmittedPlay(ProblemKey.From(decision), play, ranking, index, error),
+                new SubmittedPlay(
+                    ProblemKey.From(decision), decision.AfterBoardOf(index), play, ranking, index, error),
                 notScoredCandidateIndex: 0)
             : new PlaySubmission(PlaySubmissionKind.NotScored, scored: null, index);
     }
@@ -181,7 +188,8 @@ public sealed class PlaySubmission : IEquatable<PlaySubmission>
     /// <summary>
     /// Whether <paramref name="other"/> is the same outcome: the same
     /// <see cref="Kind"/>, and for a scored play an equal
-    /// <see cref="SubmittedPlay"/>, for a not-scored one the same candidate.
+    /// <see cref="SubmittedPlay"/> (the same problem and the same play), for a
+    /// not-scored one the same candidate index.
     /// </summary>
     /// <param name="other">The outcome to compare with, or <see langword="null"/>.</param>
     /// <returns><see langword="true"/> for the same outcome; <see langword="false"/> otherwise.</returns>

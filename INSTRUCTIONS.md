@@ -24,7 +24,9 @@ https://github.com/halheinrich/BgGame_Lib — branch `main`.
 - **BgDataTypes_Lib** — `Move`, `Play`, `BoardState` (with public
   `ApplyPlay` turn-boundary primitive and the play-identity doors
   `IsSamePlay` / `IndexOfSamePlay`), the decision kinds `BgDecisionData` →
-  `CheckerPlayDecision` / `CubeDecision`, the ranking (`PlayRanking`,
+  `CheckerPlayDecision` / `CubeDecision` (with a checker play's derived
+  after-boards, `AfterBoardOf`), the content key `ProblemKey` (every
+  record's, via `ProblemKey.From`), the ranking (`PlayRanking`,
   `RankedPlays`), `CubeOwner`, `CubeAction`, plus the enums' string
   serialization contract. The test project also references its
   `BgDataTypes_Lib.TestSupport` for the record builders (`TestRecords`).
@@ -536,11 +538,13 @@ a caller, so a submission cannot name another problem; every record has one
 case (`PlaySubmissionKind`):
 
 - **`Scored`** — the ranking scores the candidate: a **`SubmittedPlay`**,
-  carrying the record's key (`ProblemKey`, never null), the user's own
-  encoding (`UserPlay`), the `Ranking`, the `MatchedCandidateIndex` (stored
-  order) and the `EquityLoss` — the ranking's error, the ranking's best
-  play's equity minus the candidate's. `IsCorrect` is **derived**, exactly
-  0 (SPEC-scoring §2a), so it cannot disagree with the error; it is the one
+  carrying the record's key (`ProblemKey`, never null), the board the play
+  leaves (`AfterBoard`: the candidate's `CheckerPlayDecision.AfterBoardOf`,
+  in the next mover's frame), the user's own encoding (`UserPlay`), the
+  `Ranking`, the `MatchedCandidateIndex` (stored order) and the
+  `EquityLoss` — the ranking's error, the ranking's best play's equity
+  minus the candidate's. `IsCorrect` is **derived**, exactly 0
+  (SPEC-scoring §2a), so it cannot disagree with the error; it is the one
   statement of the verdict, and halheinrich/backgammon#202's pending
   threshold ruling changes that predicate and nothing else.
 - **`NotScored`** — the play is a candidate the ranking does not score
@@ -551,14 +555,29 @@ case (`PlaySubmissionKind`):
   them apart.
 
 `SubmittedPlay` has **no public constructor and no settable member**, so no
-caller can pair a play with another candidate's error, state a correctness
-its error contradicts, or fold a skip. It is a class, not a record: a
-record's `with` would let a caller set one fact apart from the others, and a
-record's generated equality would compare the `Play` — which has no equality
-(see `Play`). Its **equality compares the problem, the matched candidate and
-the result — the ranking and the error — never plays** (Hal's ruling on
-halheinrich/backgammon#273). `PlaySubmission` is value-equal over its case
-and what the case carries.
+caller can pair a play with another candidate's error, file it under another
+problem, state a correctness its error contradicts, or fold a skip. It is a
+class, not a record: a record's `with` would let a caller set one fact apart
+from the others, and a record's generated equality would compare the `Play`
+— which has no equality (see `Play`).
+
+**A submitted play's identity is the problem and the play: same problem,
+same play = same submitted play** (Hal's ruling of 2026-09-27 on
+halheinrich/backgammon#273). Equality and the hash compare `ProblemKey` and
+`AfterBoard`, and nothing else. The play's identity is the position it
+reaches from the problem's start, represented by the record's own derived
+after-board rather than by anything computed here: equal keys mean one
+starting board, and from one board two plays are the same play exactly when
+they reach the same position (`BoardState.IsSamePlay`). The index, the
+encoding, the ranking, the error and the verdict are facts about one
+submission, outside identity — the index in particular is which row of that
+record matched, and a content-equal record may list its candidates in
+another order. Comparing the row, the ranking or the error instead would call
+a different play at the same row with the same error equal, and the same play
+under another ranking or analysis unequal. `PlaySubmission` is value-equal
+over its case and what the case carries: a scored outcome compares its
+`SubmittedPlay`, a not-scored one its candidate index, an off-list one
+nothing more.
 
 **`SubmittedCubeAction`** is the cube analog — the scored carrier for one
 cube position. A cube position is two independent decisions (the doubler's
@@ -1363,12 +1382,14 @@ public sealed class PlaySubmission : IEquatable<PlaySubmission>   // value equal
 public sealed class SubmittedPlay : IEquatable<SubmittedPlay>   // no public ctor; + ==, !=
 {
     public ProblemKey ProblemKey { get; }     // the record's own; never null
+    public BoardPosition AfterBoard { get; }  // the position the play reaches: the record's
+                                              //   AfterBoardOf(MatchedCandidateIndex); next mover's frame
     public Play UserPlay { get; }             // the user's own encoding; not in equality
     public PlayRanking Ranking { get; }
-    public int MatchedCandidateIndex { get; } // into Plays (stored order)
+    public int MatchedCandidateIndex { get; } // into Plays (stored order); not in equality
     public double EquityLoss { get; }         // the ranking's error; finite, ≥ 0
     public bool IsCorrect { get; }            // derived: EquityLoss == 0.0 (the one verdict)
-    // Equality: ProblemKey, MatchedCandidateIndex, Ranking, EquityLoss — never plays.
+    // Equality and hash: ProblemKey and AfterBoard only — same problem, same play.
 }
 
 public sealed record SubmittedCubeAction(
@@ -1604,6 +1625,14 @@ public sealed record AnswerTypeDistribution(
   "within 0.001 equity"); halheinrich/backgammon#202 changes that one
   predicate if its threshold ruling lands. A not-scored or off-list play is
   a skip of record: there is no `SubmittedPlay` to fold, by construction.
+- **Equal submitted plays are the same play of the same problem — not the
+  same result.** `SubmittedPlay` equality compares `ProblemKey` and
+  `AfterBoard` only, so submissions scored under different rankings, against
+  different analyses, or matched at different rows compare equal and hash
+  alike. Do not dedupe or count results through a set or `Distinct()` of
+  submissions — that merges submissions whose errors and verdicts differ;
+  read `EquityLoss`, `IsCorrect` and `Ranking` when the result is the
+  question.
 - **A cube half's correctness is NOT `EquityLoss == 0.0` — unlike
   `SubmittedPlay`'s.** On the doubler half the two run apart by ruling: a
   `NoDouble` answer to a too-good position (or a `TooGood` answer to a

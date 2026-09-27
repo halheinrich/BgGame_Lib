@@ -4,8 +4,9 @@ using BgDataTypes_Lib;
 
 /// <summary>
 /// One checker play submitted by a quiz user and scored under a
-/// <see cref="PlayRanking"/>: the candidate it matched, its error under that
-/// ranking, and whether it is correct. The scored outcome of
+/// <see cref="PlayRanking"/>: the problem and the play, which are its
+/// identity, and the candidate it matched, its error under that ranking, and
+/// whether it is correct. The scored outcome of
 /// <see cref="PlaySubmission.Score"/>, and built nowhere else.
 /// </summary>
 /// <remarks>
@@ -14,10 +15,11 @@ using BgDataTypes_Lib;
 /// <see cref="PlaySubmission.Score"/> finds the candidate the play is (by
 /// position, from the decision's own board) and reads that candidate's
 /// error off the ranking (<see cref="CheckerPlayDecisionData.RankedBy"/>,
-/// SPEC-scoring §2a) in one pass, and takes the problem's key from the same
-/// record. There is no public constructor, and no member can be reassigned,
-/// so no caller can pair a play with another candidate's error, file it
-/// under another problem, or state a correctness its error contradicts.
+/// SPEC-scoring §2a) in one pass, and takes the problem's key and the board
+/// the play leaves from the same record. There is no public constructor, and
+/// no member can be reassigned, so no caller can pair a play with another
+/// candidate's error, file it under another problem, or state a correctness
+/// its error contradicts.
 /// </para>
 /// <para>
 /// <b>Only a scored play is one of these.</b> A play matching no candidate,
@@ -32,10 +34,23 @@ using BgDataTypes_Lib;
 /// disagree with <see cref="EquityLoss"/>.
 /// </para>
 /// <para>
-/// <b>Equality</b> compares the problem, the matched candidate and the result
-/// (the ranking and the error), never plays — Hal's ruling on
-/// halheinrich/backgammon#273. <see cref="UserPlay"/> takes no part: see
-/// <see cref="Play"/> for why a play has no equality.
+/// <b>Identity: the same problem and the same play</b> (Hal's ruling of
+/// 2026-09-27 on halheinrich/backgammon#273). Two submissions are equal
+/// exactly when they answer the same problem, <see cref="ProblemKey"/>, with
+/// the same play, <see cref="AfterBoard"/>. The key holds the problem's
+/// whole board, so equal keys mean one starting position, and from one
+/// position two plays are the same play exactly when they reach the same
+/// position (the rule is stated on <see cref="BoardState.IsSamePlay"/>).
+/// </para>
+/// <para>
+/// Everything else is a fact about this one submission, outside identity.
+/// <see cref="MatchedCandidateIndex"/> is which row of this record matched,
+/// and a content-equal record may list its candidates in another order.
+/// <see cref="UserPlay"/> is the encoding the user gave, and a play has no
+/// equality (see <see cref="Play"/>). <see cref="Ranking"/>,
+/// <see cref="EquityLoss"/> and <see cref="IsCorrect"/> are the result under
+/// one ranking of one analysis. So two equal submissions can differ in every
+/// one of these, and their equality says nothing about how either scored.
 /// </para>
 /// </remarks>
 public sealed class SubmittedPlay : IEquatable<SubmittedPlay>
@@ -47,9 +62,15 @@ public sealed class SubmittedPlay : IEquatable<SubmittedPlay>
     /// it.
     /// </summary>
     internal SubmittedPlay(
-        ProblemKey problemKey, Play userPlay, PlayRanking ranking, int matchedCandidateIndex, double equityLoss)
+        ProblemKey problemKey,
+        BoardPosition afterBoard,
+        Play userPlay,
+        PlayRanking ranking,
+        int matchedCandidateIndex,
+        double equityLoss)
     {
         ProblemKey = problemKey;
+        AfterBoard = afterBoard;
         UserPlay = userPlay;
         Ranking = ranking;
         MatchedCandidateIndex = matchedCandidateIndex;
@@ -64,9 +85,23 @@ public sealed class SubmittedPlay : IEquatable<SubmittedPlay>
     /// <see langword="null"/>: every record has a key (SPEC-stats-identity.md
     /// §2, amended 2026-09-27). The lifetime stats key on it
     /// (<see cref="ProblemStatsDocument"/>); <see cref="QuizScore"/> never
-    /// reads it.
+    /// reads it. One half of this submission's identity (see the type
+    /// remarks).
     /// </summary>
     public ProblemKey ProblemKey { get; }
+
+    /// <summary>
+    /// The play's identity: the position it reaches from the problem's start,
+    /// as the board it leaves — the matched candidate's after-board
+    /// (<see cref="CheckerPlayDecision.AfterBoardOf"/>), which the user's play
+    /// leaves too, being the same play. Taken from the scored record by
+    /// <see cref="PlaySubmission.Score"/>, never computed here.
+    /// <b>Frame: the next mover's</b>, as every after-board's: the opponent is
+    /// on roll, so the decision-maker's checkers are negative. The flip is its
+    /// own inverse, so equal after-boards are equal positions reached. The
+    /// other half of this submission's identity (see the type remarks).
+    /// </summary>
+    public BoardPosition AfterBoard { get; }
 
     /// <summary>
     /// The play the user submitted, in the encoding the user gave it: the same
@@ -86,7 +121,10 @@ public sealed class SubmittedPlay : IEquatable<SubmittedPlay>
     /// <summary>
     /// Index into the decision's <see cref="CheckerPlayDecisionData.Plays"/>
     /// of the candidate the user's play is — the stored order, whatever the
-    /// ranking's order (<see cref="RankedPlay.Index"/>).
+    /// ranking's order (<see cref="RankedPlay.Index"/>). A fact about which
+    /// row of that one record matched, not the play's identity: a
+    /// content-equal record may list the same play at another index. It takes
+    /// no part in equality.
     /// </summary>
     public int MatchedCandidateIndex { get; }
 
@@ -107,16 +145,17 @@ public sealed class SubmittedPlay : IEquatable<SubmittedPlay>
     public bool IsCorrect => EquityLoss == 0.0;
 
     /// <summary>
-    /// Whether <paramref name="other"/> scored the same problem to the same
-    /// candidate with the same result: equal <see cref="ProblemKey"/>,
-    /// <see cref="MatchedCandidateIndex"/>, <see cref="Ranking"/> and
-    /// <see cref="EquityLoss"/>. <see cref="UserPlay"/> takes no part (see the
-    /// type remarks).
+    /// Whether <paramref name="other"/> is the same submitted play: the same
+    /// problem (equal <see cref="ProblemKey"/>) and the same play (equal
+    /// <see cref="AfterBoard"/>), and nothing else.
+    /// <see cref="MatchedCandidateIndex"/>, <see cref="UserPlay"/>,
+    /// <see cref="Ranking"/>, <see cref="EquityLoss"/> and
+    /// <see cref="IsCorrect"/> take no part (see the type remarks).
     /// </summary>
     /// <param name="other">The submission to compare with, or <see langword="null"/>.</param>
     /// <returns>
-    /// <see langword="true"/> if <paramref name="other"/> has the same problem,
-    /// matched candidate and result; <see langword="false"/> otherwise,
+    /// <see langword="true"/> if <paramref name="other"/> answers the same
+    /// problem with the same play; <see langword="false"/> otherwise,
     /// including when <paramref name="other"/> is <see langword="null"/>.
     /// </returns>
     public bool Equals(SubmittedPlay? other)
@@ -125,9 +164,7 @@ public sealed class SubmittedPlay : IEquatable<SubmittedPlay>
             return true;
         return other is not null
             && ProblemKey == other.ProblemKey
-            && MatchedCandidateIndex == other.MatchedCandidateIndex
-            && Ranking == other.Ranking
-            && EquityLoss.Equals(other.EquityLoss);
+            && AfterBoard == other.AfterBoard;
     }
 
     /// <inheritdoc cref="Equals(SubmittedPlay?)"/>
@@ -135,12 +172,13 @@ public sealed class SubmittedPlay : IEquatable<SubmittedPlay>
 
     /// <summary>
     /// Hash code consistent with <see cref="Equals(SubmittedPlay?)"/>: the
-    /// problem, the matched candidate, the ranking and the error. Safe to
-    /// hash — the type is immutable.
+    /// problem and the play (<see cref="ProblemKey"/> and
+    /// <see cref="AfterBoard"/>), and nothing else, so submissions that are
+    /// the same play hash alike whatever their other facts. Safe to hash —
+    /// the type is immutable.
     /// </summary>
     /// <returns>The hash code.</returns>
-    public override int GetHashCode() =>
-        HashCode.Combine(ProblemKey, MatchedCandidateIndex, Ranking, EquityLoss);
+    public override int GetHashCode() => HashCode.Combine(ProblemKey, AfterBoard);
 
     /// <summary>
     /// Equality per <see cref="Equals(SubmittedPlay?)"/>; two
