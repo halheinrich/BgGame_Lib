@@ -18,9 +18,20 @@ public class ProblemStatsTests
     private static readonly DateTimeOffset T1 = new(2026, 7, 18, 12, 0, 0, TimeSpan.Zero);
     private static readonly DateTimeOffset T2 = new(2026, 7, 19, 12, 0, 0, TimeSpan.Zero);
 
-    // Scored as production scores it; correct exactly when the error is 0.
-    private static SubmittedPlay Play(ProblemKey? key, double equityLoss) =>
-        TestSubmissions.Play(key, equityLoss);
+    // Scored as production scores it; correct exactly when the error is 0. A
+    // play's key is its record's, so each helper builds the problem whose key
+    // it folds under: Play's spells Key, OtherPlay's OtherKey.
+    private static SubmittedPlay Play(double equityLoss) =>
+        TestSubmissions.Play(equityLoss);
+
+    private static SubmittedPlay OtherPlay(double equityLoss) =>
+        TestSubmissions.Play(
+            equityLoss,
+            TestRecords.Position(
+                cubeSize: 2,
+                cubeOwner: CubeOwner.OnRoll,
+                session: TestRecords.MatchSession(onRollNeeds: 5, opponentNeeds: 3)),
+            dice: [6, 5]);
 
     // Per-half correctness is derived from the answer/truth pair rather than
     // stated, so this helper composes pairs that realize the requested
@@ -39,7 +50,7 @@ public class ProblemStatsTests
     [Fact]
     public void FromPlay_Correct_OneSubmittedOneCorrectNoLoss()
     {
-        var s = ProblemStats.From(Play(Key, equityLoss: 0.0), T1);
+        var s = ProblemStats.From(Play(equityLoss: 0.0), T1);
 
         Assert.Equal(Key, s.Key);
         Assert.Equal(new ScoreSegment(Submitted: 1, Correct: 1, TotalEquityLoss: 0.0), s.Tally);
@@ -50,7 +61,7 @@ public class ProblemStatsTests
     [Fact]
     public void FromPlay_Incorrect_OneSubmittedZeroCorrectWithLoss()
     {
-        var s = ProblemStats.From(Play(Key, equityLoss: 0.042), T1);
+        var s = ProblemStats.From(Play(equityLoss: 0.042), T1);
 
         Assert.Equal(1, s.Tally.Submitted);
         Assert.Equal(0, s.Tally.Correct);
@@ -121,8 +132,8 @@ public class ProblemStatsTests
     [Fact]
     public void Plus_RepeatedFolds_AccumulateAndAdvanceLastQuizzed()
     {
-        var s = ProblemStats.From(Play(Key, equityLoss: 0.025), T1)
-            .Plus(Play(Key, equityLoss: 0.0), T2);
+        var s = ProblemStats.From(Play(equityLoss: 0.025), T1)
+            .Plus(Play(equityLoss: 0.0), T2);
 
         Assert.Equal(2, s.Tally.Submitted);
         Assert.Equal(1, s.Tally.Correct);
@@ -134,8 +145,8 @@ public class ProblemStatsTests
     [Fact]
     public void Plus_ReturnsNewInstance_OriginalUnchanged()
     {
-        var original = ProblemStats.From(Play(Key, equityLoss: 0.0), T1);
-        var updated = original.Plus(Play(Key, equityLoss: 0.05), T2);
+        var original = ProblemStats.From(Play(equityLoss: 0.0), T1);
+        var updated = original.Plus(Play(equityLoss: 0.05), T2);
 
         Assert.NotSame(original, updated);
         Assert.Equal(1, original.Tally.Submitted);
@@ -144,12 +155,20 @@ public class ProblemStatsTests
     }
 
     [Fact]
+    public void Fixtures_EachPlayCarriesTheKeyItsProblemSpells()
+    {
+        // So a key assertion below can never pass on a mis-built fixture.
+        Assert.Equal(Key, Play(equityLoss: 0.0).ProblemKey);
+        Assert.Equal(OtherKey, OtherPlay(equityLoss: 0.0).ProblemKey);
+    }
+
+    [Fact]
     public void PlusPlay_MismatchedKey_Throws()
     {
-        var s = ProblemStats.From(Play(Key, equityLoss: 0.0), T1);
+        var s = ProblemStats.From(Play(equityLoss: 0.0), T1);
 
         Assert.Throws<ArgumentException>(
-            () => s.Plus(Play(OtherKey, equityLoss: 0.0), T2));
+            () => s.Plus(OtherPlay(equityLoss: 0.0), T2));
     }
 
     [Fact]
@@ -159,27 +178,26 @@ public class ProblemStatsTests
         // (the dice field), so a mixed-kind fold is a key mismatch — kind
         // purity is structural, which keeps per-kind tally derivations
         // (Sightings' divide-by-two for cubes) exact.
-        var s = ProblemStats.From(Play(Key, equityLoss: 0.0), T1);
+        var s = ProblemStats.From(Play(equityLoss: 0.0), T1);
 
         Assert.Throws<ArgumentException>(() => s.Plus(
             Cube(CubeKey, doublerLoss: 0.0, doublerCorrect: true, takerLoss: 0.0, takerCorrect: true), T2));
     }
 
     [Fact]
-    public void FromAndPlus_NoKeySubmissions_Throw()
+    public void FromAndPlus_KeylessCubeSubmissions_Throw()
     {
-        // The no-key rung is filtered one level up (ProblemStatsDocument.Plus
-        // returns the document unchanged); at this level a keyless submission
-        // is a caller bug.
-        var s = ProblemStats.From(Play(Key, equityLoss: 0.0), T1);
+        // A cube submission's key is still its caller's
+        // (halheinrich/backgammon#285). A keyless one is filtered one level up
+        // (ProblemStatsDocument.Plus returns the document unchanged); at this
+        // level it is a caller bug. A play has no keyless case: its key is
+        // its record's.
+        var s = ProblemStats.From(
+            Cube(CubeKey, doublerLoss: 0.0, doublerCorrect: true, takerLoss: 0.0, takerCorrect: true), T1);
 
-        Assert.Throws<ArgumentException>(
-            () => ProblemStats.From(Play(null, equityLoss: 0.0), T1));
         Assert.Throws<ArgumentException>(
             () => ProblemStats.From(
                 Cube(null, doublerLoss: 0.0, doublerCorrect: true, takerLoss: 0.0, takerCorrect: true), T1));
-        Assert.Throws<ArgumentException>(
-            () => s.Plus(Play(null, equityLoss: 0.0), T2));
         Assert.Throws<ArgumentException>(
             () => s.Plus(
                 Cube(null, doublerLoss: 0.0, doublerCorrect: true, takerLoss: 0.0, takerCorrect: true), T2));
@@ -188,7 +206,7 @@ public class ProblemStatsTests
     [Fact]
     public void FromAndPlus_NullSubmissions_Throw()
     {
-        var s = ProblemStats.From(Play(Key, equityLoss: 0.0), T1);
+        var s = ProblemStats.From(Play(equityLoss: 0.0), T1);
 
         Assert.Throws<ArgumentNullException>(() => ProblemStats.From((SubmittedPlay)null!, T1));
         Assert.Throws<ArgumentNullException>(() => ProblemStats.From((SubmittedCubeAction)null!, T1));

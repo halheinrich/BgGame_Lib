@@ -25,8 +25,9 @@ public class ProblemStatsDocumentTests
     }
 
     // Scored as production scores it; correct exactly when the error is 0.
-    private static SubmittedPlay Play(ProblemKey? key, double equityLoss) =>
-        TestSubmissions.Play(key, equityLoss);
+    // Its key is its record's: the opening 3-1's problem, which spells KeyA.
+    private static SubmittedPlay Play(double equityLoss) =>
+        TestSubmissions.Play(equityLoss);
 
     // Per-half correctness is derived from the answer/truth pair rather than
     // stated, so this helper composes pairs that realize the requested
@@ -53,7 +54,7 @@ public class ProblemStatsDocumentTests
     public void Plus_UnseenProblem_CreatesItsLifetimeRecord()
     {
         var doc = ProblemStatsDocument.Empty
-            .Plus(Play(KeyA, equityLoss: 0.0), new TestClock(T1));
+            .Plus(Play(equityLoss: 0.0), new TestClock(T1));
 
         Assert.Equal(1, doc.Count);
         var stats = Assert.Contains(KeyA, doc.Problems);
@@ -68,10 +69,10 @@ public class ProblemStatsDocumentTests
         // may come from copies in different files — same key, one record.
         var clock = new TestClock(T1);
         var doc = ProblemStatsDocument.Empty
-            .Plus(Play(KeyA, equityLoss: 0.05), clock);
+            .Plus(Play(equityLoss: 0.05), clock);
 
         clock.Now = T2;
-        doc = doc.Plus(Play(KeyA, equityLoss: 0.0), clock);
+        doc = doc.Plus(Play(equityLoss: 0.0), clock);
 
         Assert.Equal(1, doc.Count);
         var stats = doc.Problems[KeyA];
@@ -86,7 +87,7 @@ public class ProblemStatsDocumentTests
     {
         var clock = new TestClock(T1);
         var doc = ProblemStatsDocument.Empty
-            .Plus(Play(KeyA, equityLoss: 0.03), clock)
+            .Plus(Play(equityLoss: 0.03), clock)
             .Plus(Cube(KeyB, doublerLoss: 0.0, doublerCorrect: true, takerLoss: 0.0, takerCorrect: true), clock);
 
         Assert.Equal(2, doc.Count);
@@ -113,8 +114,8 @@ public class ProblemStatsDocumentTests
     {
         var clock = new TestClock(T1);
         var original = ProblemStatsDocument.Empty
-            .Plus(Play(KeyA, equityLoss: 0.0), clock);
-        var updated = original.Plus(Play(KeyA, equityLoss: 0.02), clock);
+            .Plus(Play(equityLoss: 0.0), clock);
+        var updated = original.Plus(Play(equityLoss: 0.02), clock);
 
         Assert.NotSame(original, updated);
         Assert.Equal(1, original.Problems[KeyA].Tally.Submitted);
@@ -122,25 +123,12 @@ public class ProblemStatsDocumentTests
     }
 
     [Fact]
-    public void Plus_NoKeyPlay_IsNotRecorded()
+    public void Plus_KeylessCube_IsNotRecorded()
     {
-        // The no-key rung (SPEC-stats-identity.md §2): underivable key means
-        // the submission scores the session but never the lifetime record —
-        // and this document-level skip is the single filter.
-        var clock = new TestClock(T1);
-        var doc = ProblemStatsDocument.Empty
-            .Plus(Play(KeyA, equityLoss: 0.0), clock);
-
-        var after = doc.Plus(Play(null, equityLoss: 0.02), clock);
-
-        Assert.Same(doc, after);
-        Assert.Equal(1, after.Count);
-        Assert.Equal(1, after.Problems[KeyA].Tally.Submitted);
-    }
-
-    [Fact]
-    public void Plus_NoKeyCube_IsNotRecorded()
-    {
+        // A cube submission's key is still its caller's
+        // (halheinrich/backgammon#285): one supplied as null scores the
+        // session but never the lifetime record, and this document-level skip
+        // is the single filter. A play has no keyless case.
         var clock = new TestClock(T1);
         var doc = ProblemStatsDocument.Empty;
 
@@ -159,7 +147,7 @@ public class ProblemStatsDocumentTests
 
         Assert.Throws<ArgumentNullException>(() => doc.Plus((SubmittedPlay)null!, clock));
         Assert.Throws<ArgumentNullException>(() => doc.Plus((SubmittedCubeAction)null!, clock));
-        Assert.Throws<ArgumentNullException>(() => doc.Plus(Play(KeyA, 0.0), null!));
+        Assert.Throws<ArgumentNullException>(() => doc.Plus(Play(0.0), null!));
         Assert.Throws<ArgumentNullException>(() => doc.Plus(
             Cube(KeyB, 0.0, doublerCorrect: true, 0.0, takerCorrect: true), null!));
     }

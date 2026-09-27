@@ -38,9 +38,10 @@ public enum PlaySubmissionKind
 /// <b>One place, one derivation.</b> <see cref="Score"/> finds the candidate
 /// the play is and reads that candidate's error off the ranking
 /// (<see cref="CheckerPlayDecisionData.RankedBy"/>, SPEC-scoring §2a)
-/// together, so the matched candidate, the error and the correctness of a
-/// scored submission all come from the producer's one derivation and never
-/// from a caller.
+/// together, and takes the problem's key from the same record
+/// (<see cref="ProblemKey.From"/>), so the problem, the matched candidate,
+/// the error and the correctness of a scored submission all come from the
+/// producer's derivations and never from a caller.
 /// </para>
 /// <para>
 /// <b>Two cases yield no scored submission</b>, and both are skips of record
@@ -93,26 +94,28 @@ public sealed class PlaySubmission : IEquatable<PlaySubmission>
     /// <para>
     /// A matched candidate's error, and whether the ranking scores it, are the
     /// ranking's (<see cref="RankedPlays.ForCandidate"/>). A scored
-    /// candidate yields a <see cref="SubmittedPlay"/> carrying its index, its
-    /// error and <paramref name="ranking"/>; a candidate the ranking does not
-    /// score yields <see cref="PlaySubmissionKind.NotScored"/> with its index.
+    /// candidate yields a <see cref="SubmittedPlay"/> carrying the record's
+    /// key, the candidate's index, its error and <paramref name="ranking"/>;
+    /// a candidate the ranking does not score yields
+    /// <see cref="PlaySubmissionKind.NotScored"/> with its index.
+    /// </para>
+    /// <para>
+    /// The key is the record's own (<see cref="ProblemKey.From"/>), derived
+    /// here rather than taken from a caller, so a submission cannot name
+    /// another problem. Every record has one (SPEC-stats-identity.md §2,
+    /// amended 2026-09-27), so there is no keyless case.
     /// </para>
     /// </remarks>
-    /// <param name="problemKey">
-    /// Content identity of the quizzed problem, or <see langword="null"/> for
-    /// the no-key rung; carried onto a scored submission unread.
-    /// </param>
     /// <param name="play">The play the user submitted.</param>
     /// <param name="decision">
     /// The analysed checker-play decision answered: its position to match the
-    /// play from, and its candidates to rank.
+    /// play from, its candidates to rank, and its key.
     /// </param>
     /// <param name="ranking">The quiz's ranking, which decides the best play and every error.</param>
     /// <returns>The submission's outcome under <paramref name="ranking"/>.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="decision"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="ranking"/> is not a defined ranking.</exception>
-    public static PlaySubmission Score(
-        ProblemKey? problemKey, Play play, CheckerPlayDecision decision, PlayRanking ranking)
+    public static PlaySubmission Score(Play play, CheckerPlayDecision decision, PlayRanking ranking)
     {
         ArgumentNullException.ThrowIfNull(decision);
 
@@ -131,7 +134,7 @@ public sealed class PlaySubmission : IEquatable<PlaySubmission>
         return ranked.ForCandidate(index).Error is double error
             ? new PlaySubmission(
                 PlaySubmissionKind.Scored,
-                new SubmittedPlay(problemKey, play, ranking, index, error),
+                new SubmittedPlay(ProblemKey.From(decision), play, ranking, index, error),
                 notScoredCandidateIndex: 0)
             : new PlaySubmission(PlaySubmissionKind.NotScored, scored: null, index);
     }

@@ -54,13 +54,15 @@ using BgDataTypes_Lib;
 /// </para>
 /// </remarks>
 /// <param name="ProblemKey">
-/// Content identity of the problem this submission answers, derived
-/// producer-side via <see cref="ProblemKey.TryDerive"/> from the quizzed
-/// record's facts. <see langword="null"/> is the no-key rung
-/// (SPEC-stats-identity.md §2): the submission still scores the session
-/// (<see cref="QuizScore"/> never reads the key) but is not recorded in
-/// lifetime stats — <see cref="ProblemStatsDocument.Plus(SubmittedCubeAction, TimeProvider)"/>
-/// skips it.
+/// Content identity of the problem this submission answers, supplied by the
+/// caller: the quizzed record's key (<see cref="ProblemKey.From"/>), which
+/// every record has (SPEC-stats-identity.md §2, amended 2026-09-27). A
+/// submission whose caller supplies <see langword="null"/> still scores the
+/// session (<see cref="QuizScore"/> never reads the key) but is not recorded
+/// in lifetime stats — <see cref="ProblemStatsDocument.Plus(SubmittedCubeAction, TimeProvider)"/>
+/// skips it. Deriving the key from the record, as
+/// <see cref="PlaySubmission.Score"/> does for a checker play, is
+/// halheinrich/backgammon#285's.
 /// </param>
 /// <param name="UserDecision">The claim/taker answer pair the user chose.</param>
 /// <param name="BestDecision">
@@ -108,8 +110,9 @@ public sealed record SubmittedCubeAction(
     /// other decision.
     /// </summary>
     /// <param name="problemKey">
-    /// Content identity of the quizzed problem, or <see langword="null"/> for
-    /// the no-key rung.
+    /// Content identity of the quizzed problem, its record's key; or
+    /// <see langword="null"/>, which is not recorded (see
+    /// <see cref="ProblemKey"/>).
     /// </param>
     /// <param name="answer">The claim/taker pair the user submitted.</param>
     /// <param name="decision">

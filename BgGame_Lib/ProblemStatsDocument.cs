@@ -28,12 +28,15 @@ using BgDataTypes_Lib;
 /// </para>
 ///
 /// <para>
-/// <b>The no-key rung.</b> A submission whose <c>ProblemKey</c> is
-/// <see langword="null"/> (underivable facts — SPEC-stats-identity.md §2) is
-/// not recorded: <c>Plus</c> returns the document unchanged. Degrade, never
-/// block — the quiz session proceeds and scores normally; only the lifetime
-/// record abstains. This document-level skip is the <i>single</i> no-key
-/// filter; <see cref="ProblemStats"/> itself rejects keyless folds as
+/// <b>A keyless cube submission is not recorded.</b> A checker play always
+/// carries its record's key, which <see cref="PlaySubmission.Score"/>
+/// derives. A cube submission's key is still supplied by its caller
+/// (<see cref="SubmittedCubeAction.ProblemKey"/>;
+/// halheinrich/backgammon#285), and one supplied as <see langword="null"/>
+/// is not recorded: <c>Plus</c> returns the document unchanged. Degrade,
+/// never block — the quiz session proceeds and scores normally; only the
+/// lifetime record abstains. This document-level skip is the <i>single</i>
+/// such filter; <see cref="ProblemStats"/> itself rejects keyless folds as
 /// corruption.
 /// </para>
 ///
@@ -176,11 +179,10 @@ public sealed class ProblemStatsDocument
 
     /// <summary>
     /// Return a new document with <paramref name="play"/> folded into its
-    /// problem's lifetime record — created via
+    /// problem's lifetime record — the one its
+    /// <see cref="SubmittedPlay.ProblemKey"/> names, created via
     /// <see cref="ProblemStats.From(SubmittedPlay, DateTimeOffset)"/> when the
-    /// problem has never been quizzed before. A submission carrying no
-    /// <see cref="SubmittedPlay.ProblemKey"/> is not recorded: the same
-    /// document is returned (the no-key rung — see the type remarks).
+    /// problem has never been quizzed before.
     /// </summary>
     /// <param name="play">The submission to fold.</param>
     /// <param name="clock">Source of the fold timestamp (its <see cref="TimeProvider.GetUtcNow"/>).</param>
@@ -188,8 +190,7 @@ public sealed class ProblemStatsDocument
     {
         ArgumentNullException.ThrowIfNull(play);
         ArgumentNullException.ThrowIfNull(clock);
-        if (play.ProblemKey is not { } key)
-            return this;
+        var key = play.ProblemKey;
         var quizzedAt = clock.GetUtcNow();
         var updated = _problems.TryGetValue(key, out var existing)
             ? existing.Plus(play, quizzedAt)
@@ -207,8 +208,7 @@ public sealed class ProblemStatsDocument
     /// 1-of-2 — see
     /// <see cref="ProblemStats.Plus(SubmittedCubeAction, DateTimeOffset)"/>.
     /// A submission carrying no <see cref="SubmittedCubeAction.ProblemKey"/>
-    /// is not recorded: the same document is returned (the no-key rung — see
-    /// the type remarks).
+    /// is not recorded: the same document is returned (see the type remarks).
     /// </summary>
     /// <param name="cube">The submission to fold.</param>
     /// <param name="clock">Source of the fold timestamp (its <see cref="TimeProvider.GetUtcNow"/>).</param>

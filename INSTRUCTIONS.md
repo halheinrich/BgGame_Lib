@@ -523,23 +523,26 @@ it speaks only the interface. The consumer wires it in: BgQuiz_Blazor's
 
 **A submitted play is scored under a ranking, in one place, and its facts
 cannot disagree** (halheinrich/backgammon#273; SPEC-scoring §2a).
-`PlaySubmission.Score(problemKey, play, decision, ranking)` is that place: it
+`PlaySubmission.Score(play, decision, ranking)` is that place: it
 finds the candidate the play is, by identity from the decision's own position
 (`BoardState.IndexOfSamePlay` — the rule is BgDataTypes_Lib's, stated on
 `IsSamePlay`), and reads that candidate's error off the producer's one
 derivation (`CheckerPlayDecisionData.RankedBy(ranking).ForCandidate(index)`),
 together. It takes the `CheckerPlayDecision` — the record, since matching
-needs its position — so a cube decision cannot be passed. What it returns
-names its case (`PlaySubmissionKind`):
+needs its position — so a cube decision cannot be passed. The problem's key
+is that record's own (`ProblemKey.From`), derived here and never taken from
+a caller, so a submission cannot name another problem; every record has one
+(SPEC-stats-identity.md §2, amended 2026-09-27). What it returns names its
+case (`PlaySubmissionKind`):
 
 - **`Scored`** — the ranking scores the candidate: a **`SubmittedPlay`**,
-  carrying the problem key, the user's own encoding (`UserPlay`), the
-  `Ranking`, the `MatchedCandidateIndex` (stored order) and the
-  `EquityLoss` — the ranking's error, the ranking's best play's equity minus
-  the candidate's. `IsCorrect` is **derived**, exactly 0 (SPEC-scoring §2a),
-  so it cannot disagree with the error; it is the one statement of the
-  verdict, and halheinrich/backgammon#202's pending threshold ruling changes
-  that predicate and nothing else.
+  carrying the record's key (`ProblemKey`, never null), the user's own
+  encoding (`UserPlay`), the `Ranking`, the `MatchedCandidateIndex` (stored
+  order) and the `EquityLoss` — the ranking's error, the ranking's best
+  play's equity minus the candidate's. `IsCorrect` is **derived**, exactly
+  0 (SPEC-scoring §2a), so it cannot disagree with the error; it is the one
+  statement of the verdict, and halheinrich/backgammon#202's pending
+  threshold ruling changes that predicate and nothing else.
 - **`NotScored`** — the play is a candidate the ranking does not score
   (depth first only), carrying that candidate's index; and **`OffList`** —
   the play is no candidate, a play invalid from the position included. Both
@@ -593,6 +596,10 @@ half (SPEC-scoring §3, ruled 2026-08-26; halheinrich/backgammon#86).
   assembling the five fields by hand, which is the only way to pair an
   answer with a truth or a loss belonging to some other decision. A checker
   play cannot be passed: the parameter is the cube kind's own category.
+  Unlike a play's, the key is still the caller's to supply — the record's
+  `ProblemKey.From`, or null, which records nothing — because the factory
+  takes the category, not the record; deriving it, and retiring the public
+  constructor, is halheinrich/backgammon#285's.
 
 **`ScoreSegment`** is the single accumulation primitive: an immutable
 `(Submitted, Correct, TotalEquityLoss)` tally with derived `AverageEquityLoss`
@@ -634,12 +641,13 @@ v4 fold path needs.
 key is `ProblemKey` — the content identity derived from the decision's facts
 — not the file-relative `DecisionId`, so every content-equal copy of a
 problem across files and matches folds into and reads one lifetime record.
-Submissions carry a `ProblemKey?` stamped at construction (the consumer
-derives it once via `ProblemKey.TryDerive`); a null key is the ruled
-**no-key rung**: the submission still scores the session (`QuizScore` never
-reads the key) but is not recorded — `ProblemStatsDocument.Plus` returns the
-document unchanged, and that document-level skip is the *single* no-key
-filter (degrade, never block).
+Every record has a key (`ProblemKey.From`; SPEC-stats-identity.md §2, amended
+2026-09-27), and a scored play carries its record's, derived where it is
+scored (see "Quiz-result records"). A cube submission's key is still supplied
+by its caller (halheinrich/backgammon#285); one supplied as null still scores
+the session (`QuizScore` never reads the key) but is not recorded —
+`ProblemStatsDocument.Plus` returns the document unchanged, and that
+document-level skip is the *single* keyless filter (degrade, never block).
 
 **`ProblemStats`** is one problem's lifetime record: its `ProblemKey`, a
 composed `ScoreSegment` tally, and the last-quizzed date. Composing
@@ -885,10 +893,9 @@ for deterministic tests (the shuffled-source pattern).
   classify into per-entry pools in source order, looking each decision's
   lifetime record up **by its derived `ProblemKey`** (SPEC-stats-identity.md
   §4: the classifier judges the problem's full record wherever the copy came
-  from; an underivable key means no record can exist, so the decision
-  classifies as never-seen) — the residual pool collects decisions matched
-  by no non-residual entry, reachable only when an EverythingElse entry is
-  selected (otherwise unmatched decisions are simply not drawn); target =
+  from) — the residual pool collects decisions matched by no non-residual
+  entry, reachable only when an EverythingElse entry is selected (otherwise
+  unmatched decisions are simply not drawn); target =
   `QuizLength ?? union of selected pools` (deduped); apportion the target by
   percent via largest remainder (floor, leftover to largest fractional
   remainders, ties to the earlier entry); draw in declared entry order with
@@ -942,10 +949,10 @@ the ratified consequence.
   display/provenance. The former survivor-preference constructor/predicate —
   a seam that existed solely to keep id-keyed stats reachable — is deleted,
   not bypassed.
-- **Fail-open on the no-key rung.** Items with no derivable key pass through
-  unmerged, even when several are otherwise identical: an underivable key
-  carries no content claim, and treating absence as equality would collapse
-  unrelated problems.
+- **Every item takes part.** Every record has a key (`ProblemKey.From`;
+  SPEC-stats-identity.md §2, amended 2026-09-27), so no item passes through
+  undeduped; the producer owns that guarantee, and this source relies on it
+  rather than guarding against it.
 - **Duplicate-class telemetry.** `LastDuplicateClasses` exposes the most
   recent enumeration's content-equivalence classes (one
   `DuplicatePositionClass` — key + member `DecisionId`s, survivor first — per
@@ -1336,17 +1343,17 @@ public sealed class ShuffledProblemSetSource : IProblemSetSource   // decorator:
         // drains + re-shuffles the inner source each call → a fresh permutation per enumeration
 }
 
-// Quiz scoring. ProblemKey is the content identity stamped at construction
-// (via ProblemKey.TryDerive); null = the no-key rung — scores the session,
-// never recorded in lifetime stats.
+// Quiz scoring. ProblemKey is the content identity: a play's is its record's
+// (ProblemKey.From, derived by Score); a cube's is still its caller's, and
+// null there scores the session but is never recorded in lifetime stats.
 public enum PlaySubmissionKind { Scored = 1, NotScored = 2, OffList = 3 }
 
 public sealed class PlaySubmission : IEquatable<PlaySubmission>   // value equality; + ==, !=
 {
     public PlaySubmissionKind Kind { get; }
     public static PlaySubmission Score(                 // THE one place a submitted play is scored:
-        ProblemKey? problemKey, Play play,              //   matched by identity from the position,
-        CheckerPlayDecision decision, PlayRanking ranking); //   error read off RankedBy(ranking)
+        Play play, CheckerPlayDecision decision,        //   matched by identity from the position,
+        PlayRanking ranking);                           //   error read off RankedBy(ranking), key From(decision)
     public bool TryGetScored([NotNullWhen(true)] out SubmittedPlay? submitted);   // true exactly for Scored
     public TResult Match<TResult>(Func<SubmittedPlay, TResult> scored,
         Func<int, TResult> notScored,                   // the not-scored candidate's index
@@ -1355,7 +1362,7 @@ public sealed class PlaySubmission : IEquatable<PlaySubmission>   // value equal
 
 public sealed class SubmittedPlay : IEquatable<SubmittedPlay>   // no public ctor; + ==, !=
 {
-    public ProblemKey? ProblemKey { get; }
+    public ProblemKey ProblemKey { get; }     // the record's own; never null
     public Play UserPlay { get; }             // the user's own encoding; not in equality
     public PlayRanking Ranking { get; }
     public int MatchedCandidateIndex { get; } // into Plays (stored order)
@@ -1365,7 +1372,7 @@ public sealed class SubmittedPlay : IEquatable<SubmittedPlay>   // no public cto
 }
 
 public sealed record SubmittedCubeAction(
-    ProblemKey? ProblemKey,
+    ProblemKey? ProblemKey,               // the caller's: the record's key, or null (not recorded)
     CubeClaimPair UserDecision,           // the user's (claim, taker) answer
     CubeClaimPair BestDecision,           // CubeDecisionData.BestClaimPair — the producer's truth
     double DoublerEquityLoss, double TakerEquityLoss)
@@ -1397,10 +1404,11 @@ public sealed record QuizScore(ScoreSegment PlayDecisions, ScoreSegment DoubleDe
 public sealed record ProblemStats(ProblemKey Key, ScoreSegment Tally, DateTimeOffset LastQuizzed)
 {
     public int Wrong { get; }                  // derived: Tally.Submitted − Tally.Correct; never stored
-    public static ProblemStats From(SubmittedPlay play, DateTimeOffset quizzedAt);       // first-ever fold; throws on null key
-    public static ProblemStats From(SubmittedCubeAction cube, DateTimeOffset quizzedAt);
-    public ProblemStats Plus(SubmittedPlay play, DateTimeOffset quizzedAt);       // ArgumentException on null/mismatched key
-    public ProblemStats Plus(SubmittedCubeAction cube, DateTimeOffset quizzedAt); // TWO decisions (per half), as QuizScore
+    public static ProblemStats From(SubmittedPlay play, DateTimeOffset quizzedAt);       // first-ever fold
+    public static ProblemStats From(SubmittedCubeAction cube, DateTimeOffset quizzedAt); // throws on a null key
+    public ProblemStats Plus(SubmittedPlay play, DateTimeOffset quizzedAt);       // ArgumentException on a mismatched key
+    public ProblemStats Plus(SubmittedCubeAction cube, DateTimeOffset quizzedAt); // TWO decisions (per half), as QuizScore;
+                                                                                  //   ArgumentException on a null/mismatched key
     public ProblemStats Merge(ProblemStats other);   // same key: tallies summed, LastQuizzed the later; ArgumentException otherwise
 }
 
@@ -1515,7 +1523,7 @@ public sealed class DistinctPositionProblemSetSource : IProblemSetSource
         // first-occurrence order; empty when nothing collapsed); null before the
         // first enumeration; assigned before the first yield
     public IAsyncEnumerable<BgDecisionData> EnumerateAsync(CancellationToken cancellationToken = default);
-        // dedupes by derived ProblemKey; no-key items pass through unmerged (fail-open)
+        // dedupes by derived ProblemKey (every record has one)
 }
 
 public sealed record DuplicatePositionClass(      // wraps a list → effectively reference equality
@@ -1616,9 +1624,9 @@ public sealed record AnswerTypeDistribution(
   both halves into the one tally of the one record keyed by that position's
   `ProblemKey`. A document's tallies therefore reconcile with a
   `QuizScore.Total` over the same submissions **only when every submission
-  carried a key** — no-key submissions score the session but never the
-  document (the ruled degrade rung), so a corpus with underivable records can
-  legitimately leave the document short; that is the no-key rung, not a fold
+  carried a key**. Every play does; a cube submission whose caller supplied
+  no key scores the session but never the document, so such a caller
+  legitimately leaves the document short — the keyless skip, not a fold
   bug.
 - **`AnswerTypeDistribution` counts a cube position as ONE — the opposite of
   the bullet above, deliberately.** It buckets pool *membership* (one row per
@@ -1669,14 +1677,15 @@ public sealed record AnswerTypeDistribution(
   going internal. Adding a wire unit whose converter delegates a nested type
   to the active options means declaring that type too: nothing here does today
   (see "Source generation & trimming"), which is why this context chains none.
-- **No-key submissions vanish from lifetime stats silently — by ruling.**
-  `ProblemStatsDocument.Plus` with a null `ProblemKey` returns the *same*
-  document (degrade, never block); nothing throws and no counter ticks. That
-  document-level skip is the single filter — `ProblemStats.From`/`Plus`
-  treat a keyless fold as a caller bug (`ArgumentException`). Do not "fix"
-  either end: producer-stamped corpora make the rung unreachable in
-  practice, and a stricter fail-loud was explicitly rejected
-  (SPEC-stats-identity.md §2).
+- **A keyless cube submission vanishes from lifetime stats silently.**
+  `ProblemStatsDocument.Plus` with a cube submission whose `ProblemKey` is
+  null returns the *same* document (degrade, never block); nothing throws
+  and no counter ticks. That document-level skip is the single filter —
+  `ProblemStats.From`/`Plus` treat a keyless fold as a caller bug
+  (`ArgumentException`). It is reachable only from a caller that supplies no
+  key, since every record has one; a play cannot reach it, its key being its
+  record's. Deriving the cube's key from the record, which retires the null,
+  is halheinrich/backgammon#285's.
 - **`QuizCategory` measures are per-half and its thresholds are fractions;
   "seen" means sightings.** `SeenFewerThan` counts sightings derived from the
   tally (`Submitted / 2` for a cube decision — the two-half fold), so the
@@ -1708,8 +1717,8 @@ public sealed record AnswerTypeDistribution(
   tradeoff), dedupes by `DecisionId` (first occurrence wins — record
   identity, deliberately not the content key), classifies **by each item's
   derived `ProblemKey`** (a content-equal copy under a different id
-  classifies by the problem's record; a no-key item classifies as
-  never-seen), `Count` is null (read `LastComposition.DrawnCount` after
+  classifies by the problem's record), `Count` is null (read
+  `LastComposition.DrawnCount` after
   enumeration starts instead), and decisions matched by no selected entry
   are unreachable unless an `EverythingElse` entry is in the mix. The stats
   provider is resolved fresh per enumeration — Restart composes against the
@@ -1719,13 +1728,12 @@ public sealed record AnswerTypeDistribution(
   per-instance mutable state and the `Random` is shared — not thread-safe,
   same caveat class as `ShuffledProblemSetSource`. With `RandomOrder` on,
   re-enumeration is a fresh draw and shuffle, not a replay.
-- **`DistinctPositionProblemSetSource` dedupes by content, fails open on
-  no-key, and is now stateful.** The key is the derived `ProblemKey` — the
-  raw XGID string is an identity nowhere, so two items with different XGIDs
-  can and should collapse (same-away across match lengths, mirror-turn).
-  No-key items pass through unmerged and never appear in
-  `LastDuplicateClasses`; do not "tighten" that into a merge or an error
-  (fail-open is the ratified rung). There is no survivor preference any more
+- **`DistinctPositionProblemSetSource` dedupes by content and is now
+  stateful.** The key is the derived `ProblemKey` — the raw XGID string is
+  an identity nowhere, so two items with different XGIDs can and should
+  collapse (same-away across match lengths, mirror-turn). Do not add a
+  pass-through for a keyless record: there is none (see "Position-distinct
+  source"). There is no survivor preference any more
   — first occurrence survives, full stop; a consumer that wants a specific
   copy to survive is holding it wrong, because stats no longer key on the
   survivor. `LastDuplicateClasses` makes the instance stateful per

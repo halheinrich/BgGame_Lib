@@ -143,7 +143,9 @@ public class ProblemStatsDocumentSerializationTests
         // equity minus its own, and it was correct at exactly 0. Every
         // candidate of the opening 3-1, scored under the equity ranking and
         // folded into the pinned document, changes its problem's tally by
-        // exactly that and touches nothing else; the file stays v3.
+        // exactly that and touches nothing else; the file stays v3. The key
+        // the fold lands under is the one the record derives, and it is the
+        // pinned text.
         var decision = TestRecords.CheckerPlay();
         var candidates = decision.Decision.Plays;
         double best = candidates.Max(c => c.Equity);
@@ -153,8 +155,9 @@ public class ProblemStatsDocumentSerializationTests
         {
             var before = JsonSerializer.Deserialize<ProblemStatsDocument>(PinnedWireForm)!;
             double loss = best - candidates[i].Equity;
-            Assert.True(PlaySubmission.Score(PlayKey, candidates[i].Play, decision, PlayRanking.Equity)
+            Assert.True(PlaySubmission.Score(candidates[i].Play, decision, PlayRanking.Equity)
                 .TryGetScored(out var submitted));
+            Assert.Equal(PlayKey, submitted.ProblemKey);
 
             var after = before.Plus(submitted, clock);
 

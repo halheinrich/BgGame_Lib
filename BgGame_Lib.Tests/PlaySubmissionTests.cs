@@ -14,21 +14,21 @@ public class PlaySubmissionTests
     //  Fixtures
     // -----------------------------------------------------------------------
 
-    private static readonly ProblemKey KeyA = KeyOf(TestRecords.CheckerPlay());
-    private static readonly ProblemKey KeyB = KeyOf(TestRecords.CheckerPlay(
-        position: TestRecords.Position(session: TestRecords.MatchSession(onRollNeeds: 5, opponentNeeds: 3))));
-
-    private static ProblemKey KeyOf(BgDecisionData record)
-    {
-        Assert.True(ProblemKey.TryDerive(record, out var key));
-        return key!;
-    }
+    /// <summary>
+    /// The opening 3-1's position at 5-away/3-away rather than the default
+    /// 7-away/7-away: the same board and roll, another problem.
+    /// </summary>
+    private static PositionData AtFiveAwayThreeAway =>
+        TestRecords.Position(session: TestRecords.MatchSession(onRollNeeds: 5, opponentNeeds: 3));
 
     /// <summary>
     /// The opening 3-1 (<see cref="TestRecords.CheckerPlay"/>'s default):
     /// three candidates at one depth, 8/5 6/5 the best.
     /// </summary>
     private static CheckerPlayDecision Opening => TestRecords.CheckerPlay();
+
+    /// <summary>The opening 3-1 as another problem (<see cref="AtFiveAwayThreeAway"/>).</summary>
+    private static CheckerPlayDecision OpeningElsewhere => TestRecords.CheckerPlay(position: AtFiveAwayThreeAway);
 
     private static Play EightFiveSixFive => [new(8, 5), new(6, 5)];
     private static Play ThirteenTenSixFive => [new(13, 10), new(6, 5)];
@@ -40,7 +40,11 @@ public class PlaySubmissionTests
     /// equity 8/5 6/5 is best; under depth first 13/10 6/5 is, and 8/5 6/5 —
     /// analysed less deeply, rated higher — is not scored (SPEC-scoring §2a).
     /// </summary>
-    private static CheckerPlayDecision TwoDepths => TestRecords.CheckerPlay(
+    private static CheckerPlayDecision TwoDepths => TwoDepthsFrom(position: null);
+
+    /// <summary><see cref="TwoDepths"/> from <paramref name="position"/> (by default the opening's).</summary>
+    private static CheckerPlayDecision TwoDepthsFrom(PositionData? position) => TestRecords.CheckerPlay(
+        position: position,
         decision: TestRecords.CheckerPlayData(plays:
         [
             TestRecords.Candidate(play: EightFiveSixFive, equity: 0.20),
@@ -98,7 +102,7 @@ public class PlaySubmissionTests
     [Fact]
     public void Score_TheBestPlay_IsCorrectAtZero()
     {
-        var submitted = Scored(PlaySubmission.Score(KeyA, EightFiveSixFive, Opening, PlayRanking.Equity));
+        var submitted = Scored(PlaySubmission.Score(EightFiveSixFive, Opening, PlayRanking.Equity));
 
         Assert.Equal(0, submitted.MatchedCandidateIndex);
         Assert.Equal(0.0, submitted.EquityLoss);
@@ -110,7 +114,7 @@ public class PlaySubmissionTests
     {
         var decision = Opening;
 
-        var submitted = Scored(PlaySubmission.Score(KeyA, ThirteenTenSixFive, decision, PlayRanking.Equity));
+        var submitted = Scored(PlaySubmission.Score(ThirteenTenSixFive, decision, PlayRanking.Equity));
 
         Assert.Equal(1, submitted.MatchedCandidateIndex);
         Assert.Equal(decision.Decision.RankedBy(PlayRanking.Equity).ForCandidate(1).Error, submitted.EquityLoss);
@@ -130,8 +134,8 @@ public class PlaySubmissionTests
             TestRecords.Candidate(play: EightFiveSixFive, equity: 0.2),
         ]));
 
-        var storedFirst = Scored(PlaySubmission.Score(KeyA, ThirteenTenSixFive, decision, PlayRanking.Equity));
-        var rankingsBest = Scored(PlaySubmission.Score(KeyA, EightFiveSixFive, decision, PlayRanking.Equity));
+        var storedFirst = Scored(PlaySubmission.Score(ThirteenTenSixFive, decision, PlayRanking.Equity));
+        var rankingsBest = Scored(PlaySubmission.Score(EightFiveSixFive, decision, PlayRanking.Equity));
 
         Assert.Equal(0, storedFirst.MatchedCandidateIndex);
         Assert.Equal(0.2, storedFirst.EquityLoss, precision: 12);
@@ -152,7 +156,7 @@ public class PlaySubmissionTests
             TestRecords.Candidate(play: ThirteenTenSixFive, equity: 0.1 - 1e-9),
         ]));
 
-        var submitted = Scored(PlaySubmission.Score(KeyA, ThirteenTenSixFive, decision, PlayRanking.Equity));
+        var submitted = Scored(PlaySubmission.Score(ThirteenTenSixFive, decision, PlayRanking.Equity));
 
         Assert.True(submitted.EquityLoss > 0.0);
         Assert.False(submitted.IsCorrect);
@@ -167,9 +171,9 @@ public class PlaySubmissionTests
         var decision = TwoDepths;
 
         var underEquity = Scored(PlaySubmission.Score(
-            KeyA, TwentyFourTwentyThreeThirteenTen, decision, PlayRanking.Equity));
+            TwentyFourTwentyThreeThirteenTen, decision, PlayRanking.Equity));
         var underDepth = Scored(PlaySubmission.Score(
-            KeyA, TwentyFourTwentyThreeThirteenTen, decision, PlayRanking.DepthFirst));
+            TwentyFourTwentyThreeThirteenTen, decision, PlayRanking.DepthFirst));
 
         Assert.Equal(0.20 - 0.05, underEquity.EquityLoss, precision: 12);
         Assert.Equal(0.10 - 0.05, underDepth.EquityLoss, precision: 12);
@@ -182,9 +186,9 @@ public class PlaySubmissionTests
     {
         var decision = TwoDepths;
 
-        Assert.True(Scored(PlaySubmission.Score(KeyA, EightFiveSixFive, decision, PlayRanking.Equity)).IsCorrect);
-        Assert.True(Scored(PlaySubmission.Score(KeyA, ThirteenTenSixFive, decision, PlayRanking.DepthFirst)).IsCorrect);
-        Assert.False(Scored(PlaySubmission.Score(KeyA, ThirteenTenSixFive, decision, PlayRanking.Equity)).IsCorrect);
+        Assert.True(Scored(PlaySubmission.Score(EightFiveSixFive, decision, PlayRanking.Equity)).IsCorrect);
+        Assert.True(Scored(PlaySubmission.Score(ThirteenTenSixFive, decision, PlayRanking.DepthFirst)).IsCorrect);
+        Assert.False(Scored(PlaySubmission.Score(ThirteenTenSixFive, decision, PlayRanking.Equity)).IsCorrect);
     }
 
     [Theory]
@@ -200,7 +204,7 @@ public class PlaySubmissionTests
 
         for (int i = 0; i < decision.Decision.Plays.Count; i++)
         {
-            var submission = PlaySubmission.Score(KeyA, decision.Decision.Plays[i].Play, decision, ranking);
+            var submission = PlaySubmission.Score(decision.Decision.Plays[i].Play, decision, ranking);
             var rankedPlay = ranked.ForCandidate(i);
             if (rankedPlay.Error is double error)
             {
@@ -217,16 +221,22 @@ public class PlaySubmissionTests
     }
 
     [Fact]
-    public void Score_CarriesTheKeyAndTheUsersOwnEncoding()
+    public void Score_CarriesTheRecordsOwnKeyAndTheUsersOwnEncoding()
     {
+        // The key is derived from the record scored, never taken from a
+        // caller: the same play of the opening at another score is another
+        // problem, and carries that record's key.
         Play reversed = [new(6, 5), new(8, 5)];
+        var elsewhere = OpeningElsewhere;
 
-        var submitted = Scored(PlaySubmission.Score(KeyA, reversed, Opening, PlayRanking.Equity));
+        var submitted = Scored(PlaySubmission.Score(reversed, Opening, PlayRanking.Equity));
+        var submittedElsewhere = Scored(PlaySubmission.Score(reversed, elsewhere, PlayRanking.Equity));
 
-        Assert.Equal(KeyA, submitted.ProblemKey);
+        Assert.Equal(ProblemKey.From(Opening), submitted.ProblemKey);
+        Assert.Equal(ProblemKey.From(elsewhere), submittedElsewhere.ProblemKey);
+        Assert.NotEqual(submitted.ProblemKey, submittedElsewhere.ProblemKey);
         Assert.True(submitted.UserPlay.IsSameEncoding(reversed));
         Assert.False(submitted.UserPlay.IsSameEncoding(EightFiveSixFive));
-        Assert.Null(Scored(PlaySubmission.Score(null, reversed, Opening, PlayRanking.Equity)).ProblemKey);
     }
 
     // -----------------------------------------------------------------------
@@ -244,7 +254,7 @@ public class PlaySubmissionTests
     public void Score_AnyEncodingOfACandidate_MatchesIt(string label, Play play)
     {
         _ = label;
-        Assert.Equal(0, Scored(PlaySubmission.Score(KeyA, play, Opening, PlayRanking.Equity)).MatchedCandidateIndex);
+        Assert.Equal(0, Scored(PlaySubmission.Score(play, Opening, PlayRanking.Equity)).MatchedCandidateIndex);
     }
 
     [Fact]
@@ -258,7 +268,7 @@ public class PlaySubmissionTests
             TestRecords.Candidate(play: EightFiveSixFive, equity: 0.2),
         ]));
 
-        var submitted = Scored(PlaySubmission.Score(KeyA, [new(13, 10), new(10, 9)], decision, PlayRanking.Equity));
+        var submitted = Scored(PlaySubmission.Score([new(13, 10), new(10, 9)], decision, PlayRanking.Equity));
 
         Assert.Equal(0, submitted.MatchedCandidateIndex);
     }
@@ -270,7 +280,7 @@ public class PlaySubmissionTests
         // on the checker from the 8, the user put it on the one from the 7.
         Play markOnTheSeven = [new(8, 3), new(7, -3)];
 
-        var submitted = Scored(PlaySubmission.Score(KeyA, markOnTheSeven, BlotOnTheThree, PlayRanking.Equity));
+        var submitted = Scored(PlaySubmission.Score(markOnTheSeven, BlotOnTheThree, PlayRanking.Equity));
 
         Assert.Equal(0, submitted.MatchedCandidateIndex);
         Assert.True(submitted.IsCorrect);
@@ -286,7 +296,7 @@ public class PlaySubmissionTests
     {
         Play offList = [new(24, 21), new(24, 23)];
 
-        var submission = PlaySubmission.Score(KeyA, offList, Opening, PlayRanking.Equity);
+        var submission = PlaySubmission.Score(offList, Opening, PlayRanking.Equity);
 
         Assert.Equal(PlaySubmissionKind.OffList, submission.Kind);
         Assert.False(submission.TryGetScored(out var scored));
@@ -307,7 +317,7 @@ public class PlaySubmissionTests
     public void Score_APlayInvalidFromThePosition_IsOffList_EvenBesideAMatchingEncoding(string label, Play play)
     {
         _ = label;
-        var submission = PlaySubmission.Score(KeyA, play, BlotOnTheThree, PlayRanking.Equity);
+        var submission = PlaySubmission.Score(play, BlotOnTheThree, PlayRanking.Equity);
 
         Assert.Equal(PlaySubmissionKind.OffList, submission.Kind);
         Assert.False(submission.TryGetScored(out _));
@@ -319,7 +329,7 @@ public class PlaySubmissionTests
         // Under depth first 8/5 6/5 was analysed less deeply than the best
         // and rated higher: treated as an off-list play, with no error
         // (SPEC-scoring §2a) — and the caller still learns which candidate.
-        var submission = PlaySubmission.Score(KeyA, EightFiveSixFive, TwoDepths, PlayRanking.DepthFirst);
+        var submission = PlaySubmission.Score(EightFiveSixFive, TwoDepths, PlayRanking.DepthFirst);
 
         Assert.Equal(PlaySubmissionKind.NotScored, submission.Kind);
         Assert.False(submission.TryGetScored(out _));
@@ -330,7 +340,7 @@ public class PlaySubmissionTests
     [Fact]
     public void Score_TheSamePlay_IsScoredUnderEquity_WhereDepthFirstDoesNotScoreIt()
     {
-        var submission = PlaySubmission.Score(KeyA, EightFiveSixFive, TwoDepths, PlayRanking.Equity);
+        var submission = PlaySubmission.Score(EightFiveSixFive, TwoDepths, PlayRanking.Equity);
 
         Assert.True(Scored(submission).IsCorrect);
     }
@@ -338,8 +348,8 @@ public class PlaySubmissionTests
     [Fact]
     public void Match_HandsEachCaseExactlyWhatItHas()
     {
-        var scored = PlaySubmission.Score(KeyA, ThirteenTenSixFive, Opening, PlayRanking.Equity);
-        var offList = PlaySubmission.Score(KeyA, [new(24, 21), new(24, 23)], Opening, PlayRanking.Equity);
+        var scored = PlaySubmission.Score(ThirteenTenSixFive, Opening, PlayRanking.Equity);
+        var offList = PlaySubmission.Score([new(24, 21), new(24, 23)], Opening, PlayRanking.Equity);
 
         Assert.Equal("scored 1", scored.Match(
             scored: static s => $"scored {s.MatchedCandidateIndex}",
@@ -354,7 +364,7 @@ public class PlaySubmissionTests
     [Fact]
     public void Match_NullBranch_Throws()
     {
-        var submission = PlaySubmission.Score(KeyA, EightFiveSixFive, Opening, PlayRanking.Equity);
+        var submission = PlaySubmission.Score(EightFiveSixFive, Opening, PlayRanking.Equity);
 
         Assert.Throws<ArgumentNullException>(() => submission.Match<int>(null!, static _ => 0, static () => 0));
         Assert.Throws<ArgumentNullException>(() => submission.Match(static _ => 0, null!, static () => 0));
@@ -369,16 +379,16 @@ public class PlaySubmissionTests
     public void Score_NullDecision_Throws()
     {
         Assert.Throws<ArgumentNullException>(() =>
-            PlaySubmission.Score(KeyA, EightFiveSixFive, null!, PlayRanking.Equity));
+            PlaySubmission.Score(EightFiveSixFive, null!, PlayRanking.Equity));
     }
 
     [Fact]
     public void Score_AnUndefinedRanking_Throws_WhateverThePlay()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            PlaySubmission.Score(KeyA, EightFiveSixFive, Opening, (PlayRanking)99));
+            PlaySubmission.Score(EightFiveSixFive, Opening, (PlayRanking)99));
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            PlaySubmission.Score(KeyA, [new(24, 21), new(24, 23)], Opening, (PlayRanking)99));
+            PlaySubmission.Score([new(24, 21), new(24, 23)], Opening, (PlayRanking)99));
     }
 
     // -----------------------------------------------------------------------
@@ -391,8 +401,8 @@ public class PlaySubmissionTests
     {
         // A play has no equality — Equals throws — so this passes only if the
         // submission's equality never reaches its play.
-        var a = Scored(PlaySubmission.Score(KeyA, [new(8, 5), new(6, 5)], Opening, PlayRanking.Equity));
-        var b = Scored(PlaySubmission.Score(KeyA, [new(6, 5), new(8, 5)], Opening, PlayRanking.Equity));
+        var a = Scored(PlaySubmission.Score([new(8, 5), new(6, 5)], Opening, PlayRanking.Equity));
+        var b = Scored(PlaySubmission.Score([new(6, 5), new(8, 5)], Opening, PlayRanking.Equity));
 
         Assert.Equal(a, b);
         Assert.True(a == b);
@@ -405,16 +415,15 @@ public class PlaySubmissionTests
     [Fact]
     public void SubmittedPlay_TheProblemParticipates()
     {
-        var a = Scored(PlaySubmission.Score(KeyA, EightFiveSixFive, Opening, PlayRanking.Equity));
-        var b = Scored(PlaySubmission.Score(KeyB, EightFiveSixFive, Opening, PlayRanking.Equity));
-        var noKey = Scored(PlaySubmission.Score(null, EightFiveSixFive, Opening, PlayRanking.Equity));
-        var noKeyToo = Scored(PlaySubmission.Score(null, EightFiveSixFive, Opening, PlayRanking.Equity));
+        // The same play of the same board and roll at another score: another
+        // problem, with the same candidate, ranking and error.
+        var a = Scored(PlaySubmission.Score(EightFiveSixFive, Opening, PlayRanking.Equity));
+        var b = Scored(PlaySubmission.Score(EightFiveSixFive, OpeningElsewhere, PlayRanking.Equity));
 
+        Assert.Equal(a.MatchedCandidateIndex, b.MatchedCandidateIndex);
+        Assert.Equal(a.EquityLoss, b.EquityLoss);
         Assert.NotEqual(a, b);
         Assert.True(a != b);
-        // The no-key rung is a value too: equal to itself, unequal to a keyed one.
-        Assert.Equal(noKey, noKeyToo);
-        Assert.NotEqual(a, noKey);
     }
 
     [Fact]
@@ -427,8 +436,8 @@ public class PlaySubmissionTests
             TestRecords.Candidate(play: ThirteenTenSixFive, equity: 0.1),
         ]));
 
-        var a = Scored(PlaySubmission.Score(KeyA, EightFiveSixFive, decision, PlayRanking.Equity));
-        var b = Scored(PlaySubmission.Score(KeyA, ThirteenTenSixFive, decision, PlayRanking.Equity));
+        var a = Scored(PlaySubmission.Score(EightFiveSixFive, decision, PlayRanking.Equity));
+        var b = Scored(PlaySubmission.Score(ThirteenTenSixFive, decision, PlayRanking.Equity));
 
         Assert.Equal(a.EquityLoss, b.EquityLoss);
         Assert.NotEqual(a, b);
@@ -439,8 +448,8 @@ public class PlaySubmissionTests
     {
         // The opening's candidates share one depth, so both rankings agree on
         // every error: the best play is 0 under each. Only the ranking differs.
-        var equity = Scored(PlaySubmission.Score(KeyA, EightFiveSixFive, Opening, PlayRanking.Equity));
-        var depth = Scored(PlaySubmission.Score(KeyA, EightFiveSixFive, Opening, PlayRanking.DepthFirst));
+        var equity = Scored(PlaySubmission.Score(EightFiveSixFive, Opening, PlayRanking.Equity));
+        var depth = Scored(PlaySubmission.Score(EightFiveSixFive, Opening, PlayRanking.DepthFirst));
 
         Assert.Equal(equity.MatchedCandidateIndex, depth.MatchedCandidateIndex);
         Assert.Equal(equity.EquityLoss, depth.EquityLoss);
@@ -458,8 +467,8 @@ public class PlaySubmissionTests
                 TestRecords.Candidate(play: ThirteenTenSixFive, equity: equity),
             ]));
 
-        var a = Scored(PlaySubmission.Score(KeyA, ThirteenTenSixFive, WithSecondAt(0.1), PlayRanking.Equity));
-        var b = Scored(PlaySubmission.Score(KeyA, ThirteenTenSixFive, WithSecondAt(0.0), PlayRanking.Equity));
+        var a = Scored(PlaySubmission.Score(ThirteenTenSixFive, WithSecondAt(0.1), PlayRanking.Equity));
+        var b = Scored(PlaySubmission.Score(ThirteenTenSixFive, WithSecondAt(0.0), PlayRanking.Equity));
 
         Assert.NotEqual(a, b);
     }
@@ -467,7 +476,7 @@ public class PlaySubmissionTests
     [Fact]
     public void SubmittedPlay_NullComparisons()
     {
-        var a = Scored(PlaySubmission.Score(KeyA, EightFiveSixFive, Opening, PlayRanking.Equity));
+        var a = Scored(PlaySubmission.Score(EightFiveSixFive, Opening, PlayRanking.Equity));
         SubmittedPlay? none = null;
 
         Assert.False(a.Equals(none));
@@ -484,22 +493,26 @@ public class PlaySubmissionTests
     public void PlaySubmission_TheSameOutcome_IsEqual()
     {
         Assert.Equal(
-            PlaySubmission.Score(KeyA, EightFiveSixFive, Opening, PlayRanking.Equity),
-            PlaySubmission.Score(KeyA, [new(6, 5), new(8, 5)], Opening, PlayRanking.Equity));
+            PlaySubmission.Score(EightFiveSixFive, Opening, PlayRanking.Equity),
+            PlaySubmission.Score([new(6, 5), new(8, 5)], Opening, PlayRanking.Equity));
+        // The two skips carry no problem: a not-scored outcome is its case and
+        // candidate index, an off-list one its case alone.
         Assert.Equal(
-            PlaySubmission.Score(KeyA, EightFiveSixFive, TwoDepths, PlayRanking.DepthFirst),
-            PlaySubmission.Score(KeyB, [new(6, 5), new(8, 5)], TwoDepths, PlayRanking.DepthFirst));
+            PlaySubmission.Score(EightFiveSixFive, TwoDepths, PlayRanking.DepthFirst),
+            PlaySubmission.Score(
+                [new(6, 5), new(8, 5)], TwoDepthsFrom(AtFiveAwayThreeAway), PlayRanking.DepthFirst));
         Assert.Equal(
-            PlaySubmission.Score(KeyA, [new(24, 21), new(24, 23)], Opening, PlayRanking.Equity),
-            PlaySubmission.Score(KeyB, [new(24, 22), new(24, 21)], TwoDepths, PlayRanking.DepthFirst));
+            PlaySubmission.Score([new(24, 21), new(24, 23)], Opening, PlayRanking.Equity),
+            PlaySubmission.Score(
+                [new(24, 22), new(24, 21)], TwoDepthsFrom(AtFiveAwayThreeAway), PlayRanking.DepthFirst));
     }
 
     [Fact]
     public void PlaySubmission_DifferentOutcomes_AreUnequal()
     {
-        var scored = PlaySubmission.Score(KeyA, EightFiveSixFive, TwoDepths, PlayRanking.Equity);
-        var notScored = PlaySubmission.Score(KeyA, EightFiveSixFive, TwoDepths, PlayRanking.DepthFirst);
-        var offList = PlaySubmission.Score(KeyA, [new(24, 21), new(24, 23)], TwoDepths, PlayRanking.Equity);
+        var scored = PlaySubmission.Score(EightFiveSixFive, TwoDepths, PlayRanking.Equity);
+        var notScored = PlaySubmission.Score(EightFiveSixFive, TwoDepths, PlayRanking.DepthFirst);
+        var offList = PlaySubmission.Score([new(24, 21), new(24, 23)], TwoDepths, PlayRanking.Equity);
 
         Assert.NotEqual(scored, notScored);
         Assert.NotEqual(notScored, offList);
@@ -507,6 +520,6 @@ public class PlaySubmissionTests
         Assert.True(scored != notScored);
         Assert.NotEqual(
             scored,
-            PlaySubmission.Score(KeyB, EightFiveSixFive, TwoDepths, PlayRanking.Equity));
+            PlaySubmission.Score(EightFiveSixFive, TwoDepthsFrom(AtFiveAwayThreeAway), PlayRanking.Equity));
     }
 }

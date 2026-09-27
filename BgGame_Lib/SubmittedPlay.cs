@@ -14,9 +14,10 @@ using BgDataTypes_Lib;
 /// <see cref="PlaySubmission.Score"/> finds the candidate the play is (by
 /// position, from the decision's own board) and reads that candidate's
 /// error off the ranking (<see cref="CheckerPlayDecisionData.RankedBy"/>,
-/// SPEC-scoring §2a) in one pass. There is no public constructor, and no
-/// member can be reassigned, so no caller can pair a play with another
-/// candidate's error or state a correctness its error contradicts.
+/// SPEC-scoring §2a) in one pass, and takes the problem's key from the same
+/// record. There is no public constructor, and no member can be reassigned,
+/// so no caller can pair a play with another candidate's error, file it
+/// under another problem, or state a correctness its error contradicts.
 /// </para>
 /// <para>
 /// <b>Only a scored play is one of these.</b> A play matching no candidate,
@@ -46,7 +47,7 @@ public sealed class SubmittedPlay : IEquatable<SubmittedPlay>
     /// it.
     /// </summary>
     internal SubmittedPlay(
-        ProblemKey? problemKey, Play userPlay, PlayRanking ranking, int matchedCandidateIndex, double equityLoss)
+        ProblemKey problemKey, Play userPlay, PlayRanking ranking, int matchedCandidateIndex, double equityLoss)
     {
         ProblemKey = problemKey;
         UserPlay = userPlay;
@@ -56,15 +57,16 @@ public sealed class SubmittedPlay : IEquatable<SubmittedPlay>
     }
 
     /// <summary>
-    /// Content identity of the problem this submission answers, derived
-    /// producer-side via <see cref="ProblemKey.TryDerive"/> from the quizzed
-    /// record's facts. <see langword="null"/> is the no-key rung
-    /// (SPEC-stats-identity.md §2): the submission still scores the session
-    /// (<see cref="QuizScore"/> never reads the key) but is not recorded in
-    /// lifetime stats — <see cref="ProblemStatsDocument.Plus(SubmittedPlay, TimeProvider)"/>
-    /// skips it.
+    /// Content identity of the problem this submission answers: the scored
+    /// record's own key (<see cref="ProblemKey.From"/>), derived by
+    /// <see cref="PlaySubmission.Score"/> from the record it scores and never
+    /// supplied by a caller, so it cannot name another problem. Never
+    /// <see langword="null"/>: every record has a key (SPEC-stats-identity.md
+    /// §2, amended 2026-09-27). The lifetime stats key on it
+    /// (<see cref="ProblemStatsDocument"/>); <see cref="QuizScore"/> never
+    /// reads it.
     /// </summary>
-    public ProblemKey? ProblemKey { get; }
+    public ProblemKey ProblemKey { get; }
 
     /// <summary>
     /// The play the user submitted, in the encoding the user gave it: the same

@@ -112,10 +112,10 @@ public class ReadOnlyCollectionTests
     [Fact]
     public void DuplicatePositionClassMembers_IsACopyOfTheCallersList()
     {
-        ProblemKey.TryDerive(TestRecords.CheckerPlay(), out var key);
+        var key = ProblemKey.From(TestRecords.CheckerPlay());
         var members = new List<DecisionId> { new XgpDecisionId("a.xgp"), new XgpDecisionId("b.xgp") };
 
-        var cls = new DuplicatePositionClass(key!, members);
+        var cls = new DuplicatePositionClass(key, members);
         var rebuilt = cls with { Members = members };
         members.Add(new XgpDecisionId("c.xgp"));
 
@@ -123,7 +123,7 @@ public class ReadOnlyCollectionTests
         Assert.Equal(2, rebuilt.Members.Count);
         AssertNotWritable(cls.Members);
         AssertNotWritable(rebuilt.Members);
-        Assert.Throws<ArgumentNullException>(() => new DuplicatePositionClass(key!, null!));
+        Assert.Throws<ArgumentNullException>(() => new DuplicatePositionClass(key, null!));
     }
 
     [Fact]

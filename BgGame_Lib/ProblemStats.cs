@@ -41,10 +41,11 @@ using BgDataTypes_Lib;
 /// <see cref="TimeProvider"/>: the clock seam lives one level up, on
 /// <see cref="ProblemStatsDocument"/> (the consumer's entry point), keeping
 /// this record's fold a pure value computation — deliberate asymmetry, see
-/// the document type. So is the no-key filter: a submission whose
-/// <c>ProblemKey</c> is null (the no-key rung) is skipped by the document's
-/// <c>Plus</c> and can never reach — or seed — a record here; at this level a
-/// null or mismatched key is rejected as data corruption.
+/// the document type. So is the keyless filter: a play always carries its
+/// record's key, and a cube submission whose caller supplied none is skipped
+/// by the document's <c>Plus</c> and can never reach — or seed — a record
+/// here; at this level a null or mismatched key is rejected as data
+/// corruption.
 /// </para>
 /// </summary>
 /// <param name="Key">Content identity of the quizzed problem.</param>
@@ -70,20 +71,29 @@ public sealed record ProblemStats(ProblemKey Key, ScoreSegment Tally, DateTimeOf
     /// <exception cref="ArgumentNullException">
     /// Thrown when <paramref name="play"/> is <see langword="null"/>.
     /// </exception>
-    /// <exception cref="ArgumentException">
-    /// Thrown when the submission carries no <see cref="ProblemKey"/> — a
-    /// no-key submission is never recorded (the document-level <c>Plus</c> is
-    /// the single filter), so seeding a record from one is a caller bug.
-    /// </exception>
     public static ProblemStats From(SubmittedPlay play, DateTimeOffset quizzedAt)
     {
         ArgumentNullException.ThrowIfNull(play);
         return Seed(play.ProblemKey, nameof(play)).Plus(play, quizzedAt);
     }
 
-    /// <inheritdoc cref="From(SubmittedPlay, DateTimeOffset)"/>
+    /// <summary>
+    /// Create the first-ever record for <paramref name="cube"/>'s problem,
+    /// with that submission folded in. Defined as an empty seed plus
+    /// <see cref="Plus(SubmittedCubeAction, DateTimeOffset)"/>, so the fold
+    /// rule has a single definition.
+    /// </summary>
     /// <param name="cube">The first submission for this problem.</param>
     /// <param name="quizzedAt">The resolved fold timestamp.</param>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="cube"/> is <see langword="null"/>.
+    /// </exception>
+    /// <exception cref="ArgumentException">
+    /// Thrown when the submission carries no <see cref="ProblemKey"/> — its
+    /// caller supplied none, and a keyless submission is never recorded (the
+    /// document-level <c>Plus</c> is the single filter), so seeding a record
+    /// from one is a caller bug.
+    /// </exception>
     public static ProblemStats From(SubmittedCubeAction cube, DateTimeOffset quizzedAt)
     {
         ArgumentNullException.ThrowIfNull(cube);
@@ -94,7 +104,7 @@ public sealed record ProblemStats(ProblemKey Key, ScoreSegment Tally, DateTimeOf
     {
         if (key is null)
             throw new ArgumentException(
-                "Submission carries no ProblemKey; a no-key submission is not recorded " +
+                "Submission carries no ProblemKey; a keyless submission is not recorded " +
                 "and cannot seed a lifetime record.", paramName);
         return new(key, ScoreSegment.Empty, LastQuizzed: default);
     }
@@ -109,7 +119,7 @@ public sealed record ProblemStats(ProblemKey Key, ScoreSegment Tally, DateTimeOf
     /// <param name="quizzedAt">The resolved fold timestamp.</param>
     /// <exception cref="ArgumentException">
     /// Thrown when the submission's <see cref="SubmittedPlay.ProblemKey"/> is
-    /// null or not <see cref="Key"/> — folding under the wrong key is data
+    /// not <see cref="Key"/> — folding under the wrong key is data
     /// corruption.
     /// </exception>
     public ProblemStats Plus(SubmittedPlay play, DateTimeOffset quizzedAt)

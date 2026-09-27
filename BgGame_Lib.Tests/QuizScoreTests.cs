@@ -6,12 +6,13 @@ using BgDataTypes_Lib.TestSupport;
 public class QuizScoreTests
 {
     // QuizScore folds these records by reading their result fields; it never
-    // reads ProblemKey — session scoring is deliberately key-independent, so
-    // even a no-key (null) submission folds. Null here keeps every folding
-    // assertion below unchanged in intent while pinning that independence.
-    // A play's correctness follows from its error (exactly 0), as scored.
+    // reads ProblemKey — session scoring is deliberately key-independent. A
+    // play always carries its record's key; a cube submission's is still its
+    // caller's (halheinrich/backgammon#285), and the cube helper's null pins
+    // that even a keyless one folds. A play's correctness follows from its
+    // error (exactly 0), as scored.
     private static SubmittedPlay Play(double equityLoss) =>
-        TestSubmissions.Play(key: null, equityLoss);
+        TestSubmissions.Play(equityLoss);
 
     // Per-half correctness is derived from the answer/truth pair rather than
     // stated, so this helper composes pairs that realize the requested

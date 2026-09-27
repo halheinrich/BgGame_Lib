@@ -56,23 +56,6 @@ public class DistinctPositionProblemSetSourceTests
             : TestRecords.CheckerPlay(id: id, position: position);
     }
 
-    /// <summary>
-    /// A decision on the empty board: no derivable <see cref="ProblemKey"/>
-    /// — the no-key rung, the one a record can still reach.
-    /// </summary>
-    private static BgDecisionData NoKey(string file, int position = 1) =>
-        TestRecords.CheckerPlay(
-            id: new XgpDecisionId(file),
-            position: TestRecords.Position(
-                mop: BoardPosition.Empty,
-                session: TestRecords.MatchSession(onRollNeeds: position, opponentNeeds: position)));
-
-    private static ProblemKey KeyOf(BgDecisionData item)
-    {
-        Assert.True(ProblemKey.TryDerive(item, out var key));
-        return key!;
-    }
-
     private static async Task<List<DecisionId>> IdsAsync(IProblemSetSource source, CancellationToken ct = default)
     {
         var ids = new List<DecisionId>();
@@ -184,42 +167,21 @@ public class DistinctPositionProblemSetSourceTests
         Assert.Equal(new[] { Id("a.xgp") }, await IdsAsync(source));
     }
 
-    // -----------------------------------------------------------------------
-    //  The no-key rung: fail-open pass-through
-    // -----------------------------------------------------------------------
-
     [Fact]
-    public async Task NoDerivableKey_PassesThrough_EvenWhenIdentical()
-    {
-        // Fail-open guard: an underivable key carries no content claim, so
-        // identical no-key items must never collapse.
-        var source = Distinct(new[]
-        {
-            NoKey("a.xgp"),
-            NoKey("b.xgp"),
-            NoKey("c.xgp"),
-        });
-
-        Assert.Equal(
-            new[] { Id("a.xgp"), Id("b.xgp"), Id("c.xgp") },
-            await IdsAsync(source));
-    }
-
-    [Fact]
-    public async Task Output_PreservesFirstOccurrenceOrder_AcrossUniqueDuplicateAndNoKey()
+    public async Task Output_PreservesFirstOccurrenceOrder_AcrossUniqueAndDuplicate()
     {
         var source = Distinct(new[]
         {
             Decision("a.xgp", position: 1),
-            NoKey("nokey1.xgp"),
             Decision("b.xgp", position: 2),
             Decision("dup.xgp", position: 1),
-            NoKey("nokey2.xgp"),
             Decision("c.xgp", position: 3),
+            Decision("dup2.xgp", position: 2),
+            Decision("d.xgp", position: 4),
         });
 
         Assert.Equal(
-            new[] { Id("a.xgp"), Id("nokey1.xgp"), Id("b.xgp"), Id("nokey2.xgp"), Id("c.xgp") },
+            new[] { Id("a.xgp"), Id("b.xgp"), Id("c.xgp"), Id("d.xgp") },
             await IdsAsync(source));
     }
 
@@ -257,7 +219,7 @@ public class DistinctPositionProblemSetSourceTests
         var classes = source.LastDuplicateClasses!;
         Assert.Equal(2, classes.Count);
 
-        Assert.Equal(KeyOf(a), classes[0].Key);
+        Assert.Equal(ProblemKey.From(a), classes[0].Key);
         Assert.Equal(new[] { Id("a.xgp"), Id("c.xgp"), Id("f.xgp") }, classes[0].Members);
         Assert.Equal(new[] { Id("b.xgp"), Id("e.xgp") }, classes[1].Members);
     }
@@ -275,18 +237,6 @@ public class DistinctPositionProblemSetSourceTests
 
         Assert.NotNull(source.LastDuplicateClasses);
         Assert.Empty(source.LastDuplicateClasses);
-    }
-
-    [Fact]
-    public async Task NoKeyItems_NeverFormADuplicateClass()
-    {
-        // The identical no-key items pass through (fail-open) and must not
-        // surface as a "duplicate class" either — no key, no content claim.
-        var source = Distinct(new[] { NoKey("a.xgp"), NoKey("b.xgp") });
-
-        await IdsAsync(source);
-
-        Assert.Empty(source.LastDuplicateClasses!);
     }
 
     [Fact]

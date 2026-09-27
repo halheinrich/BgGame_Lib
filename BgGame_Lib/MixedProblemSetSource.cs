@@ -14,12 +14,11 @@ using BgDataTypes_Lib;
 /// <para>
 /// <b>Classification is by content identity.</b> Each decision's lifetime
 /// record is looked up by its derived <see cref="ProblemKey"/>
-/// (SPEC-stats-identity.md §4; halheinrich/backgammon#95), so the classifier
+/// (<see cref="ProblemKey.From"/>, which every record has;
+/// SPEC-stats-identity.md §4; halheinrich/backgammon#95), so the classifier
 /// judges the <i>problem's</i> full record wherever the drawn copy came from
 /// — a copy under a different <c>DecisionId</c> than the one once quizzed
-/// still classifies as GotWrong / seen. A decision whose key is underivable
-/// (the no-key rung) has no record by construction — such submissions are
-/// never recorded — and classifies as never-seen.
+/// still classifies as GotWrong / seen.
 /// </para>
 ///
 /// <para>
@@ -276,12 +275,8 @@ public sealed class MixedProblemSetSource : IProblemSetSource
 
         for (int idx = 0; idx < items.Count; idx++)
         {
-            // Lifetime record by content identity; no derivable key (the
-            // no-key rung) means no record — such submissions are never
-            // recorded — so the decision classifies as never-seen.
-            ProblemStats? record = null;
-            if (ProblemKey.TryDerive(items[idx], out var key))
-                stats.Problems.TryGetValue(key, out record);
+            // Lifetime record by content identity; none means never quizzed.
+            stats.Problems.TryGetValue(ProblemKey.From(items[idx]), out var record);
             bool matchedAny = false;
             for (int i = 0; i < n; i++)
             {

@@ -10,7 +10,8 @@ using BgDataTypes_Lib;
 ///
 /// <para>
 /// <b>Content identity, not record identity.</b> The dedupe key is the
-/// derived <see cref="ProblemKey"/> — the decomposed content identity of the
+/// derived <see cref="ProblemKey"/> (<see cref="ProblemKey.From"/>, which
+/// every record has) — the decomposed content identity of the
 /// whole decision problem (SPEC-stats-identity.md §4;
 /// halheinrich/backgammon#95). Copies collapse across matches and files, not
 /// just file-duplicate copies: <see cref="DecisionId"/> is file-relative, so
@@ -23,15 +24,6 @@ using BgDataTypes_Lib;
 /// This layer is distinct from <see cref="MixedProblemSetSource"/>'s internal
 /// id-dedupe (the same record drawn twice); this type is about the same
 /// problem appearing under different identities.
-/// </para>
-///
-/// <para>
-/// <b>Fail-open on an underivable key.</b> Items with no derivable
-/// <see cref="ProblemKey"/> (the no-key rung: malformed or degenerate facts —
-/// see <see cref="ProblemKey.TryDerive"/>) pass through undeduped, even when
-/// several such items are otherwise identical: derivation that would guess is
-/// forbidden, and treating underivability as equality would collapse
-/// unrelated problems.
 /// </para>
 ///
 /// <para>
@@ -110,10 +102,9 @@ public sealed class DistinctPositionProblemSetSource : IProblemSetSource
     /// Telemetry from the most recent enumeration: the content-equivalence
     /// classes with two or more copies, in first-occurrence order (empty when
     /// nothing collapsed). Null before the first enumeration. Assigned before
-    /// the first item is yielded. Items with no derivable key never form a
-    /// class. Immutable: each enumeration assigns a new list rather than
-    /// changing the last. Per-instance state — see the thread-safety note in
-    /// the type remarks.
+    /// the first item is yielded. Immutable: each enumeration assigns a new
+    /// list rather than changing the last. Per-instance state — see the
+    /// thread-safety note in the type remarks.
     /// </summary>
     public IReadOnlyList<DuplicatePositionClass>? LastDuplicateClasses { get; private set; }
 
@@ -133,12 +124,7 @@ public sealed class DistinctPositionProblemSetSource : IProblemSetSource
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (!ProblemKey.TryDerive(item, out var key))
-            {
-                survivors.Add(item);   // no-key rung: fail-open, never merged
-                continue;
-            }
-
+            var key = ProblemKey.From(item);
             if (!indexByKey.TryGetValue(key, out int index))
             {
                 indexByKey.Add(key, survivors.Count);

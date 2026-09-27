@@ -81,22 +81,8 @@ public class MixedProblemSetSourceTests
     private static BgDecisionData Copy(int n, string file) =>
         TestRecords.CheckerPlay(id: new XgpDecisionId(file), position: PositionOf(n));
 
-    /// <summary>
-    /// Decision <paramref name="n"/>'s id and session on the empty board: no
-    /// derivable <see cref="ProblemKey"/> — the no-key rung, the one a record
-    /// can still reach.
-    /// </summary>
-    private static BgDecisionData NoKeyDecision(int n) =>
-        TestRecords.CheckerPlay(
-            id: Id(n),
-            position: TestRecords.Position(mop: BoardPosition.Empty, session: PositionOf(n).Session));
-
     /// <summary>Decision <paramref name="n"/>'s content key, via the one blessed factory.</summary>
-    private static ProblemKey Key(int n)
-    {
-        Assert.True(ProblemKey.TryDerive(Decision(n), out var key));
-        return key!;
-    }
+    private static ProblemKey Key(int n) => ProblemKey.From(Decision(n));
 
     private static ProblemStats SeenCorrect(int n, int daysAgo = 1) =>
         new(Key(n), new ScoreSegment(1, 1, 0.0), Now - TimeSpan.FromDays(daysAgo));
@@ -573,24 +559,6 @@ public class MixedProblemSetSourceTests
         var source = Source([Decision(0), Copy(0, "other-file.xgp")], doc, mix);
 
         Assert.Equal([0, 0], await IdsAsync(source));
-    }
-
-    [Fact]
-    public async Task NoKeyDecision_ClassifiesAsNeverSeen()
-    {
-        // The no-key rung: an underivable key means no record can exist, so
-        // the decision is never-seen to the classifier — reachable through
-        // NeverSeen, invisible to record-dependent categories like GotWrong.
-        var items = new[] { NoKeyDecision(0), Decision(1) };
-        var doc = Doc(SeenWrong(1));
-
-        var neverSeen = Source(items, doc, new QuizMix(
-            [Entry(QuizCategory.NeverSeen, 100)], randomOrder: false));
-        Assert.Equal([0], await IdsAsync(neverSeen));
-
-        var gotWrong = Source(items, doc, new QuizMix(
-            [Entry(QuizCategory.GotWrong, 100)], randomOrder: false));
-        Assert.Equal([1], await IdsAsync(gotWrong));
     }
 
     // -----------------------------------------------------------------------
