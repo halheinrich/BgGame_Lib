@@ -96,22 +96,30 @@ public class GameStateTests
     }
 
     [Fact]
-    public void Snapshot_DefensiveCopiesBoard()
+    public void Snapshot_BoardIsAValue_LiveMutationsDoNotReachIt()
     {
         var match = MatchState.NewMatch(7);
         var game = GameState.NewGame(match);
         var snap = game.Snapshot();
 
-        var beforeSum = 0;
-        foreach (var v in snap.Board) beforeSum += v;
-
         // Mutate the live board: the one whole-position write.
         game.Board.SetPosition(BoardPosition.Empty);
 
-        var afterSum = 0;
-        foreach (var v in snap.Board) afterSum += v;
+        Assert.Equal(BoardPosition.Standard, snap.Board);
+    }
 
-        Assert.Equal(beforeSum, afterSum);
+    [Fact]
+    public void Snapshot_TwoCapturesOfOneState_AreEqual()
+    {
+        // The board is a value, so separate captures compare by content.
+        var game = GameState.NewGame(MatchState.NewMatch(7));
+
+        var first = game.Snapshot();
+        var second = game.Snapshot();
+
+        Assert.NotSame(first, second);
+        Assert.Equal(first, second);
+        Assert.Equal(first.GetHashCode(), second.GetHashCode());
     }
 
     [Fact]

@@ -186,11 +186,13 @@ public sealed class GameState
         _ => throw new InvalidOperationException($"Unhandled CubeOwner value: {owner}"),
     };
 
-    /// <summary>Take an immutable snapshot of the full game-and-match state.</summary>
-    public GameSnapshot Snapshot()
-    {
-        return new GameSnapshot(Board.Points.ToArray(), CubeSize, CubeOwner, Match.Snapshot());
-    }
+    /// <summary>
+    /// Take an immutable snapshot of the full game-and-match state: the board
+    /// as a <see cref="BoardPosition"/> value (<see cref="BoardState.ToPosition"/>),
+    /// which later changes of the live board do not reach.
+    /// </summary>
+    public GameSnapshot Snapshot() =>
+        new(Board.ToPosition(), CubeSize, CubeOwner, Match.Snapshot());
 
     private static bool IsPowerOfTwo(int n) => n > 0 && (n & (n - 1)) == 0;
 }

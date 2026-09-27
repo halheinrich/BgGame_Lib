@@ -97,18 +97,14 @@ public class TranscriptTests
     [Fact]
     public void TranscriptEntry_RecordEqualityHoldsByValue()
     {
-        var match = MatchState.NewMatch(7);
-        var game = GameState.NewGame(match);
+        var game = GameState.NewGame(MatchState.NewMatch(7));
 
-        // Use the same MatchSnapshot/board reference so record equality compares cleanly.
-        var matchSnap = match.Snapshot();
-        int[] board = new int[26];
-        game.Board.Points.CopyTo(board);
-        var snap = new GameSnapshot(board, 1, CubeOwner.Centered, matchSnap);
+        // Two separate captures of one state: the snapshot's board is a
+        // value, so the entries compare by content, not by reference.
+        var a = new CubeTranscriptEntry(game.Snapshot(), MatchSeat.One, CubeAction.Double);
+        var b = new CubeTranscriptEntry(game.Snapshot(), MatchSeat.One, CubeAction.Double);
 
-        var a = new CubeTranscriptEntry(snap, MatchSeat.One, CubeAction.Double);
-        var b = new CubeTranscriptEntry(snap, MatchSeat.One, CubeAction.Double);
-
+        Assert.NotSame(a.State, b.State);
         Assert.Equal(a, b);
     }
 

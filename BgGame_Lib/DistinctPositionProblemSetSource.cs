@@ -111,8 +111,9 @@ public sealed class DistinctPositionProblemSetSource : IProblemSetSource
     /// classes with two or more copies, in first-occurrence order (empty when
     /// nothing collapsed). Null before the first enumeration. Assigned before
     /// the first item is yielded. Items with no derivable key never form a
-    /// class. Per-instance state — see the thread-safety note in the type
-    /// remarks.
+    /// class. Immutable: each enumeration assigns a new list rather than
+    /// changing the last. Per-instance state — see the thread-safety note in
+    /// the type remarks.
     /// </summary>
     public IReadOnlyList<DuplicatePositionClass>? LastDuplicateClasses { get; private set; }
 
@@ -150,10 +151,11 @@ public sealed class DistinctPositionProblemSetSource : IProblemSetSource
             cls.Members.Add(item.Id);
         }
 
-        LastDuplicateClasses = classesBySlot
-            .OrderBy(entry => entry.Key)
-            .Select(entry => new DuplicatePositionClass(entry.Value.Key, entry.Value.Members))
-            .ToList();
+        LastDuplicateClasses = ImmutableCopy.Of(
+            classesBySlot
+                .OrderBy(entry => entry.Key)
+                .Select(entry => new DuplicatePositionClass(entry.Value.Key, entry.Value.Members)),
+            nameof(LastDuplicateClasses));
 
         // Cooperative yielding is time-budgeted, not per-item: a per-item
         // Task.Yield() over a large materialized set pays tens of thousands of

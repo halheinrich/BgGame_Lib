@@ -29,8 +29,23 @@ using BgDataTypes_Lib;
 /// <param name="Key">The shared content identity.</param>
 /// <param name="Members">
 /// The <see cref="DecisionId"/> of every copy, in enumeration-occurrence
-/// order — the surviving first occurrence leads. Always at least two.
+/// order — the surviving first occurrence leads. Always at least two. Copied
+/// on construction into an immutable list.
 /// </param>
 public sealed record DuplicatePositionClass(
     ProblemKey Key,
-    IReadOnlyList<DecisionId> Members);
+    IReadOnlyList<DecisionId> Members)
+{
+    private readonly IReadOnlyList<DecisionId> _members = ImmutableCopy.Of(Members, nameof(Members));
+
+    /// <summary>
+    /// The <see cref="DecisionId"/> of every copy, survivor first; an immutable
+    /// copy, so neither the caller's list nor a cast can change it.
+    /// </summary>
+    /// <exception cref="ArgumentNullException">Thrown on init when the value is <see langword="null"/>.</exception>
+    public IReadOnlyList<DecisionId> Members
+    {
+        get => _members;
+        init => _members = ImmutableCopy.Of(value, nameof(Members));
+    }
+}

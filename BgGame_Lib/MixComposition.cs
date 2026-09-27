@@ -47,9 +47,26 @@ namespace BgGame_Lib;
 /// Under <see cref="HasRequestedLength"/> <see langword="false"/> the two are
 /// equal by construction.
 /// </param>
-/// <param name="Entries">Per-entry telemetry, in the mix's declared entry order.</param>
+/// <param name="Entries">
+/// Per-entry telemetry, in the mix's declared entry order. Copied on
+/// construction into an immutable list.
+/// </param>
 public sealed record MixComposition(
     int TargetCount,
     bool HasRequestedLength,
     int DrawnCount,
-    IReadOnlyList<MixCompositionEntry> Entries);
+    IReadOnlyList<MixCompositionEntry> Entries)
+{
+    private readonly IReadOnlyList<MixCompositionEntry> _entries = ImmutableCopy.Of(Entries, nameof(Entries));
+
+    /// <summary>
+    /// Per-entry telemetry, in declared entry order; an immutable copy, so
+    /// neither the caller's list nor a cast can change it.
+    /// </summary>
+    /// <exception cref="ArgumentNullException">Thrown on init when the value is <see langword="null"/>.</exception>
+    public IReadOnlyList<MixCompositionEntry> Entries
+    {
+        get => _entries;
+        init => _entries = ImmutableCopy.Of(value, nameof(Entries));
+    }
+}

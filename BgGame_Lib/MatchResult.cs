@@ -10,9 +10,23 @@ namespace BgGame_Lib;
 /// </param>
 /// <param name="SeatOneScore">Total points scored by seat One.</param>
 /// <param name="SeatTwoScore">Total points scored by seat Two.</param>
-/// <param name="Games">The completed games, in order.</param>
+/// <param name="Games">
+/// The completed games, in order — copied on construction into an immutable
+/// list, so neither the caller's list nor a cast can change it afterwards.
+/// </param>
 public sealed record MatchResult(
     MatchSeat? Winner,
     int SeatOneScore,
     int SeatTwoScore,
-    IReadOnlyList<GameRecord> Games);
+    IReadOnlyList<GameRecord> Games)
+{
+    private readonly IReadOnlyList<GameRecord> _games = ImmutableCopy.Of(Games, nameof(Games));
+
+    /// <summary>The completed games, in order; an immutable copy.</summary>
+    /// <exception cref="ArgumentNullException">Thrown on init when the value is <see langword="null"/>.</exception>
+    public IReadOnlyList<GameRecord> Games
+    {
+        get => _games;
+        init => _games = ImmutableCopy.Of(value, nameof(Games));
+    }
+}
