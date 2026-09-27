@@ -468,6 +468,175 @@ public class MatchRunnerTests
             () => runner.RunMatchAsync(one, two, matchLength: 25, cancellationToken: cts.Token));
     }
 
+    // ── One encoding per applied turn (halheinrich/backgammon#273) ──
+    //
+    // The runner records the agent's play and applies that same play, and
+    // BgMoveGen's validating apply applies the caller's own encoding: so
+    // the transcript records exactly the agent's encoding while the board
+    // reaches the generator's candidate's position.
+
+    /// <summary>Scripted rolls first, then a seeded stream, so a scripted opening plays on to a finished game.</summary>
+    private sealed class ScriptThenSeededDice((int Die1, int Die2)[] script, int seed) : IDiceSource
+    {
+        private readonly Queue<(int Die1, int Die2)> _script = new(script);
+        private readonly SeededDiceSource _rest = new(seed);
+
+        public (int Die1, int Die2) Roll() => _script.Count > 0 ? _script.Dequeue() : _rest.Roll();
+    }
+
+    /// <summary>An agent playing <paramref name="turns"/> in order, then the generator's first play.</summary>
+    private static DelegatePlayAgent Scripted(params Func<GameState, int, int, Play>[] turns)
+    {
+        int turn = 0;
+        return new DelegatePlayAgent((state, d1, d2) =>
+            turn < turns.Length ? turns[turn++](state, d1, d2) : MoveGenerator.GeneratePlays(state.Board, d1, d2)[0]);
+    }
+
+    /// <summary>
+    /// The rolls of <see cref="BlotOnTheTwo"/>: seat One wins the opening with
+    /// 6-5, seat Two rolls 2-1, seat One rolls 6-4.
+    /// </summary>
+    private static readonly (int, int)[] BlotOnTheTwoRolls = [(6, 5), (2, 1), (6, 4)];
+
+    /// <summary>
+    /// Seat One runs a back checker 24/13; seat Two splits 24/23 13/11,
+    /// leaving a blot on seat One's 2-point, which seat One's 6-4 can point
+    /// on with a checker from the 8 and one from the 6 — 8/2* 6/2, the hit
+    /// mark on either checker.
+    /// </summary>
+    private static (DelegatePlayAgent One, DelegatePlayAgent Two) BlotOnTheTwo(
+        Func<GameState, int, int, Play> onesSecondPlay) =>
+        (Scripted((_, _, _) => [new(24, 18), new(18, 13)], onesSecondPlay),
+         Scripted((_, _, _) => [new(24, 23), new(13, 11)]));
+
+    [Fact]
+    public async Task TheTranscriptRecordsTheAgentsEncoding_AndTheBoardReachesTheCandidates()
+    {
+        Play candidate = default;
+        Play agentsPlay = default;
+        var (one, two) = BlotOnTheTwo((state, d1, d2) =>
+        {
+            // The generator's candidate for 8/2* 6/2, and the same play with
+            // the hit mark on the other checker.
+            var legal = MoveGenerator.GeneratePlays(state.Board, d1, d2);
+            int index = state.Board.IndexOfSamePlay([new(8, -2), new(6, 2)], legal);
+            Assert.True(index >= 0);
+            candidate = legal[index];
+            int marked = candidate[0].ToPt == -2 ? candidate[0].FrPt : candidate[1].FrPt;
+            int other = marked == 8 ? 6 : 8;
+            agentsPlay = [new(marked, 2), new(other, -2)];
+            return agentsPlay;
+        });
+
+        var runner = new MatchRunner(new ScriptThenSeededDice(BlotOnTheTwoRolls, seed: 11));
+        var result = await runner.RunMatchAsync(
+            Participant(one, CubeAgents.Never()), Participant(two, CubeAgents.Never()),
+            matchLength: 0, maxGames: 1);
+
+        var plays = EntriesOf<PlayTranscriptEntry>(result.Games[0].Transcript);
+        var turn = plays[2];
+        Assert.Equal((MatchSeat.One, 6, 4), (turn.OnRollSeat, turn.Die1, turn.Die2));
+
+        // Not vacuous: the agent's encoding is another encoding of the candidate.
+        var from = new BoardState(turn.State.Board);
+        Assert.True(from.IsSamePlay(agentsPlay, candidate));
+        Assert.False(agentsPlay.IsSameEncoding(candidate));
+
+        // The transcript records exactly the agent's encoding ...
+        Assert.True(turn.ChosenPlay.IsSameEncoding(agentsPlay));
+        Assert.False(turn.ChosenPlay.IsSameEncoding(candidate));
+
+        // ... and the board reached is the candidate's: the next mover's
+        // decision snapshot is the candidate's position, in the next frame.
+        from.ApplyPlay(candidate);
+        Assert.Equal(from.ToPosition(), plays[3].State.Board);
+        Assert.Equal(MatchSeat.Two, plays[3].OnRollSeat);
+    }
+
+    // ── An invalid play is a contract violation: nothing recorded or applied ──
+
+    public static TheoryData<string, Play> InvalidOpeningPlays => new()
+    {
+        // The opening 5-4 from the standard start (seat One's frame).
+        { "lands on a point the opponent holds", [new(6, 1), new(13, 9)] },
+        { "a hit mark where no blot stands (ruling 2)", [new(13, -8), new(13, 9)] },
+    };
+
+    [Theory]
+    [MemberData(nameof(InvalidOpeningPlays))]
+    public async Task AnInvalidPlay_AbortsAsIllegalPlay_WithNothingRecordedOrApplied(string label, Play invalid)
+    {
+        _ = label;
+        var observer = new RecordingObserver();
+        GameState? live = null;
+        (BoardPosition Board, int OnRoll, int Opponent, CubeOwner Owner, int Cube) before = default;
+        var one = new DelegatePlayAgent((state, _, _) =>
+        {
+            live = state;
+            before = (state.Board.ToPosition(), state.Match.OnRollScore, state.Match.OpponentScore,
+                      state.CubeOwner, state.CubeSize);
+            return invalid;
+        });
+
+        var runner = new MatchRunner(new RecordedDiceSource([(5, 4)]));
+        var ex = await Assert.ThrowsAsync<AgentContractViolationException>(() => runner.RunMatchAsync(
+            Participant(one, CubeAgents.Never()), Participant(new FirstPlayAgent(), CubeAgents.Never()),
+            matchLength: 0, maxGames: 1, observer: observer));
+
+        AssertViolation(ex, MatchSeat.One, invalid);
+        Assert.Empty(observer.Events.OfType<RecordingObserver.EntryRecorded>());
+        AssertUntouched(live!, before);
+    }
+
+    [Fact]
+    public async Task ABlotLandedOnWithoutItsHitMark_AbortsAsIllegalPlay_WithNothingRecordedOrApplied()
+    {
+        // Ruling 2: 8/2 6/2 onto the blot, with no mark on either hop.
+        Play unmarked = [new(8, 2), new(6, 2)];
+        var observer = new RecordingObserver();
+        GameState? live = null;
+        (BoardPosition Board, int OnRoll, int Opponent, CubeOwner Owner, int Cube) before = default;
+        var (one, two) = BlotOnTheTwo((state, _, _) =>
+        {
+            live = state;
+            before = (state.Board.ToPosition(), state.Match.OnRollScore, state.Match.OpponentScore,
+                      state.CubeOwner, state.CubeSize);
+            return unmarked;
+        });
+
+        var runner = new MatchRunner(new RecordedDiceSource(BlotOnTheTwoRolls));
+        var ex = await Assert.ThrowsAsync<AgentContractViolationException>(() => runner.RunMatchAsync(
+            Participant(one, CubeAgents.Never()), Participant(two, CubeAgents.Never()),
+            matchLength: 0, maxGames: 1, observer: observer));
+
+        AssertViolation(ex, MatchSeat.One, unmarked);
+        // The two turns before it, and nothing of the offending one.
+        var recorded = observer.Events.OfType<RecordingObserver.EntryRecorded>()
+            .Select(e => Assert.IsType<PlayTranscriptEntry>(e.Entry)).ToList();
+        Assert.Equal(2, recorded.Count);
+        Assert.DoesNotContain(recorded, e => (e.Die1, e.Die2) == (6, 4));
+        AssertUntouched(live!, before);
+    }
+
+    private static void AssertViolation(AgentContractViolationException ex, MatchSeat seat, Play offending)
+    {
+        Assert.Equal(seat, ex.Seat);
+        Assert.Equal(AgentContractViolationKind.IllegalPlay, ex.Kind);
+        Assert.True(ex.OffendingPlay is { } play && play.IsSameEncoding(offending));
+        Assert.IsType<ArgumentException>(ex.InnerException);
+    }
+
+    /// <summary>Throw-before-mutate: the live state is as the agent saw it.</summary>
+    private static void AssertUntouched(
+        GameState live, (BoardPosition Board, int OnRoll, int Opponent, CubeOwner Owner, int Cube) before)
+    {
+        Assert.Equal(before.Board, live.Board.ToPosition());
+        Assert.Equal(before.OnRoll, live.Match.OnRollScore);
+        Assert.Equal(before.Opponent, live.Match.OpponentScore);
+        Assert.Equal(before.Owner, live.CubeOwner);
+        Assert.Equal(before.Cube, live.CubeSize);
+    }
+
     // ── Agent contract violations ─────────────────────────────────
 
     [Fact]

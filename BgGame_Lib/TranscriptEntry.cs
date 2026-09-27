@@ -35,17 +35,73 @@ public abstract record TranscriptEntry(GameSnapshot State, MatchSeat OnRollSeat)
 /// <see cref="TranscriptEntry.OnRollSeat"/> is the mover — the snapshot is
 /// taken in the decision frame, before the apply flips perspective.
 /// </summary>
+/// <remarks>
+/// <para>
+/// <b>One encoding per applied turn.</b> <see cref="ChosenPlay"/> is the play
+/// that was applied, in the one encoding it was applied in: the runner
+/// records the agent's own play and applies that same play, and the
+/// validating apply applies the caller's encoding (Hal's ruling on
+/// halheinrich/backgammon#273).
+/// </para>
+/// <para>
+/// <b>Equality compares the exact encoding</b>
+/// (<see cref="Play.IsSameEncoding"/>), with the rest of the entry by value:
+/// an entry is a stored record of what was applied, so two entries recording
+/// different encodings of one play are different records, and comparing
+/// entries is what a storage round-trip of a transcript does (a journal
+/// rebuilding its entries, hit marks included). The play's own equality is not
+/// used — a play has none (see <see cref="Play"/>). Whether two entries'
+/// plays are the same play is a question for the position they were played
+/// from: <see cref="BoardState.IsSamePlay"/> on <see cref="TranscriptEntry.State"/>'s board.
+/// </para>
+/// </remarks>
 /// <param name="State">The state the play decision was made in (mover's frame).</param>
 /// <param name="OnRollSeat">The seat that rolled and played — the mover.</param>
 /// <param name="Die1">First die of the roll.</param>
 /// <param name="Die2">Second die of the roll.</param>
-/// <param name="ChosenPlay">The play applied; empty for a dance turn.</param>
+/// <param name="ChosenPlay">The play applied, in the encoding applied; empty for a dance turn.</param>
 public sealed record PlayTranscriptEntry(
     GameSnapshot State,
     MatchSeat OnRollSeat,
     int Die1,
     int Die2,
-    Play ChosenPlay) : TranscriptEntry(State, OnRollSeat);
+    Play ChosenPlay) : TranscriptEntry(State, OnRollSeat)
+{
+    /// <summary>
+    /// Whether <paramref name="other"/> records the same turn in the same
+    /// encoding: equal <see cref="TranscriptEntry.State"/> and
+    /// <see cref="TranscriptEntry.OnRollSeat"/>, the same dice, and
+    /// <see cref="ChosenPlay"/> the identical encoding
+    /// (<see cref="Play.IsSameEncoding"/>). See the type remarks.
+    /// </summary>
+    /// <param name="other">The entry to compare with, or <see langword="null"/>.</param>
+    /// <returns><see langword="true"/> if <paramref name="other"/> records the same turn in the same encoding.</returns>
+    public bool Equals(PlayTranscriptEntry? other) =>
+        ReferenceEquals(this, other)
+        || (other is not null
+            && base.Equals(other)
+            && Die1 == other.Die1
+            && Die2 == other.Die2
+            && ChosenPlay.IsSameEncoding(other.ChosenPlay));
+
+    /// <summary>
+    /// Hash code consistent with <see cref="Equals(PlayTranscriptEntry?)"/>:
+    /// the base entry's, the dice, and the encoding's moves — the first
+    /// <see cref="Play.Count"/> of them, as the encoding comparison reads.
+    /// </summary>
+    /// <returns>The hash code.</returns>
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(base.GetHashCode());
+        hash.Add(Die1);
+        hash.Add(Die2);
+        hash.Add(ChosenPlay.Count);
+        foreach (var move in ChosenPlay)
+            hash.Add(move);
+        return hash.ToHashCode();
+    }
+}
 
 /// <summary>
 /// A cube decision: an offer side action or a response side action.

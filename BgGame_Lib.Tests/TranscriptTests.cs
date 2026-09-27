@@ -108,6 +108,94 @@ public class TranscriptTests
         Assert.Equal(a, b);
     }
 
+    // ── PlayTranscriptEntry equality: the exact encoding ──
+    //
+    // An entry records the one encoding its turn applied, so its equality
+    // compares that encoding (Play.IsSameEncoding) and the rest by value —
+    // never the play's own equality, which throws (halheinrich/backgammon#273).
+
+    /// <summary>
+    /// A 5-4 with two checkers able to hit the opponent's blot on the 3-point:
+    /// 8/3* 7/3, whichever checker carries the mark.
+    /// </summary>
+    private static GameSnapshot BlotOnTheThree()
+    {
+        var mop = new int[26];
+        mop[24] = 2; mop[13] = 4; mop[8] = 2; mop[7] = 2; mop[6] = 5;       // on roll: 15
+        mop[19] = -5; mop[17] = -3; mop[12] = -5; mop[3] = -1; mop[1] = -1; // opponent: 15
+        return GameState.FromPosition(
+            MatchState.NewMatch(7), BoardState.FromMop(mop), cubeSize: 1, cubeOwner: CubeOwner.Centered).Snapshot();
+    }
+
+    private static PlayTranscriptEntry PlayEntry(Play play, int die1 = 5, int die2 = 4, MatchSeat seat = MatchSeat.One) =>
+        new(BlotOnTheThree(), seat, die1, die2, play);
+
+    [Fact]
+    public void PlayEntry_TheSameEncoding_IsEqual_AndHashesAlike()
+    {
+        var a = PlayEntry([new(8, -3), new(7, 3)]);
+        var b = PlayEntry([new(8, -3), new(7, 3)]);
+
+        Assert.NotSame(a.State, b.State);
+        Assert.Equal(a, b);
+        Assert.True(a == b);
+        Assert.True(((TranscriptEntry)a).Equals(b));
+        Assert.True(a.Equals((object)b));
+        Assert.Equal(a.GetHashCode(), b.GetHashCode());
+        Assert.Single(new HashSet<TranscriptEntry> { a, b });
+    }
+
+    [Fact]
+    public void PlayEntry_AnotherEncodingOfTheSamePlay_IsADifferentRecord()
+    {
+        // 8/3* 7/3 and 8/3 7/3* are one play from this position — but an
+        // entry records the encoding applied, and these are two encodings.
+        Play markOnTheEight = [new(8, -3), new(7, 3)];
+        Play markOnTheSeven = [new(8, 3), new(7, -3)];
+        Play otherOrder = [new(7, 3), new(8, -3)];
+        var from = new BoardState(BlotOnTheThree().Board);
+        Assert.True(from.IsSamePlay(markOnTheEight, markOnTheSeven));
+        Assert.True(from.IsSamePlay(markOnTheEight, otherOrder));
+
+        Assert.NotEqual(PlayEntry(markOnTheEight), PlayEntry(markOnTheSeven));
+        Assert.NotEqual(PlayEntry(markOnTheEight), PlayEntry(otherOrder));
+        Assert.Equal(3, new HashSet<TranscriptEntry>
+        {
+            PlayEntry(markOnTheEight), PlayEntry(markOnTheSeven), PlayEntry(otherOrder),
+        }.Count);
+    }
+
+    [Fact]
+    public void PlayEntry_TheDiceSeatAndStateParticipate()
+    {
+        Play play = [new(8, -3), new(7, 3)];
+        var entry = PlayEntry(play);
+
+        Assert.NotEqual(entry, PlayEntry(play, die1: 4, die2: 5));
+        Assert.NotEqual(entry, PlayEntry(play, seat: MatchSeat.Two));
+        Assert.NotEqual(entry, entry with { State = entry.State with { CubeSize = 2 } });
+    }
+
+    [Fact]
+    public void PlayEntry_ASlotLeftBehindByRemoveLast_IsNotPartOfTheEncoding()
+    {
+        Play trimmed = [new(8, -3), new(7, 3), new(13, 9)];
+        trimmed.RemoveLast();
+
+        var a = PlayEntry(trimmed);
+        var b = PlayEntry([new(8, -3), new(7, 3)]);
+
+        Assert.Equal(a, b);
+        Assert.Equal(a.GetHashCode(), b.GetHashCode());
+    }
+
+    [Fact]
+    public void PlayEntry_DanceTurns_CompareEqual()
+    {
+        Assert.Equal(PlayEntry([]), PlayEntry([]));
+        Assert.NotEqual(PlayEntry([]), PlayEntry([new(8, -3), new(7, 3)]));
+    }
+
     // ── Derived attribution (single-sourced on the entry types) ──
     //
     // OnRollSeat is the frame seat; the actor/winner rules live on the

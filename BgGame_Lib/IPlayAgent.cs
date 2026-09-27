@@ -17,10 +17,15 @@ using BgMoveGen;
 /// pay no measurable overhead — <see cref="ValueTask{TResult}"/> avoids the
 /// Task allocation when the result is available synchronously.
 ///
-/// Contract: the returned <see cref="Play"/> must be one of the legal plays for
-/// the supplied state and dice (i.e., present in <see cref="MoveGenerator.GeneratePlays"/>'s
-/// output). <see cref="GameState.ApplyPlay(Play, int, int)"/> validates this at
-/// turn-boundary application via the BgMoveGen wrapper.
+/// Contract: the returned <see cref="Play"/> must be legal for the supplied
+/// state and dice — the same play, in any encoding, as one of
+/// <see cref="MoveGenerator.GeneratePlays"/>' candidates
+/// (<see cref="MoveGenerator.IsLegalPlay"/>). A play invalid from the position,
+/// a hit mark the board disagrees with included, is not.
+/// <see cref="GameState.ApplyPlay(Play, int, int)"/> validates this at
+/// turn-boundary application via the BgMoveGen wrapper, and applies the play
+/// in the encoding returned: <see cref="MatchRunner"/> records exactly that
+/// encoding, the one its turn applied.
 /// </summary>
 public interface IPlayAgent
 {

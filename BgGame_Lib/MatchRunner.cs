@@ -33,7 +33,9 @@ using BgMoveGen;
 /// normal <see cref="PlayTranscriptEntry"/> with an empty play.</para>
 ///
 /// <para><b>Transcripts</b> record decision moments: every play (snapshot of
-/// the state the decision was made in, dice, chosen play), every actual
+/// the state the decision was made in, dice, and the agent's own play — the
+/// one encoding that turn applies, since the validating apply applies the
+/// caller's encoding; see <see cref="PlayTranscriptEntry"/>), every actual
 /// double offer and its response (declined windows — NoDouble — are implicit:
 /// a play entry with no preceding cube entry), and a terminating
 /// <see cref="GameEndedTranscriptEntry"/>. One transcript per game. Every

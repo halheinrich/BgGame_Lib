@@ -142,11 +142,13 @@ public turn-transition primitive is `GameState.ApplyPlay(play, die1, die2)`,
 which:
 
 1. Delegates to `MoveGenerator.ApplyPlay(Board, play, die1, die2)` —
-   validates the play is legal, applies all moves, and flips the board
+   validates the play is legal (the same play as a generator candidate, in
+   any encoding), applies it in the encoding given, and flips the board
    atomically (`MoveGenerator.ApplyPlay` is the validating wrapper around
    `BoardState.ApplyPlay` introduced in BgDataTypes_Lib / BgMoveGen).
-   Throw-before-mutate: an illegal play raises `ArgumentException` and
-   leaves the substrate untouched.
+   Throw-before-mutate: an illegal play — one invalid from the position
+   among them — raises `ArgumentException` and leaves the substrate
+   untouched.
 2. Calls the internal `MatchState.SwapPerspective()` to swap the score
    labels.
 3. Inlines the cube-owner switch (`OnRoll ↔ Opponent`, `Centered`
@@ -403,7 +405,11 @@ no longer discards completed games' transcripts.
 wrong-half cube action) aborts the run with
 `AgentContractViolationException` carrying the offending seat, a
 `AgentContractViolationKind`, the offending value, and any inner substrate
-exception. The runner is deliberately policy-free: converting a violation
+exception. An illegal play includes one invalid from the position — landing
+on a point the opponent holds, or a hit mark the board disagrees with (Hal's
+ruling on halheinrich/backgammon#273): BgMoveGen's validating apply refuses
+it as an `ArgumentException` before anything is applied, and the runner
+records nothing for the turn (pinned for both). The runner is deliberately policy-free: converting a violation
 into a forfeit is tournament-layer logic (Arc 2's server catches and
 translates). Cancellation propagates as `OperationCanceledException` (token
 passed to every agent call, checked at turn/game boundaries). Substrate
@@ -441,6 +447,30 @@ stamping the actor because it is uniform across all subtypes (a game-end
 entry has no actor) and because board-rendering consumers need the frame
 for every entry; each actor is a pure derivation from it. Derived
 properties do not participate in record equality.
+
+**One encoding per applied turn** (Hal's ruling on
+halheinrich/backgammon#273). A `PlayTranscriptEntry`'s `ChosenPlay` is the
+play that was applied, in the one encoding it was applied in: the runner
+records the agent's own play and applies that same play, and BgMoveGen's
+validating apply applies the caller's encoding (legal when it is the same
+play as a candidate), so the board reaches the candidate's position whatever
+encoding the agent wrote. Pinned with an agent that returns 8/2* 6/2 with
+the hit mark on the other checker from the generator's candidate: the
+transcript records exactly the agent's encoding, and the next snapshot is the
+candidate's position.
+
+**Equality.** Every entry compares by value — the snapshot included, its
+board a `BoardPosition`. A play entry's generated equality would reach the
+`Play`, which has no equality (see `Play`), so `PlayTranscriptEntry`
+hand-writes it: **the exact encoding** (`Play.IsSameEncoding`), with the
+state, seat and dice by value. It rests on what the entry is — a stored
+record of one applied encoding, so two entries recording different
+encodings of one play are different records — and on how entries are
+compared: BgTournament's journals round-trip them at full fidelity, hit
+marks included, which is a storage round-trip, the use Hal's ruling names
+the exact-encoding comparison for. Nothing in the ecosystem compares entries
+by play identity; a caller that wants it asks `BoardState.IsSamePlay` of the
+entry's own board.
 
 ### Problem-set source
 
@@ -1259,7 +1289,11 @@ public sealed record GameStartContext(int GameNumber, int SeatOneScore, int Seat
 // Transcript — OnRollSeat is the FRAME seat: the seat whose perspective State
 // is expressed in (see Architecture / Transcript model / Seat identity)
 public abstract record TranscriptEntry(GameSnapshot State, MatchSeat OnRollSeat);
-public sealed record PlayTranscriptEntry(GameSnapshot State, MatchSeat OnRollSeat, int Die1, int Die2, Play ChosenPlay) : TranscriptEntry(State, OnRollSeat);
+public sealed record PlayTranscriptEntry(GameSnapshot State, MatchSeat OnRollSeat, int Die1, int Die2, Play ChosenPlay) : TranscriptEntry(State, OnRollSeat)
+{
+    // ChosenPlay: the encoding applied. Equality (hand-written): the exact
+    // encoding (Play.IsSameEncoding) plus State, OnRollSeat and dice by value.
+}
 public sealed record CubeTranscriptEntry(GameSnapshot State, MatchSeat OnRollSeat, CubeAction Action) : TranscriptEntry(State, OnRollSeat)
 {
     public MatchSeat ActingSeat { get; }   // derived: offer-side → OnRollSeat, Take/Pass → Other()
@@ -1745,6 +1779,14 @@ public sealed record AnswerTypeDistribution(
   properties instead of re-encoding the rules. Consumers should stop
   walking opening-die / flip-per-play conventions to attribute entries —
   the stamp is authoritative.
+- **Two play entries are equal only in the same encoding.**
+  `PlayTranscriptEntry` equality compares `ChosenPlay` by exact encoding
+  (`Play.IsSameEncoding`), since an entry records the one encoding its turn
+  applied: two entries recording 8/3* 7/3 and 8/3 7/3* from one position
+  are unequal though they are the same play. To ask whether two entries'
+  plays are the same play, use `BoardState.IsSamePlay` on the entry's own
+  board. Never compare `ChosenPlay`s with `Equals` — a play has no equality
+  (see `Play`).
 - **`IMatchObserver` callbacks are synchronous and fail-fast.** They run
   inline on the match loop between agent queries: a slow observer slows the
   match, and an observer exception propagates out of `RunMatchAsync`
