@@ -2,6 +2,7 @@ namespace BgGame_Lib.Tests;
 
 using System.Runtime.CompilerServices;
 using BgDataTypes_Lib;
+using BgDataTypes_Lib.TestSupport;
 
 public class MixedProblemSetSourceTests
 {
@@ -43,34 +44,31 @@ public class MixedProblemSetSourceTests
     /// <summary>
     /// Synthesized decision <paramref name="n"/>: classification looks its
     /// lifetime record up by derived <see cref="ProblemKey"/>, so the facts
-    /// must be real and key-derivable — a standard starting board with
-    /// stamped dice, distinguished (and read back by <c>IdsAsync</c>) via the
-    /// away-scores pair <c>n</c>-away/<c>n</c>-away (<c>0a0</c> = money).
+    /// must be real and key-derivable — the opening 3-1 on the standard
+    /// starting board, distinguished (and read back by <c>IdsAsync</c>) via
+    /// the away-scores pair <c>n</c>-away/<c>n</c>-away, or money for 0.
     ///
     /// <para>
-    /// <c>n == 0</c> is therefore a <b>money</b> fixture, and money is the one
-    /// score the key grammar spells the Jacoby rule for — an unstamped money
-    /// record has no key at all (the no-key rung), so this fixture must say
-    /// which rule it means. It means Jacoby on; the value is arbitrary here,
-    /// the stamp is not. Off money the fact is meaningless, so match fixtures
-    /// stay unstamped rather than carrying noise.
+    /// The money fixture is under the Jacoby rule, which the key grammar
+    /// spells for money alone; a money session always states its rule, so
+    /// the value is arbitrary here.
     /// </para>
     /// </summary>
-    private static BgDecisionData Decision(int n) => new()
-    {
-        Id = Id(n),
-        Position = new PositionData
-        {
-            Mop = [0, -2, 0, 0, 0, 0, 5, 0, 3, 0, 0, 0, -5, 5, 0, 0, 0, -3, 0, -5, 0, 0, 0, 0, 2, 0],
-            OnRollNeeds = n,
-            OpponentNeeds = n,
-            CubeOwner = CubeOwner.Centered,
-            IsJacoby = n == 0 ? true : null,
-        },
-        Decision = new DecisionData { Dice = [3, 1] },
-        Descriptive = new DescriptiveData(),
-        Outcome = new PlayOutcomeData(),
-    };
+    private static BgDecisionData Decision(int n) =>
+        TestRecords.CheckerPlay(id: Id(n), position: PositionOf(n));
+
+    /// <summary>
+    /// Decision <paramref name="n"/>'s position: the standard start, 0-0 in
+    /// an <paramref name="n"/>-point match, or a Jacoby money session for 0.
+    /// </summary>
+    private static PositionData PositionOf(int n) => TestRecords.Position(
+        session: n == 0
+            ? TestRecords.MoneySession(isJacoby: true)
+            : TestRecords.MatchSession(length: n, onRollNeeds: n, opponentNeeds: n));
+
+    /// <summary>The <c>n</c> a decision was built for: its away score, or 0 for money.</summary>
+    private static int NumberOf(BgDecisionData item) =>
+        item.Session.Match(money: static _ => 0, match: static m => m.OnRollNeeds);
 
     private static IReadOnlyList<BgDecisionData> Decisions(int count) =>
         Enumerable.Range(0, count).Select(Decision).ToList();
@@ -81,28 +79,17 @@ public class MixedProblemSetSourceTests
     /// different <see cref="DecisionId"/>.
     /// </summary>
     private static BgDecisionData Copy(int n, string file) =>
-        new()
-        {
-            Id = new XgpDecisionId(file),
-            Position = Decision(n).Position,
-            Decision = Decision(n).Decision,
-            Descriptive = new DescriptiveData(),
-            Outcome = new PlayOutcomeData(),
-        };
+        TestRecords.CheckerPlay(id: new XgpDecisionId(file), position: PositionOf(n));
 
     /// <summary>
-    /// A decision with real position facts but unstamped dice: no derivable
-    /// <see cref="ProblemKey"/> — the no-key rung.
+    /// Decision <paramref name="n"/>'s id and session on the empty board: no
+    /// derivable <see cref="ProblemKey"/> — the no-key rung, the one a record
+    /// can still reach.
     /// </summary>
     private static BgDecisionData NoKeyDecision(int n) =>
-        new()
-        {
-            Id = Id(n),
-            Position = Decision(n).Position,
-            Decision = new DecisionData(),   // dice default to {0,0}: underivable
-            Descriptive = new DescriptiveData(),
-            Outcome = new PlayOutcomeData(),
-        };
+        TestRecords.CheckerPlay(
+            id: Id(n),
+            position: TestRecords.Position(mop: BoardPosition.Empty, session: PositionOf(n).Session));
 
     /// <summary>Decision <paramref name="n"/>'s content key, via the one blessed factory.</summary>
     private static ProblemKey Key(int n)
@@ -135,7 +122,7 @@ public class MixedProblemSetSourceTests
     {
         var ids = new List<int>();
         await foreach (var item in source.EnumerateAsync(ct))
-            ids.Add(item.Position.OnRollNeeds);
+            ids.Add(NumberOf(item));
         return ids;
     }
 

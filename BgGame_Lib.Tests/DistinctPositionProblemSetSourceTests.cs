@@ -2,6 +2,7 @@ namespace BgGame_Lib.Tests;
 
 using System.Runtime.CompilerServices;
 using BgDataTypes_Lib;
+using BgDataTypes_Lib.TestSupport;
 
 public class DistinctPositionProblemSetSourceTests
 {
@@ -32,47 +33,39 @@ public class DistinctPositionProblemSetSourceTests
 
     private static DecisionId Id(string file) => new XgpDecisionId(file);
 
-    private static PositionData Position(int n) => new()
-    {
-        Mop = [0, -2, 0, 0, 0, 0, 5, 0, 3, 0, 0, 0, -5, 5, 0, 0, 0, -3, 0, -5, 0, 0, 0, 0, 2, 0],
-        OnRollNeeds = n,
-        OpponentNeeds = n,
-        CubeOwner = CubeOwner.Centered,
-    };
-
     /// <summary>
     /// Synthesized decision: distinct filenames give distinct (file-relative)
     /// ids; dedupe is by derived <see cref="ProblemKey"/>, so content
     /// identity is the real facts — a standard starting board distinguished
-    /// by the away-scores pair <paramref name="position"/>. The XGID string
-    /// and match length are deliberately free-floating provenance: identity
-    /// participates in neither.
+    /// by the away-scores pair <paramref name="position"/>. The match length
+    /// is deliberately free-floating provenance: identity does not
+    /// participate in it, though the derived XGID does.
     /// </summary>
     private static BgDecisionData Decision(
-        string file, int position, string xgid = "", int matchLength = 0, bool isCube = false) => new()
+        string file, int position, int matchLength = 7, bool isCube = false) =>
+        Decision(file, TestRecords.MatchSession(
+            length: matchLength, onRollNeeds: position, opponentNeeds: position), isCube);
+
+    /// <summary>A decision on the standard starting board in <paramref name="session"/>.</summary>
+    private static BgDecisionData Decision(string file, Session session, bool isCube = false)
     {
-        Id = new XgpDecisionId(file),
-        Xgid = xgid,
-        Position = Position(position),
-        Decision = isCube
-            ? new DecisionData { IsCube = true }
-            : new DecisionData { Dice = [3, 1] },
-        Descriptive = new DescriptiveData { MatchLength = matchLength },
-        Outcome = new PlayOutcomeData(),
-    };
+        var id = new XgpDecisionId(file);
+        var position = TestRecords.Position(session: session);
+        return isCube
+            ? TestRecords.Cube(id: id, position: position)
+            : TestRecords.CheckerPlay(id: id, position: position);
+    }
 
     /// <summary>
-    /// A decision with real position facts but unstamped dice: no derivable
-    /// <see cref="ProblemKey"/> — the no-key rung.
+    /// A decision on the empty board: no derivable <see cref="ProblemKey"/>
+    /// — the no-key rung, the one a record can still reach.
     /// </summary>
-    private static BgDecisionData NoKey(string file, int position = 1) => new()
-    {
-        Id = new XgpDecisionId(file),
-        Position = Position(position),
-        Decision = new DecisionData(),   // dice default to {0,0}: underivable
-        Descriptive = new DescriptiveData(),
-        Outcome = new PlayOutcomeData(),
-    };
+    private static BgDecisionData NoKey(string file, int position = 1) =>
+        TestRecords.CheckerPlay(
+            id: new XgpDecisionId(file),
+            position: TestRecords.Position(
+                mop: BoardPosition.Empty,
+                session: TestRecords.MatchSession(onRollNeeds: position, opponentNeeds: position)));
 
     private static ProblemKey KeyOf(BgDecisionData item)
     {
@@ -131,13 +124,14 @@ public class DistinctPositionProblemSetSourceTests
     {
         // The spec's first new collapse case: away-scores determine identity,
         // not match length — 5-away/5-away is the same problem in a 7-pointer
-        // and an 11-pointer. The distinct XGID strings (which encode raw
-        // scores) pin that the raw XGID is no longer the dedupe key.
-        var source = Distinct(new[]
-        {
-            Decision("seven.xgp", position: 5, xgid: "XGID=from-7pt", matchLength: 7),
-            Decision("eleven.xgp", position: 5, xgid: "XGID=from-11pt", matchLength: 11),
-        });
+        // and an 11-pointer. The distinct XGID strings (which encode the raw
+        // scores and the length) pin that the raw XGID is no longer the
+        // dedupe key.
+        var seven = Decision("seven.xgp", position: 5, matchLength: 7);
+        var eleven = Decision("eleven.xgp", position: 5, matchLength: 11);
+        Assert.NotEqual(seven.Xgid, eleven.Xgid);
+
+        var source = Distinct(new[] { seven, eleven });
 
         Assert.Equal(new[] { Id("seven.xgp") }, await IdsAsync(source));
     }
@@ -146,12 +140,17 @@ public class DistinctPositionProblemSetSourceTests
     public async Task MirrorTurnDuplicates_Collapse()
     {
         // The spec's second new collapse case: the board is on-roll-relative,
-        // so the mirrored seating of the same problem — a different XGID,
-        // which encodes the turn — carries identical facts and collapses.
+        // so the mirrored seating of the same problem — player 1 on roll
+        // 3-away/5-away, or player 2 on roll with the standing mirrored —
+        // carries identical facts and collapses. The seat is stated at the
+        // producer's door (Session.Create) and held by no record.
+        var terms = new MatchTerms { Length = 7 };
         var source = Distinct(new[]
         {
-            Decision("as-player1.xgp", position: 3, xgid: "XGID=turn:0"),
-            Decision("as-player2.xgp", position: 3, xgid: "XGID=turn:1"),
+            Decision("as-player1.xgp", Session.Create(
+                terms, new MatchStanding { Away1 = 3, Away2 = 5, IsCrawford = false }, Seat.Player1)),
+            Decision("as-player2.xgp", Session.Create(
+                terms, new MatchStanding { Away1 = 5, Away2 = 3, IsCrawford = false }, Seat.Player2)),
         });
 
         Assert.Equal(new[] { Id("as-player1.xgp") }, await IdsAsync(source));

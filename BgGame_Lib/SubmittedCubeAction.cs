@@ -37,11 +37,11 @@ using BgDataTypes_Lib;
 /// <see cref="CubeClaimPair.NoDoublePass"/> answer is submittable like any
 /// other and scored by the same rule: wrong on whichever halves differ, and
 /// fully correct on the measure-zero boundary where the ruled tie-breaks
-/// compose it as <see cref="DecisionData.BestClaimPair"/>.
+/// compose it as <see cref="CubeDecisionData.BestClaimPair"/>.
 /// </para>
 /// <para>
 /// <b>Why the truth pair is carried and the correctness is not.</b> The truth
-/// is a producer fact — <see cref="DecisionData.BestClaimPair"/>, the
+/// is a producer fact — <see cref="CubeDecisionData.BestClaimPair"/>, the
 /// ecosystem's one derivation site — so it enters from outside; nothing here
 /// re-derives a claim from equities. Correctness, by contrast, is a pure
 /// function of the two pairs this record already holds, so deriving it is
@@ -49,8 +49,8 @@ using BgDataTypes_Lib;
 /// describes. The equity losses stay carried for the same reason the truth
 /// pair does: they are facts about the analysis' equities, which this carrier
 /// deliberately does not hold. <see cref="From"/> is the one construction
-/// that reads all three off a <see cref="DecisionData"/> together, and is how
-/// a consumer should build one.
+/// that reads all three off a <see cref="CubeDecisionData"/> together, and is
+/// how a consumer should build one.
 /// </para>
 /// </remarks>
 /// <param name="ProblemKey">
@@ -64,18 +64,18 @@ using BgDataTypes_Lib;
 /// </param>
 /// <param name="UserDecision">The claim/taker answer pair the user chose.</param>
 /// <param name="BestDecision">
-/// The position's derived truth — <see cref="DecisionData.BestClaimPair"/>,
+/// The position's derived truth — <see cref="CubeDecisionData.BestClaimPair"/>,
 /// taken from the producer rather than re-derived here.
 /// </param>
 /// <param name="DoublerEquityLoss">
 /// Equity loss of the board action behind the user's claim vs. the best
-/// doubler action (0 if best) — <see cref="DecisionData.DoublerActionError"/>
+/// doubler action (0 if best) — <see cref="CubeDecisionData.DoublerActionError"/>
 /// of <see cref="CubeClaimExtensions.ToCubeAction"/>. Zero on a wrong claim
 /// over the right action.
 /// </param>
 /// <param name="TakerEquityLoss">
 /// Equity loss of the user's taker action vs. the best taker action (0 if
-/// best) — <see cref="DecisionData.TakerActionError"/>.
+/// best) — <see cref="CubeDecisionData.TakerActionError"/>.
 /// </param>
 public sealed record SubmittedCubeAction(
     ProblemKey? ProblemKey,
@@ -112,17 +112,16 @@ public sealed record SubmittedCubeAction(
     /// the no-key rung.
     /// </param>
     /// <param name="answer">The claim/taker pair the user submitted.</param>
-    /// <param name="decision">The analysed cube decision answered.</param>
+    /// <param name="decision">
+    /// The analysed cube decision answered — a cube decision's category
+    /// (<see cref="CubeDecision.Decision"/>), so a checker play cannot be
+    /// passed.
+    /// </param>
     /// <exception cref="ArgumentNullException">
     /// Thrown when <paramref name="decision"/> is <see langword="null"/>.
     /// </exception>
-    /// <exception cref="InvalidOperationException">
-    /// Thrown when <paramref name="decision"/> is a checker play
-    /// (<see cref="DecisionData.IsCube"/> false) — the cube surfaces it reads
-    /// are undefined there.
-    /// </exception>
     public static SubmittedCubeAction From(
-        ProblemKey? problemKey, CubeClaimPair answer, DecisionData decision)
+        ProblemKey? problemKey, CubeClaimPair answer, CubeDecisionData decision)
     {
         ArgumentNullException.ThrowIfNull(decision);
         return new(

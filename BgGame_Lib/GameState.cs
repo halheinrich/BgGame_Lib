@@ -189,9 +189,7 @@ public sealed class GameState
     /// <summary>Take an immutable snapshot of the full game-and-match state.</summary>
     public GameSnapshot Snapshot()
     {
-        var boardCopy = new int[26];
-        Array.Copy(Board.Points, boardCopy, 26);
-        return new GameSnapshot(boardCopy, CubeSize, CubeOwner, Match.Snapshot());
+        return new GameSnapshot(Board.Points.ToArray(), CubeSize, CubeOwner, Match.Snapshot());
     }
 
     private static bool IsPowerOfTwo(int n) => n > 0 && (n & (n - 1)) == 0;

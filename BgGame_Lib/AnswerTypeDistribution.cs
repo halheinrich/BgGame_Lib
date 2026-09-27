@@ -8,7 +8,7 @@ using BgDataTypes_Lib;
 /// the four reachable pairs of <see cref="CubeClaimPair"/>'s closed 3×2 that
 /// an analysis's best pair names as a verdict (halheinrich/backgammon#86;
 /// amended 2026-09-02 by halheinrich/backgammon#187). Immutable;
-/// <see cref="Add(DecisionData)"/> and <c>operator +</c> each return a new
+/// <see cref="Add(BgDecisionData)"/> and <c>operator +</c> each return a new
 /// <see cref="AnswerTypeDistribution"/>.
 ///
 /// <para>
@@ -20,7 +20,7 @@ using BgDataTypes_Lib;
 /// </para>
 ///
 /// <para>
-/// <b>Fold contract:</b> every <see cref="Add(DecisionData)"/> increments
+/// <b>Fold contract:</b> every <see cref="Add(BgDecisionData)"/> increments
 /// <b>exactly one</b> bucket, so <see cref="Total"/> equals the number of
 /// decisions folded in. A consumer folding a filtered pool therefore reads
 /// that pool's size straight off <see cref="Total"/> and needs no second
@@ -42,7 +42,7 @@ using BgDataTypes_Lib;
 /// The four cube buckets are named for the canonical
 /// <see cref="CubeClaimPair"/> instances they count, so reading a bucket
 /// back to its pair needs no translation. The classifier <b>consumes the
-/// producer verdict</b> — <see cref="DecisionData.BestClaimPair"/>, the one
+/// producer verdict</b> — <see cref="CubeDecisionData.BestClaimPair"/>, the one
 /// derivation site of the truth claim — and never walks the equities itself
 /// (SPEC-scoring §3, "Answer-type classification consumes the claim"). The
 /// sixth cell of the 3×2, the incoherent
@@ -59,7 +59,7 @@ using BgDataTypes_Lib;
 /// 2026-09-02 amendment; it is now the one cell of the 3×2 with no bucket.
 /// Under the amended predicate Too Good requires the pass — a position the
 /// opponent would take is No double / Take whatever the no-double equity —
-/// so <see cref="DecisionData.BestClaimPair"/> never derives that pair and a
+/// so <see cref="CubeDecisionData.BestClaimPair"/> never derives that pair and a
 /// bucket for it could only ever read zero (SPEC-scoring §3, amendment
 /// consequence (iii): the classifier's cube buckets return to four). The
 /// data-types library keeps the cell representable, so the fold names it
@@ -100,7 +100,7 @@ public sealed record AnswerTypeDistribution(
     /// <summary>
     /// Total decisions counted — the sum of all five buckets. Derived, never
     /// stored, so it cannot drift from them. Since every
-    /// <see cref="Add(DecisionData)"/> increments exactly one bucket, this is
+    /// <see cref="Add(BgDecisionData)"/> increments exactly one bucket, this is
     /// also the number of decisions folded in.
     /// </summary>
     public int Total =>
@@ -113,16 +113,18 @@ public sealed record AnswerTypeDistribution(
     /// distributions combine.
     /// </summary>
     /// <param name="decision">
-    /// The decision to classify. A checker play
-    /// (<see cref="DecisionData.IsCube"/> false) counts as a checker play; a
-    /// cube decision is keyed by its
-    /// <see cref="DecisionData.BestClaimPair"/> — the producer's verdict,
+    /// The decision to classify, matched on its kind: a
+    /// <see cref="CheckerPlayDecision"/> counts as a checker play; a
+    /// <see cref="CubeDecision"/> is keyed by its category's
+    /// <see cref="CubeDecisionData.BestClaimPair"/> — the producer's verdict,
     /// never re-derived from equities here.
     /// </param>
-    public AnswerTypeDistribution Add(DecisionData decision)
+    public AnswerTypeDistribution Add(BgDecisionData decision)
     {
         ArgumentNullException.ThrowIfNull(decision);
-        return this + Classify(decision);
+        return this + decision.Match(
+            checkerPlay: static _ => Empty with { CheckerPlays = 1 },
+            cube: static cube => ClassifyCube(cube.Decision.BestClaimPair, nameof(decision)));
     }
 
     /// <summary>Combine two distributions bucket-wise.</summary>
@@ -140,8 +142,10 @@ public sealed record AnswerTypeDistribution(
     }
 
     /// <summary>
-    /// The one-hot distribution for a single decision — the bucketing rule, and
-    /// the reason <see cref="Total"/> counts decisions: every branch returns a
+    /// The one-hot distribution for a cube decision whose best pair is
+    /// <paramref name="best"/>. With the checker-play arm of
+    /// <see cref="Add(BgDecisionData)"/> it is the bucketing rule, and the
+    /// reason <see cref="Total"/> counts decisions: every arm returns a
     /// distribution whose buckets sum to 1. Total over every pair the
     /// producer derives — the four reachable verdicts plus the
     /// boundary-composed incoherent cell, housed by ruling rather than by
@@ -155,12 +159,8 @@ public sealed record AnswerTypeDistribution(
     /// that type guards both halves on construction). Both arms exist because
     /// a silent extra bucket would break the fold contract rather than fail.
     /// </exception>
-    private static AnswerTypeDistribution Classify(DecisionData decision)
+    private static AnswerTypeDistribution ClassifyCube(CubeClaimPair best, string paramName)
     {
-        if (!decision.IsCube)
-            return Empty with { CheckerPlays = 1 };
-
-        CubeClaimPair best = decision.BestClaimPair;
         return (best.Claim, best.Taker) switch
         {
             (CubeClaim.NoDouble, CubeAction.Take) => Empty with { NoDoubleTake = 1 },
@@ -177,10 +177,10 @@ public sealed record AnswerTypeDistribution(
             // rather than left to the guard arm below so that a producer
             // regression fails by name.
             (CubeClaim.TooGood,  CubeAction.Take) => throw new ArgumentOutOfRangeException(
-                nameof(decision), best,
+                paramName, best,
                 "Cube best claim pair is the retired Too good / Take verdict, which the " +
                 "producer no longer derives (Too Good requires the pass)."),
-            _ => throw new ArgumentOutOfRangeException(nameof(decision), best,
+            _ => throw new ArgumentOutOfRangeException(paramName, best,
                 "Cube best claim pair is outside CubeClaimPair's closed 3×2."),
         };
     }

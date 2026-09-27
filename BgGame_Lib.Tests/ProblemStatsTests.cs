@@ -1,6 +1,7 @@
 namespace BgGame_Lib.Tests;
 
 using BgDataTypes_Lib;
+using BgDataTypes_Lib.TestSupport;
 
 public class ProblemStatsTests
 {
@@ -17,9 +18,9 @@ public class ProblemStatsTests
     private static readonly DateTimeOffset T1 = new(2026, 7, 18, 12, 0, 0, TimeSpan.Zero);
     private static readonly DateTimeOffset T2 = new(2026, 7, 19, 12, 0, 0, TimeSpan.Zero);
 
-    private static SubmittedPlay Play(ProblemKey? key, double equityLoss, bool correct) =>
-        new(key, UserPlay: [], MatchedCandidateIndex: correct ? 0 : 1,
-            EquityLoss: equityLoss, IsCorrect: correct);
+    // Scored as production scores it; correct exactly when the error is 0.
+    private static SubmittedPlay Play(ProblemKey? key, double equityLoss) =>
+        TestSubmissions.Play(key, equityLoss);
 
     // Per-half correctness is derived from the answer/truth pair rather than
     // stated, so this helper composes pairs that realize the requested
@@ -38,7 +39,7 @@ public class ProblemStatsTests
     [Fact]
     public void FromPlay_Correct_OneSubmittedOneCorrectNoLoss()
     {
-        var s = ProblemStats.From(Play(Key, equityLoss: 0.0, correct: true), T1);
+        var s = ProblemStats.From(Play(Key, equityLoss: 0.0), T1);
 
         Assert.Equal(Key, s.Key);
         Assert.Equal(new ScoreSegment(Submitted: 1, Correct: 1, TotalEquityLoss: 0.0), s.Tally);
@@ -49,7 +50,7 @@ public class ProblemStatsTests
     [Fact]
     public void FromPlay_Incorrect_OneSubmittedZeroCorrectWithLoss()
     {
-        var s = ProblemStats.From(Play(Key, equityLoss: 0.042, correct: false), T1);
+        var s = ProblemStats.From(Play(Key, equityLoss: 0.042), T1);
 
         Assert.Equal(1, s.Tally.Submitted);
         Assert.Equal(0, s.Tally.Correct);
@@ -103,12 +104,7 @@ public class ProblemStatsTests
         // costs +0.000 because the board action behind both claims is the
         // same. Built through SubmittedCubeAction.From so the truth pair and
         // the loss come from the producer, not from this test.
-        var tooGoodPass = new DecisionData
-        {
-            IsCube = true,
-            NoDoubleEquity = 1.30,
-            DoubleTakeEquity = 1.50,
-        };
+        var tooGoodPass = TestRecords.CubeData(noDoubleEquity: 1.30, doubleTakeEquity: 1.50);
         var submission = SubmittedCubeAction.From(
             CubeKey, CubeClaimPair.NoDoublePass, tooGoodPass);
 
@@ -125,8 +121,8 @@ public class ProblemStatsTests
     [Fact]
     public void Plus_RepeatedFolds_AccumulateAndAdvanceLastQuizzed()
     {
-        var s = ProblemStats.From(Play(Key, equityLoss: 0.025, correct: false), T1)
-            .Plus(Play(Key, equityLoss: 0.0, correct: true), T2);
+        var s = ProblemStats.From(Play(Key, equityLoss: 0.025), T1)
+            .Plus(Play(Key, equityLoss: 0.0), T2);
 
         Assert.Equal(2, s.Tally.Submitted);
         Assert.Equal(1, s.Tally.Correct);
@@ -138,8 +134,8 @@ public class ProblemStatsTests
     [Fact]
     public void Plus_ReturnsNewInstance_OriginalUnchanged()
     {
-        var original = ProblemStats.From(Play(Key, equityLoss: 0.0, correct: true), T1);
-        var updated = original.Plus(Play(Key, equityLoss: 0.05, correct: false), T2);
+        var original = ProblemStats.From(Play(Key, equityLoss: 0.0), T1);
+        var updated = original.Plus(Play(Key, equityLoss: 0.05), T2);
 
         Assert.NotSame(original, updated);
         Assert.Equal(1, original.Tally.Submitted);
@@ -150,10 +146,10 @@ public class ProblemStatsTests
     [Fact]
     public void PlusPlay_MismatchedKey_Throws()
     {
-        var s = ProblemStats.From(Play(Key, equityLoss: 0.0, correct: true), T1);
+        var s = ProblemStats.From(Play(Key, equityLoss: 0.0), T1);
 
         Assert.Throws<ArgumentException>(
-            () => s.Plus(Play(OtherKey, equityLoss: 0.0, correct: true), T2));
+            () => s.Plus(Play(OtherKey, equityLoss: 0.0), T2));
     }
 
     [Fact]
@@ -163,7 +159,7 @@ public class ProblemStatsTests
         // (the dice field), so a mixed-kind fold is a key mismatch — kind
         // purity is structural, which keeps per-kind tally derivations
         // (Sightings' divide-by-two for cubes) exact.
-        var s = ProblemStats.From(Play(Key, equityLoss: 0.0, correct: true), T1);
+        var s = ProblemStats.From(Play(Key, equityLoss: 0.0), T1);
 
         Assert.Throws<ArgumentException>(() => s.Plus(
             Cube(CubeKey, doublerLoss: 0.0, doublerCorrect: true, takerLoss: 0.0, takerCorrect: true), T2));
@@ -175,15 +171,15 @@ public class ProblemStatsTests
         // The no-key rung is filtered one level up (ProblemStatsDocument.Plus
         // returns the document unchanged); at this level a keyless submission
         // is a caller bug.
-        var s = ProblemStats.From(Play(Key, equityLoss: 0.0, correct: true), T1);
+        var s = ProblemStats.From(Play(Key, equityLoss: 0.0), T1);
 
         Assert.Throws<ArgumentException>(
-            () => ProblemStats.From(Play(null, equityLoss: 0.0, correct: true), T1));
+            () => ProblemStats.From(Play(null, equityLoss: 0.0), T1));
         Assert.Throws<ArgumentException>(
             () => ProblemStats.From(
                 Cube(null, doublerLoss: 0.0, doublerCorrect: true, takerLoss: 0.0, takerCorrect: true), T1));
         Assert.Throws<ArgumentException>(
-            () => s.Plus(Play(null, equityLoss: 0.0, correct: true), T2));
+            () => s.Plus(Play(null, equityLoss: 0.0), T2));
         Assert.Throws<ArgumentException>(
             () => s.Plus(
                 Cube(null, doublerLoss: 0.0, doublerCorrect: true, takerLoss: 0.0, takerCorrect: true), T2));
@@ -192,7 +188,7 @@ public class ProblemStatsTests
     [Fact]
     public void FromAndPlus_NullSubmissions_Throw()
     {
-        var s = ProblemStats.From(Play(Key, equityLoss: 0.0, correct: true), T1);
+        var s = ProblemStats.From(Play(Key, equityLoss: 0.0), T1);
 
         Assert.Throws<ArgumentNullException>(() => ProblemStats.From((SubmittedPlay)null!, T1));
         Assert.Throws<ArgumentNullException>(() => ProblemStats.From((SubmittedCubeAction)null!, T1));

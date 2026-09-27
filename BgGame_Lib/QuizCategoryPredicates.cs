@@ -51,9 +51,16 @@ internal static class QuizStatsMeasures
     /// exactly 2.
     /// </summary>
     internal static int Sightings(BgDecisionData decision, ProblemStats? stats) =>
-        IsUnseen(stats) ? 0
-        : decision.IsCube ? stats.Tally.Submitted / 2
-        : stats.Tally.Submitted;
+        IsUnseen(stats) ? 0 : stats.Tally.Submitted / SubmissionsPerSighting(decision);
+
+    /// <summary>
+    /// How many submissions one sighting of <paramref name="decision"/> folds:
+    /// one for a checker play, two for a cube position (its two halves).
+    /// Matched on the record's kind, so a third kind would fail to compile
+    /// here rather than count as either.
+    /// </summary>
+    private static int SubmissionsPerSighting(BgDecisionData decision) =>
+        decision.Match(checkerPlay: static _ => 1, cube: static _ => 2);
 }
 
 /// <summary>Matches decisions never quizzed. See <see cref="QuizCategory.NeverSeen"/>.</summary>

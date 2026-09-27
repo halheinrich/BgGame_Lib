@@ -105,8 +105,8 @@ public class GameStateTests
         var beforeSum = 0;
         foreach (var v in snap.Board) beforeSum += v;
 
-        // Mutate the live board.
-        game.Board.Points[1] += 100;
+        // Mutate the live board: the one whole-position write.
+        game.Board.SetPosition(BoardPosition.Empty);
 
         var afterSum = 0;
         foreach (var v in snap.Board) afterSum += v;
@@ -206,8 +206,7 @@ public class GameStateTests
         var match = MatchState.FromScores(matchLength: 7, onRollScore: 3, opponentScore: 1, isCrawford: false);
         var game = GameState.FromPosition(match, BoardState.Standard(), cubeSize: 2, cubeOwner: CubeOwner.OnRoll);
 
-        var pointsBefore = new int[26];
-        Array.Copy(game.Board.Points, pointsBefore, 26);
+        var pointsBefore = game.Board.Points.ToArray();
         var onRollBefore = match.OnRollScore;
         var opponentBefore = match.OpponentScore;
         var cubeOwnerBefore = game.CubeOwner;
@@ -414,14 +413,15 @@ public class GameStateTests
 
         // Mutating the view leaves the live state untouched...
         view.DoubleCube();
-        view.Board.Points[6] -= 1;
+        view.Board.SetPosition(BoardPosition.Empty);
         Assert.Equal(1, game.CubeSize);
         Assert.Equal(CubeOwner.Centered, game.CubeOwner);
         Assert.Equal(5, game.Board.Points[6]);
 
-        // ...and the view does not track subsequent live mutations.
-        game.Board.Points[24] -= 1;
-        Assert.Equal(-2, view.Board.Points[1]);
+        // ...and a view does not track subsequent live mutations.
+        var second = game.OpponentView();
+        game.Board.SetPosition(BoardPosition.Empty);
+        Assert.Equal(-2, second.Board.Points[1]);
     }
 
     [Fact]

@@ -485,7 +485,7 @@ public class MatchRunnerTests
 
         Assert.Equal(MatchSeat.One, ex.Seat);
         Assert.Equal(AgentContractViolationKind.IllegalPlay, ex.Kind);
-        Assert.Equal(badPlay, ex.OffendingPlay);
+        Assert.True(ex.OffendingPlay is { } offending && offending.IsSameEncoding(badPlay));
         Assert.Null(ex.OffendingCubeAction);
         Assert.IsType<ArgumentException>(ex.InnerException);
     }
@@ -890,7 +890,9 @@ public class MatchRunnerTests
                         var pb = (PlayTranscriptEntry)b[i];
                         Assert.Equal(pa.Die1, pb.Die1);
                         Assert.Equal(pa.Die2, pb.Die2);
-                        Assert.Equal(pa.ChosenPlay, pb.ChosenPlay);
+                        // The same encoding, not merely the same play: a
+                        // reproduced run records exactly what it recorded.
+                        Assert.True(pa.ChosenPlay.IsSameEncoding(pb.ChosenPlay));
                         break;
                     case CubeTranscriptEntry ca:
                         Assert.Equal(ca.Action, ((CubeTranscriptEntry)b[i]).Action);

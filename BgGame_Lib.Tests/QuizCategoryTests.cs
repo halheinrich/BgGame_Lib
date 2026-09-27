@@ -1,29 +1,15 @@
 namespace BgGame_Lib.Tests;
 
 using BgDataTypes_Lib;
+using BgDataTypes_Lib.TestSupport;
 
 public class QuizCategoryTests
 {
     private static readonly DateTimeOffset Now =
         new(2026, 7, 19, 12, 0, 0, TimeSpan.Zero);
 
-    private static readonly DecisionId Id = new XgpDecisionId("test.xgp");
-
-    private static BgDecisionData Decision(bool isCube) => new()
-    {
-        Id = Id,
-        Position = new PositionData
-        {
-            Mop = new int[26],
-            CubeOwner = CubeOwner.Centered,
-        },
-        Decision = new DecisionData { IsCube = isCube },
-        Descriptive = new DescriptiveData(),
-        Outcome = new PlayOutcomeData(),
-    };
-
-    private static BgDecisionData Play => Decision(isCube: false);
-    private static BgDecisionData Cube => Decision(isCube: true);
+    private static BgDecisionData Play => TestRecords.CheckerPlay();
+    private static BgDecisionData Cube => TestRecords.Cube();
 
     // Predicates take the (decision, stats) pair as given — the by-key lookup
     // lives in MixedProblemSetSource — so one representative canonical key

@@ -4,6 +4,18 @@ using BgDataTypes_Lib;
 
 public class RefereeTests
 {
+    /// <summary>
+    /// A board holding only the stated on-roll checkers (the opponent's all
+    /// borne off), built through the one raw-counts door.
+    /// </summary>
+    private static BoardState Board(params (int Point, int Count)[] checkers)
+    {
+        var mop = new int[26];
+        foreach (var (point, count) in checkers)
+            mop[point] = count;
+        return BoardState.FromMop(mop);
+    }
+
     [Fact]
     public void IsGameOver_StandardOpening_ReturnsNull()
     {
@@ -16,9 +28,7 @@ public class RefereeTests
     {
         // Construct a board where opponent (negative side) has zero checkers
         // and on-roll has 14 visible (so 1 borne off). Win type: Single.
-        var board = new BoardState();
-        board.Points[1] = 14;   // 14 on-roll checkers on the 1-point
-        board.RecalcHighPoint();
+        var board = Board((1, 14));   // 14 on-roll checkers on the 1-point
 
         var match = MatchState.NewMatch(7);
         var game = GameState.FromPosition(match, board, cubeSize: 1, cubeOwner: CubeOwner.Centered);
@@ -36,9 +46,7 @@ public class RefereeTests
     {
         // On-roll has all 15 checkers still on board, none in opponent home or on bar.
         // Opponent has 0 checkers. → Gammon for opponent.
-        var board = new BoardState();
-        board.Points[1] = 15;  // all on the 1-point — far from opponent's home
-        board.RecalcHighPoint();
+        var board = Board((1, 15));  // all on the 1-point — far from opponent's home
 
         var match = MatchState.NewMatch(7);
         var game = GameState.FromPosition(match, board, cubeSize: 2, cubeOwner: CubeOwner.OnRoll);
@@ -56,10 +64,7 @@ public class RefereeTests
     public void IsGameOver_BackgammonViaOpponentHome()
     {
         // On-roll has all 15 still on board, with one checker on point 20 (in opponent's home).
-        var board = new BoardState();
-        board.Points[1] = 14;
-        board.Points[20] = 1;  // in opponent's home (current POV: 19-24)
-        board.RecalcHighPoint();
+        var board = Board((1, 14), (20, 1));  // one in opponent's home (current POV: 19-24)
 
         var match = MatchState.NewMatch(7);
         var game = GameState.FromPosition(match, board, cubeSize: 1, cubeOwner: CubeOwner.Centered);
@@ -76,10 +81,7 @@ public class RefereeTests
     public void IsGameOver_BackgammonViaOpponentOnBar()
     {
         // On-roll has all 15 still on board with one on the bar (Points[25]).
-        var board = new BoardState();
-        board.Points[1] = 14;
-        board.Points[25] = 1;
-        board.RecalcHighPoint();
+        var board = Board((1, 14), (25, 1));
 
         var match = MatchState.NewMatch(7);
         var game = GameState.FromPosition(match, board, cubeSize: 1, cubeOwner: CubeOwner.Centered);

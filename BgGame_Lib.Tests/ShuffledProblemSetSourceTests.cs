@@ -1,7 +1,9 @@
 namespace BgGame_Lib.Tests;
 
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using BgDataTypes_Lib;
+using BgDataTypes_Lib.TestSupport;
 
 public class ShuffledProblemSetSourceTests
 {
@@ -39,26 +41,18 @@ public class ShuffledProblemSetSourceTests
     private static IReadOnlyList<BgDecisionData> Decisions(int count) =>
         Enumerable.Range(0, count).Select(Decision).ToList();
 
-    private static BgDecisionData Decision(int seed) => new()
-    {
-        Id = new XgpDecisionId($"test-{seed}.xgp"),
-        Position = new PositionData
-        {
-            Mop = new int[26],
-            OnRollNeeds = seed,
-            OpponentNeeds = seed,
-            CubeOwner = CubeOwner.Centered,
-        },
-        Decision = new DecisionData(),
-        Descriptive = new DescriptiveData(),
-        Outcome = new PlayOutcomeData(),
-    };
+    private static BgDecisionData Decision(int seed) =>
+        TestRecords.CheckerPlay(id: new XgpDecisionId($"test-{seed}.xgp"));
+
+    /// <summary>The seed a decision was built for, read back off its file name.</summary>
+    private static int SeedOf(BgDecisionData item) =>
+        int.Parse(item.SourceFile["test-".Length..^".xgp".Length], CultureInfo.InvariantCulture);
 
     private static async Task<List<int>> IdsAsync(IProblemSetSource source, CancellationToken ct = default)
     {
         var ids = new List<int>();
         await foreach (var item in source.EnumerateAsync(ct))
-            ids.Add(item.Position.OnRollNeeds);
+            ids.Add(SeedOf(item));
         return ids;
     }
 
@@ -90,8 +84,8 @@ public class ShuffledProblemSetSourceTests
 
         var shuffled = await IdsAsync(source);
 
-        Assert.Equal(items.Select(i => i.Position.OnRollNeeds).Order(), shuffled.Order());
-        Assert.NotEqual(items.Select(i => i.Position.OnRollNeeds), shuffled);
+        Assert.Equal(items.Select(SeedOf).Order(), shuffled.Order());
+        Assert.NotEqual(items.Select(SeedOf), shuffled);
     }
 
     [Fact]
@@ -118,7 +112,7 @@ public class ShuffledProblemSetSourceTests
         // ShuffledProblemSetSource existing at all.
         var ids = await IdsAsync(inner);
 
-        Assert.Equal(items.Select(i => i.Position.OnRollNeeds), ids);
+        Assert.Equal(items.Select(SeedOf), ids);
     }
 
     [Fact]

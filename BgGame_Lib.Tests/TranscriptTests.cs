@@ -103,7 +103,7 @@ public class TranscriptTests
         // Use the same MatchSnapshot/board reference so record equality compares cleanly.
         var matchSnap = match.Snapshot();
         int[] board = new int[26];
-        Array.Copy(game.Board.Points, board, 26);
+        game.Board.Points.CopyTo(board);
         var snap = new GameSnapshot(board, 1, CubeOwner.Centered, matchSnap);
 
         var a = new CubeTranscriptEntry(snap, MatchSeat.One, CubeAction.Double);

@@ -22,8 +22,12 @@ https://github.com/halheinrich/BgGame_Lib — branch `main`.
 ## Depends on
 
 - **BgDataTypes_Lib** — `Move`, `Play`, `BoardState` (with public
-  `ApplyPlay` turn-boundary primitive), `BgDecisionData`, `CubeOwner`,
-  `CubeAction`, plus the enums' string serialization contract.
+  `ApplyPlay` turn-boundary primitive and the play-identity doors
+  `IsSamePlay` / `IndexOfSamePlay`), the decision kinds `BgDecisionData` →
+  `CheckerPlayDecision` / `CubeDecision`, the ranking (`PlayRanking`,
+  `RankedPlays`), `CubeOwner`, `CubeAction`, plus the enums' string
+  serialization contract. The test project also references its
+  `BgDataTypes_Lib.TestSupport` for the record builders (`TestRecords`).
 - **BgMoveGen** — `MoveGenerator` (legal-play enumeration and the
   validating turn-boundary `MoveGenerator.ApplyPlay`).
 
@@ -57,8 +61,10 @@ and `Directory.Packages.props` (Central Package Management).
   `DistinctPositionProblemSetSource` (with its `DuplicatePositionClass`
   telemetry) and `MixedProblemSetSource` (with its `MixComposition` /
   `MixCompositionEntry` telemetry).
-- **Quiz scoring** — `SubmittedPlay` and `SubmittedCubeAction`, the scored
-  submissions; `ScoreSegment` and `QuizScore`, the running tallies;
+- **Quiz scoring** — `PlaySubmission` (with `PlaySubmissionKind`), the one
+  place a submitted play is scored under a ranking; `SubmittedPlay` and
+  `SubmittedCubeAction`, the scored submissions; `ScoreSegment` and
+  `QuizScore`, the running tallies;
   `AnswerTypeDistribution`, a pool counted by the answer each decision calls
   for.
 - **Lifetime stats and the weighted mix** — `ProblemStats` and
@@ -80,8 +86,11 @@ Python reference and cross-checked against openssl. BgTournament's
 **`BgGame_Lib.Tests/`** — xUnit, one class per type or contract: the agent
 and problem-source contracts, dice (the vectors pinned), state, the runner,
 scoring, stats and the mix (their wire bytes pinned), and the
-source-generation gate. Two helpers: `TestAgents`, in-process baseline bots,
-and `VerifiableDiceVectors`, the loader for `spec/`.
+source-generation gate. Three helpers: `TestAgents`, in-process baseline
+bots; `TestSubmissions`, scored plays built the way production builds them
+(through `PlaySubmission.Score`); and `VerifiableDiceVectors`, the loader for
+`spec/`. Decision records are built with the producer's `TestRecords`, never
+by hand.
 
 ## Architecture
 
@@ -165,7 +174,8 @@ play on from it.
 | Type | Mutability | Rationale |
 |---|---|---|
 | `MatchState`, `GameState`, `Transcript` | Mutable, append-only or method-driven transitions | Game and match progression naturally mutate; matches BgMoveGen's apply/undo idiom. |
-| `MatchSnapshot`, `GameSnapshot`, `TranscriptEntry` and subtypes, `GameResult`, `SubmittedPlay`, `SubmittedCubeAction`, `ScoreSegment`, `QuizScore` | Immutable records, init-only / by-value | Transcript-friendly; safe to share across threads and across history. |
+| `MatchSnapshot`, `GameSnapshot`, `TranscriptEntry` and subtypes, `GameResult`, `SubmittedCubeAction`, `ScoreSegment`, `QuizScore` | Immutable records, init-only / by-value | Transcript-friendly; safe to share across threads and across history. |
+| `SubmittedPlay`, `PlaySubmission` | Immutable classes, no public constructor, hand-written equality | Built only by `PlaySubmission.Score`, so facts derived together cannot be set apart (a record's `with` could); a record's generated equality would reach the `Play` and throw. |
 
 `Snapshot()` methods on `MatchState` and `GameState` produce immutable
 records. `GameSnapshot.Board` is a defensive copy of `BoardState.Points`,
@@ -466,9 +476,41 @@ it speaks only the interface. The consumer wires it in: BgQuiz_Blazor's
 
 ### Quiz-result records
 
-**`SubmittedPlay`** captures one user play scored against a position's
-candidates: the chosen `Play`, the matched-candidate index (nullable for
-analysis omissions), the equity loss vs. best, and an `IsCorrect` flag.
+**A submitted play is scored under a ranking, in one place, and its facts
+cannot disagree** (halheinrich/backgammon#273; SPEC-scoring §2a).
+`PlaySubmission.Score(problemKey, play, decision, ranking)` is that place: it
+finds the candidate the play is, by identity from the decision's own position
+(`BoardState.IndexOfSamePlay` — the rule is BgDataTypes_Lib's, stated on
+`IsSamePlay`), and reads that candidate's error off the producer's one
+derivation (`CheckerPlayDecisionData.RankedBy(ranking).ForCandidate(index)`),
+together. It takes the `CheckerPlayDecision` — the record, since matching
+needs its position — so a cube decision cannot be passed. What it returns
+names its case (`PlaySubmissionKind`):
+
+- **`Scored`** — the ranking scores the candidate: a **`SubmittedPlay`**,
+  carrying the problem key, the user's own encoding (`UserPlay`), the
+  `Ranking`, the `MatchedCandidateIndex` (stored order) and the
+  `EquityLoss` — the ranking's error, the ranking's best play's equity minus
+  the candidate's. `IsCorrect` is **derived**, exactly 0 (SPEC-scoring §2a),
+  so it cannot disagree with the error; it is the one statement of the
+  verdict, and halheinrich/backgammon#202's pending threshold ruling changes
+  that predicate and nothing else.
+- **`NotScored`** — the play is a candidate the ranking does not score
+  (depth first only), carrying that candidate's index; and **`OffList`** —
+  the play is no candidate, a play invalid from the position included. Both
+  are skips of record that fold nothing (SPEC-scoring §2), neither yields a
+  `SubmittedPlay`, and `Kind` / `Match(scored, notScored, offList)` tell
+  them apart.
+
+`SubmittedPlay` has **no public constructor and no settable member**, so no
+caller can pair a play with another candidate's error, state a correctness
+its error contradicts, or fold a skip. It is a class, not a record: a
+record's `with` would let a caller set one fact apart from the others, and a
+record's generated equality would compare the `Play` — which has no equality
+(see `Play`). Its **equality compares the problem, the matched candidate and
+the result — the ranking and the error — never plays** (Hal's ruling on
+halheinrich/backgammon#273). `PlaySubmission` is value-equal over its case
+and what the case carries.
 
 **`SubmittedCubeAction`** is the cube analog — the scored carrier for one
 cube position. A cube position is two independent decisions (the doubler's
@@ -491,7 +533,7 @@ half (SPEC-scoring §3, ruled 2026-08-26; halheinrich/backgammon#86).
   `NoDoubleEquity == 1` boundary, where the ruled tie-breaks compose it as
   the derived truth.
 - **Why correctness is derived and the rest is carried.** The truth pair is
-  a producer fact (`DecisionData.BestClaimPair`, the ecosystem's one
+  a producer fact (`CubeDecisionData.BestClaimPair`, the ecosystem's one
   derivation site) and the equity losses are facts about the analysis'
   equities, which this carrier deliberately does not hold — both enter from
   outside, and nothing here re-derives a claim from equities. Correctness,
@@ -499,13 +541,13 @@ half (SPEC-scoring §3, ruled 2026-08-26; halheinrich/backgammon#86).
   so deriving it is what stops a stated verdict from disagreeing with the
   answer it describes.
 - **`SubmittedCubeAction.From(problemKey, answer, decision)`** is the one
-  construction that reads truth and both losses off a `DecisionData`
-  together — including the claim-to-action collapse
-  (`CubeClaimExtensions.ToCubeAction`) the doubler-side equity read needs.
-  Consumers should build submissions through it rather than assembling the
-  five fields by hand, which is the only way to pair an answer with a truth
-  or a loss belonging to some other decision. It throws
-  `InvalidOperationException` on a checker-play `DecisionData`.
+  construction that reads truth and both losses off a cube decision's
+  category, `CubeDecisionData`, together — including the claim-to-action
+  collapse (`CubeClaimExtensions.ToCubeAction`) the doubler-side equity read
+  needs. Consumers should build submissions through it rather than
+  assembling the five fields by hand, which is the only way to pair an
+  answer with a truth or a loss belonging to some other decision. A checker
+  play cannot be passed: the parameter is the cube kind's own category.
 
 **`ScoreSegment`** is the single accumulation primitive: an immutable
 `(Submitted, Correct, TotalEquityLoss)` tally with derived `AverageEquityLoss`
@@ -570,8 +612,10 @@ and since a play key and a cube key are distinct by grammar (the dice
 discriminant), **kind purity is structural**: a record only ever folds one
 decision kind, which keeps per-kind tally derivations (sightings' cube
 divide-by-two) exact. The static `From` factories are defined as an empty
-seed plus `Plus`, so the fold rule has one definition. Skips and off-list
-plays never reach a fold — the consumer doesn't call it for them.
+seed plus `Plus`, so the fold rule has one definition. Skips never reach a
+fold: an off-list play and a play the ranking does not score yield no
+`SubmittedPlay` to fold (see "Quiz-result records"), and a Skip-button skip
+is the consumer's, which folds nothing.
 
 **`ProblemStatsDocument`** is the immutable document: a key-keyed collection
 of `ProblemStats` whose `Plus` overloads return a new document with the
@@ -924,11 +968,12 @@ session-scoped one. Immutable, `ScoreSegment`'s shape throughout: `Empty`, a
 fold returning a new instance, and `operator +` as the single definition of how
 instances combine.
 
-- **The classification consumes the producer verdict.** `Add(DecisionData)`
-  branches on `IsCube` first (the cube verdict surface throws on a checker
-  play), then keys the bucket by the decision's `BestClaimPair` — the one
-  derivation site of the truth claim, beside `BestDoublerAction` /
-  `BestTakerAction` — and matches its `(Claim, Taker)` halves. Nothing here
+- **The classification consumes the producer verdict.** `Add(BgDecisionData)`
+  matches on the record's kind (`Match`, so a third kind would fail to
+  compile here): a checker play is one checker play; a cube decision keys
+  the bucket by its category's `BestClaimPair` — the one derivation site of
+  the truth claim, beside `BestDoublerAction` / `BestTakerAction` — and
+  matches its `(Claim, Taker)` halves. Nothing here
   re-derives a verdict from equities (SPEC-scoring §3, "Answer-type
   classification consumes the claim"), and consumers stream decisions in
   without owning the bucketing rule. The private one-hot `Classify` is what
@@ -1244,19 +1289,41 @@ public sealed class ShuffledProblemSetSource : IProblemSetSource   // decorator:
 // Quiz scoring. ProblemKey is the content identity stamped at construction
 // (via ProblemKey.TryDerive); null = the no-key rung — scores the session,
 // never recorded in lifetime stats.
-public sealed record SubmittedPlay(
-    ProblemKey? ProblemKey,
-    Play UserPlay, int? MatchedCandidateIndex, double EquityLoss, bool IsCorrect);
+public enum PlaySubmissionKind { Scored = 1, NotScored = 2, OffList = 3 }
+
+public sealed class PlaySubmission : IEquatable<PlaySubmission>   // value equality; + ==, !=
+{
+    public PlaySubmissionKind Kind { get; }
+    public static PlaySubmission Score(                 // THE one place a submitted play is scored:
+        ProblemKey? problemKey, Play play,              //   matched by identity from the position,
+        CheckerPlayDecision decision, PlayRanking ranking); //   error read off RankedBy(ranking)
+    public bool TryGetScored([NotNullWhen(true)] out SubmittedPlay? submitted);   // true exactly for Scored
+    public TResult Match<TResult>(Func<SubmittedPlay, TResult> scored,
+        Func<int, TResult> notScored,                   // the not-scored candidate's index
+        Func<TResult> offList);
+}
+
+public sealed class SubmittedPlay : IEquatable<SubmittedPlay>   // no public ctor; + ==, !=
+{
+    public ProblemKey? ProblemKey { get; }
+    public Play UserPlay { get; }             // the user's own encoding; not in equality
+    public PlayRanking Ranking { get; }
+    public int MatchedCandidateIndex { get; } // into Plays (stored order)
+    public double EquityLoss { get; }         // the ranking's error; finite, ≥ 0
+    public bool IsCorrect { get; }            // derived: EquityLoss == 0.0 (the one verdict)
+    // Equality: ProblemKey, MatchedCandidateIndex, Ranking, EquityLoss — never plays.
+}
+
 public sealed record SubmittedCubeAction(
     ProblemKey? ProblemKey,
     CubeClaimPair UserDecision,           // the user's (claim, taker) answer
-    CubeClaimPair BestDecision,           // DecisionData.BestClaimPair — the producer's truth
+    CubeClaimPair BestDecision,           // CubeDecisionData.BestClaimPair — the producer's truth
     double DoublerEquityLoss, double TakerEquityLoss)
 {
     public bool DoublerCorrect { get; }   // derived: claim vs claim (NOT action vs action)
     public bool TakerCorrect { get; }     // derived: taker action vs taker action
-    public static SubmittedCubeAction From(                 // the one producer read; throws on a
-        ProblemKey? problemKey, CubeClaimPair answer, DecisionData decision);  // checker-play decision
+    public static SubmittedCubeAction From(                 // the one producer read
+        ProblemKey? problemKey, CubeClaimPair answer, CubeDecisionData decision);
 }
 
 public sealed record ScoreSegment(int Submitted, int Correct, double TotalEquityLoss)
@@ -1424,9 +1491,10 @@ public sealed record AnswerTypeDistribution(
 {
     public static AnswerTypeDistribution Empty { get; }
     public int Total { get; }                        // derived: sum of the five buckets
-    public AnswerTypeDistribution Add(DecisionData decision);
+    public AnswerTypeDistribution Add(BgDecisionData decision);
         // increments EXACTLY ONE bucket → Total == decisions folded (see Pitfalls);
-        // cube decisions keyed by BestClaimPair (the producer verdict); the
+        // matched on the record's kind; cube decisions keyed by their
+        // category's BestClaimPair (the producer verdict); the
         // boundary-composed incoherent NoDoublePass houses in TooGoodPass by ruling;
         // the retired TooGoodTake (never derived) throws ArgumentOutOfRangeException
     public static AnswerTypeDistribution operator +(
@@ -1465,11 +1533,18 @@ public sealed record AnswerTypeDistribution(
   the result and then continue using the same `GameState` for diagnostics
   or display see the cube at its old value, which is correct — the doubled
   cube would only have applied on Take.
-- **`IsCorrect` on `SubmittedPlay` is denormalized.** It encodes the same
-  fact as `EquityLoss == 0.0`, but is stored as an explicit bool to keep
-  the record self-describing for downstream display. Producers must keep
-  the two consistent; consumers should not derive a different correctness
-  rule (e.g., "within 0.001 equity").
+- **A checker play's best, error and verdict are the ranking's — score
+  through `PlaySubmission.Score`, never around it.** Matching the best
+  candidate and a zero error are different claims once the ranking decides
+  which play is best: the stored first candidate need not be any ranking's
+  best, and a candidate's error differs between rankings. So do not find the
+  candidate yourself, compare plays by encoding (a play has no equality —
+  see `Play`), or read an error off anything but the ranking.
+  `SubmittedPlay.IsCorrect` is derived from its `EquityLoss` (exactly 0) and
+  is the one verdict: consumers should not state another rule (e.g.,
+  "within 0.001 equity"); halheinrich/backgammon#202 changes that one
+  predicate if its threshold ruling lands. A not-scored or off-list play is
+  a skip of record: there is no `SubmittedPlay` to fold, by construction.
 - **A cube half's correctness is NOT `EquityLoss == 0.0` — unlike
   `SubmittedPlay`'s.** On the doubler half the two run apart by ruling: a
   `NoDouble` answer to a too-good position (or a `TooGood` answer to a
@@ -1504,8 +1579,8 @@ public sealed record AnswerTypeDistribution(
   a consumer use it as the pool's matched count instead of counting separately.
   Anything that made an `Add` increment zero or two buckets (a "skip
   unclassifiable decisions" escape hatch, a per-half cube fold) would silently
-  break that count. `Add` takes the `DecisionData` — `BgDecisionData.Decision`,
-  since `BestClaimPair` lives there, not on the composite.
+  break that count. `Add` takes the record (`BgDecisionData`) and matches on
+  its kind; a cube's `BestClaimPair` is read off its category.
 - **`ProblemStatsDocument` JSON pins names and ordering, not whitespace.**
   The bundled converter hand-writes fixed property names ordered by canonical
   key, so the consumer's naming policy cannot change the format — but

@@ -2,6 +2,7 @@ namespace BgGame_Lib.Tests;
 
 using System.Text.Json;
 using BgDataTypes_Lib;
+using BgDataTypes_Lib.TestSupport;
 
 public class ProblemStatsDocumentSerializationTests
 {
@@ -122,6 +123,58 @@ public class ProblemStatsDocumentSerializationTests
         // 2026-09-02). A tester's live bgquiz-stats.json is this, byte for
         // byte modulo indentation.
         Assert.Equal(PinnedWireForm, JsonSerializer.Serialize(PopulatedDocument()));
+    }
+
+    [Fact]
+    public void ThePinnedV3Document_ReadsAndWritesBackByteIdentical()
+    {
+        // The statistics format is unchanged by scoring under a ranking
+        // (halheinrich/backgammon#273): an existing v3 file reads and writes
+        // back byte for byte.
+        var doc = JsonSerializer.Deserialize<ProblemStatsDocument>(PinnedWireForm);
+
+        Assert.Equal(PinnedWireForm, JsonSerializer.Serialize(doc));
+    }
+
+    [Fact]
+    public void UnderTheEquityRanking_AFoldChangesTheTotalsExactlyAsBefore()
+    {
+        // Before the ranking, a play's loss was the equity-best candidate's
+        // equity minus its own, and it was correct at exactly 0. Every
+        // candidate of the opening 3-1, scored under the equity ranking and
+        // folded into the pinned document, changes its problem's tally by
+        // exactly that and touches nothing else; the file stays v3.
+        var decision = TestRecords.CheckerPlay();
+        var candidates = decision.Decision.Plays;
+        double best = candidates.Max(c => c.Equity);
+        var clock = new FixedClock(T2);
+
+        for (int i = 0; i < candidates.Count; i++)
+        {
+            var before = JsonSerializer.Deserialize<ProblemStatsDocument>(PinnedWireForm)!;
+            double loss = best - candidates[i].Equity;
+            Assert.True(PlaySubmission.Score(PlayKey, candidates[i].Play, decision, PlayRanking.Equity)
+                .TryGetScored(out var submitted));
+
+            var after = before.Plus(submitted, clock);
+
+            var expected = ProblemStatsDocument.FromStats(before.Problems.Values
+                .Where(r => r.Key != PlayKey)
+                .Append(before.Problems[PlayKey] with
+                {
+                    Tally = before.Problems[PlayKey].Tally.Add(1, loss == 0.0 ? 1 : 0, loss),
+                    LastQuizzed = T2,
+                }));
+            AssertSameRecords(expected, after);
+            Assert.Equal(JsonSerializer.Serialize(expected), JsonSerializer.Serialize(after));
+            Assert.StartsWith("""{"schemaVersion":3,""", JsonSerializer.Serialize(after));
+        }
+    }
+
+    /// <summary>A <see cref="TimeProvider"/> fixed at one instant.</summary>
+    private sealed class FixedClock(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
     }
 
     [Fact]

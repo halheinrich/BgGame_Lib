@@ -12,7 +12,12 @@ namespace BgGame_Lib;
 /// <c>operator +</c>.
 /// </summary>
 /// <param name="Submitted">Number of decisions folded into this segment.</param>
-/// <param name="Correct">Number of those decisions that matched the best action.</param>
+/// <param name="Correct">
+/// Number of those decisions scored correct, by each submission's own verdict:
+/// <see cref="SubmittedPlay.IsCorrect"/> for a play, a cube half's
+/// <see cref="SubmittedCubeAction.DoublerCorrect"/> or
+/// <see cref="SubmittedCubeAction.TakerCorrect"/>.
+/// </param>
 /// <param name="TotalEquityLoss">Sum of equity loss across the folded decisions.</param>
 public sealed record ScoreSegment(int Submitted, int Correct, double TotalEquityLoss)
 {

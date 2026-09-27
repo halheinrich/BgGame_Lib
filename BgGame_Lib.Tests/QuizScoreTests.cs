@@ -1,6 +1,7 @@
 namespace BgGame_Lib.Tests;
 
 using BgDataTypes_Lib;
+using BgDataTypes_Lib.TestSupport;
 
 public class QuizScoreTests
 {
@@ -8,9 +9,9 @@ public class QuizScoreTests
     // reads ProblemKey — session scoring is deliberately key-independent, so
     // even a no-key (null) submission folds. Null here keeps every folding
     // assertion below unchanged in intent while pinning that independence.
-    private static SubmittedPlay Play(double equityLoss, bool correct) =>
-        new(ProblemKey: null, UserPlay: [], MatchedCandidateIndex: correct ? 0 : 1,
-            EquityLoss: equityLoss, IsCorrect: correct);
+    // A play's correctness follows from its error (exactly 0), as scored.
+    private static SubmittedPlay Play(double equityLoss) =>
+        TestSubmissions.Play(key: null, equityLoss);
 
     // Per-half correctness is derived from the answer/truth pair rather than
     // stated, so this helper composes pairs that realize the requested
@@ -39,7 +40,7 @@ public class QuizScoreTests
     [Fact]
     public void PlusPlay_CorrectPlay_IncrementsPlaySubmittedAndCorrect()
     {
-        var s = QuizScore.Empty.Plus(Play(equityLoss: 0.0, correct: true));
+        var s = QuizScore.Empty.Plus(Play(equityLoss: 0.0));
 
         Assert.Equal(1, s.PlayDecisions.Submitted);
         Assert.Equal(1, s.PlayDecisions.Correct);
@@ -50,8 +51,8 @@ public class QuizScoreTests
     public void PlusPlay_IncorrectPlay_IncrementsSubmittedNotCorrect_AccumulatesEquityLoss()
     {
         var s = QuizScore.Empty
-            .Plus(Play(equityLoss: 0.025, correct: false))
-            .Plus(Play(equityLoss: 0.075, correct: false));
+            .Plus(Play(equityLoss: 0.025))
+            .Plus(Play(equityLoss: 0.075));
 
         Assert.Equal(2, s.PlayDecisions.Submitted);
         Assert.Equal(0, s.PlayDecisions.Correct);
@@ -61,7 +62,7 @@ public class QuizScoreTests
     [Fact]
     public void PlusPlay_LeavesCubeSegmentsUntouched()
     {
-        var s = QuizScore.Empty.Plus(Play(equityLoss: 0.05, correct: false));
+        var s = QuizScore.Empty.Plus(Play(equityLoss: 0.05));
 
         Assert.Equal(ScoreSegment.Empty, s.DoubleDecisions);
         Assert.Equal(ScoreSegment.Empty, s.TakeDecisions);
@@ -88,7 +89,7 @@ public class QuizScoreTests
     public void Total_IsTheSumOfAllThreeSegments()
     {
         var s = QuizScore.Empty
-            .Plus(Play(equityLoss: 0.02, correct: false))
+            .Plus(Play(equityLoss: 0.02))
             .Plus(Cube(doublerLoss: 0.03, doublerCorrect: false, takerLoss: 0.0, takerCorrect: true));
 
         Assert.Equal(3, s.Total.Submitted);   // 1 play + 1 double + 1 take
@@ -99,7 +100,7 @@ public class QuizScoreTests
     [Fact]
     public void Total_IsDerived_ChangingASegmentChangesTotal()
     {
-        var before = QuizScore.Empty.Plus(Play(equityLoss: 0.04, correct: false));
+        var before = QuizScore.Empty.Plus(Play(equityLoss: 0.04));
         var after = before.Plus(Cube(doublerLoss: 0.06, doublerCorrect: false, takerLoss: 0.0, takerCorrect: true));
 
         Assert.Equal(1, before.Total.Submitted);
@@ -111,7 +112,7 @@ public class QuizScoreTests
     public void Plus_ReturnsNewInstance_OriginalUnchanged()
     {
         var original = QuizScore.Empty;
-        var updated = original.Plus(Play(equityLoss: 0.05, correct: false));
+        var updated = original.Plus(Play(equityLoss: 0.05));
 
         Assert.Equal(0, original.PlayDecisions.Submitted);
         Assert.Equal(1, updated.PlayDecisions.Submitted);
@@ -135,7 +136,7 @@ public class QuizScoreTests
     // =====================================================================
     //
     // The fold below scores a submitted CubeClaimPair against the position's
-    // derived truth (DecisionData.BestClaimPair) — the doubler half claim to
+    // derived truth (CubeDecisionData.BestClaimPair) — the doubler half claim to
     // claim, the taker half action to action. Every fixture here states the
     // two equities and lets the producer derive the truth; nothing in this
     // suite re-derives a claim.
@@ -150,12 +151,8 @@ public class QuizScoreTests
     // truth — it stays a submittable answer, scored like any other wrong
     // claim.
 
-    private static DecisionData CubeDecision(double noDoubleEquity, double doubleTakeEquity) => new()
-    {
-        IsCube = true,
-        NoDoubleEquity = noDoubleEquity,
-        DoubleTakeEquity = doubleTakeEquity,
-    };
+    private static CubeDecisionData CubeDecision(double noDoubleEquity, double doubleTakeEquity) =>
+        TestRecords.CubeData(noDoubleEquity: noDoubleEquity, doubleTakeEquity: doubleTakeEquity);
 
     /// <summary>
     /// The analysed decision whose derived truth is <paramref name="truth"/> —
@@ -168,7 +165,7 @@ public class QuizScoreTests
     /// pass (amended 2026-09-02) no equities derive it, and asking for one is
     /// a suite bug.
     /// </summary>
-    private static DecisionData TruthFixture(CubeClaimPair truth) =>
+    private static CubeDecisionData TruthFixture(CubeClaimPair truth) =>
         (truth.Claim, truth.Taker) switch
         {
             (CubeClaim.NoDouble, CubeAction.Take) => CubeDecision(0.20, 0.10),
@@ -185,7 +182,7 @@ public class QuizScoreTests
     /// (0.90) and the opponent takes. Its derived truth is No double / Take by
     /// the 2026-09-02 ruling; it is the position that decided the amendment.
     /// </summary>
-    private static DecisionData PlayingOnBeatsBeingTaken => CubeDecision(1.10, 0.90);
+    private static CubeDecisionData PlayingOnBeatsBeingTaken => CubeDecision(1.10, 0.90);
 
     /// <summary>The whole closed 3×2 of answers, in the ruled claim-axis order.</summary>
     public static TheoryData<CubeClaim, CubeAction> AllAnswers => new()
@@ -546,14 +543,5 @@ public class QuizScoreTests
     {
         Assert.Throws<ArgumentNullException>(() =>
             SubmittedCubeAction.From(problemKey: null, CubeClaimPair.DoubleTake, null!));
-    }
-
-    [Fact]
-    public void From_CheckerPlayDecision_Throws()
-    {
-        var play = new DecisionData { IsCube = false };
-
-        Assert.Throws<InvalidOperationException>(() =>
-            SubmittedCubeAction.From(problemKey: null, CubeClaimPair.DoubleTake, play));
     }
 }

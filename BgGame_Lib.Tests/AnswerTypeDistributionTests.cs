@@ -1,6 +1,7 @@
 namespace BgGame_Lib.Tests;
 
 using BgDataTypes_Lib;
+using BgDataTypes_Lib.TestSupport;
 
 public class AnswerTypeDistributionTests
 {
@@ -20,19 +21,16 @@ public class AnswerTypeDistributionTests
     // pins that the fixtures really do produce the intended pairs, so a
     // bucketing failure can never be mistaken for a mis-built fixture.
 
-    private static DecisionData Cube(double noDoubleEquity, double doubleTakeEquity) => new()
-    {
-        IsCube = true,
-        NoDoubleEquity = noDoubleEquity,
-        DoubleTakeEquity = doubleTakeEquity,
-    };
+    private static CubeDecision Cube(double noDoubleEquity, double doubleTakeEquity) =>
+        TestRecords.Cube(decision: TestRecords.CubeData(
+            noDoubleEquity: noDoubleEquity, doubleTakeEquity: doubleTakeEquity));
 
-    private static DecisionData Play => new() { IsCube = false };
-    private static DecisionData NoDoubleTake => Cube(0.20, 0.10);
-    private static DecisionData DoubleTake => Cube(0.30, 0.60);
-    private static DecisionData DoublePass => Cube(0.50, 1.20);
-    private static DecisionData TooGoodPass => Cube(1.30, 1.50);
-    private static DecisionData Boundary => Cube(1.00, 1.20);
+    private static CheckerPlayDecision Play => TestRecords.CheckerPlay();
+    private static CubeDecision NoDoubleTake => Cube(0.20, 0.10);
+    private static CubeDecision DoubleTake => Cube(0.30, 0.60);
+    private static CubeDecision DoublePass => Cube(0.50, 1.20);
+    private static CubeDecision TooGoodPass => Cube(1.30, 1.50);
+    private static CubeDecision Boundary => Cube(1.00, 1.20);
 
     /// <summary>
     /// Playing on beats being taken (E_ND above the cash) yet the opponent
@@ -41,7 +39,7 @@ public class AnswerTypeDistributionTests
     /// the <c>TooGoodTake</c> fixture of the five-bucket era, kept under the
     /// name of what it derives now.
     /// </summary>
-    private static DecisionData PlayingOnBeatsBeingTaken => Cube(1.10, 0.90);
+    private static CubeDecision PlayingOnBeatsBeingTaken => Cube(1.10, 0.90);
 
     /// <summary>
     /// Assert every bucket, plus that <c>Total</c> is their sum — the fold
@@ -62,7 +60,7 @@ public class AnswerTypeDistributionTests
             d.Total);
     }
 
-    private static AnswerTypeDistribution Fold(params DecisionData[] pool) =>
+    private static AnswerTypeDistribution Fold(params BgDecisionData[] pool) =>
         pool.Aggregate(AnswerTypeDistribution.Empty, (acc, d) => acc.Add(d));
 
     // ---------------------------------------------------------------------
@@ -72,10 +70,10 @@ public class AnswerTypeDistributionTests
     [Fact]
     public void Fixtures_ProduceTheFourIntendedVerdictPairs()
     {
-        Assert.Equal(CubeClaimPair.NoDoubleTake, NoDoubleTake.BestClaimPair);
-        Assert.Equal(CubeClaimPair.DoubleTake, DoubleTake.BestClaimPair);
-        Assert.Equal(CubeClaimPair.DoublePass, DoublePass.BestClaimPair);
-        Assert.Equal(CubeClaimPair.TooGoodPass, TooGoodPass.BestClaimPair);
+        Assert.Equal(CubeClaimPair.NoDoubleTake, NoDoubleTake.Decision.BestClaimPair);
+        Assert.Equal(CubeClaimPair.DoubleTake, DoubleTake.Decision.BestClaimPair);
+        Assert.Equal(CubeClaimPair.DoublePass, DoublePass.Decision.BestClaimPair);
+        Assert.Equal(CubeClaimPair.TooGoodPass, TooGoodPass.Decision.BestClaimPair);
     }
 
     [Fact]
@@ -86,8 +84,8 @@ public class AnswerTypeDistributionTests
         // opponent would take. The producer derives No double / Take, and
         // the retired pair is never derived — pinned here so the landing
         // test below cannot pass by accident of a mis-built fixture.
-        Assert.Equal(CubeClaimPair.NoDoubleTake, PlayingOnBeatsBeingTaken.BestClaimPair);
-        Assert.NotEqual(CubeClaimPair.TooGoodTake, PlayingOnBeatsBeingTaken.BestClaimPair);
+        Assert.Equal(CubeClaimPair.NoDoubleTake, PlayingOnBeatsBeingTaken.Decision.BestClaimPair);
+        Assert.NotEqual(CubeClaimPair.TooGoodTake, PlayingOnBeatsBeingTaken.Decision.BestClaimPair);
     }
 
     [Fact]
@@ -97,8 +95,8 @@ public class AnswerTypeDistributionTests
         // tie-breaks compose (NoDouble, Pass) — the one reachable route to
         // the sixth cell as derived truth (SPEC-scoring §3, amended
         // 2026-09-01 at leg 1's landing).
-        Assert.Equal(CubeClaimPair.NoDoublePass, Boundary.BestClaimPair);
-        Assert.True(Boundary.BestClaimPair.IsIncoherent);
+        Assert.Equal(CubeClaimPair.NoDoublePass, Boundary.Decision.BestClaimPair);
+        Assert.True(Boundary.Decision.BestClaimPair.IsIncoherent);
     }
 
     // ---------------------------------------------------------------------
@@ -198,7 +196,7 @@ public class AnswerTypeDistributionTests
     [Fact]
     public void Total_EqualsTheNumberOfAddsPerformed()
     {
-        DecisionData[] pool =
+        BgDecisionData[] pool =
         [
             Play, NoDoubleTake, DoubleTake, DoublePass, TooGoodPass, PlayingOnBeatsBeingTaken,
             Play, DoublePass, DoublePass, Boundary,

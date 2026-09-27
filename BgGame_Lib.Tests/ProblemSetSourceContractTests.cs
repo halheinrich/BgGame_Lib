@@ -2,6 +2,7 @@ namespace BgGame_Lib.Tests;
 
 using System.Runtime.CompilerServices;
 using BgDataTypes_Lib;
+using BgDataTypes_Lib.TestSupport;
 
 public class ProblemSetSourceContractTests
 {
@@ -115,18 +116,9 @@ public class ProblemSetSourceContractTests
         });
     }
 
-    private static BgDecisionData Decision(int seed) => new()
-    {
-        Id = new XgpDecisionId("test.xgp"),
-        Position = new PositionData
-        {
-            Mop = new int[26],
-            OnRollNeeds = seed,
-            OpponentNeeds = seed,
-            CubeOwner = CubeOwner.Centered,
-        },
-        Decision = new DecisionData(),
-        Descriptive = new DescriptiveData(),
-        Outcome = new PlayOutcomeData(),
-    };
+    private static BgDecisionData Decision(int seed) =>
+        TestRecords.CheckerPlay(
+            id: new XgpDecisionId("test.xgp"),
+            position: TestRecords.Position(session: TestRecords.MatchSession(
+                length: seed, onRollNeeds: seed, opponentNeeds: seed)));
 }

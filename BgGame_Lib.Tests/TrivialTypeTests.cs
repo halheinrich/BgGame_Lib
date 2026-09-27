@@ -28,37 +28,11 @@ public class TrivialTypeTests
         Assert.Equal(multiplier * 8, resultDoubled.Points);
     }
 
-    // Canonical key fixtures for the submission records (standard starting
-    // board; the same position under two away-scores gives two distinct keys).
+    // Canonical key fixtures for the cube submission record (standard
+    // starting board; the same position under two away-scores gives two
+    // distinct keys). SubmittedPlay's equality is ruled and pinned with its
+    // scoring, in PlaySubmissionTests.
     private const string Board = "0,-2,0,0,0,0,5,0,3,0,0,0,-5,5,0,0,0,-3,0,-5,0,0,0,0,2,0";
-    private static readonly ProblemKey KeyA = ProblemKey.Parse($"{Board}/7a7/1c/31");
-    private static readonly ProblemKey KeyB = ProblemKey.Parse($"{Board}/5a3/1c/31");
-
-    [Fact]
-    public void SubmittedPlay_RecordEqualityHoldsByValue()
-    {
-        Play play = [new(13, 7)];
-
-        var a = new SubmittedPlay(KeyA, play, MatchedCandidateIndex: 0, EquityLoss: 0.0, IsCorrect: true);
-        var b = new SubmittedPlay(KeyA, play, MatchedCandidateIndex: 0, EquityLoss: 0.0, IsCorrect: true);
-
-        Assert.Equal(a, b);
-    }
-
-    [Fact]
-    public void SubmittedPlay_ProblemKeyParticipatesInEquality()
-    {
-        Play play = [new(13, 7)];
-
-        var a = new SubmittedPlay(KeyA, play, MatchedCandidateIndex: 0, EquityLoss: 0.0, IsCorrect: true);
-        var b = new SubmittedPlay(KeyB, play, MatchedCandidateIndex: 0, EquityLoss: 0.0, IsCorrect: true);
-
-        Assert.NotEqual(a, b);
-        // The no-key rung is a value too: null-key submissions compare equal
-        // to each other and unequal to any keyed one.
-        Assert.Equal(a with { ProblemKey = null }, b with { ProblemKey = null });
-        Assert.NotEqual(a, a with { ProblemKey = null });
-    }
 
     // The answer is (Double, Pass) against a (Double, Take) truth — doubler
     // half right, taker half wrong. Correctness is derived from those two

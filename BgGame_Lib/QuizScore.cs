@@ -49,7 +49,7 @@ public sealed record QuizScore(
     /// </summary>
     /// <remarks>
     /// The doubler half is scored <b>claim vs. claim</b> against the
-    /// position's derived truth (<see cref="DecisionData.BestClaimPair"/>,
+    /// position's derived truth (<see cref="CubeDecisionData.BestClaimPair"/>,
     /// carried on the submission), the taker half action vs. action —
     /// SPEC-scoring §3's ruled comparison, spelled once on
     /// <see cref="SubmittedCubeAction.DoublerCorrect"/> /
