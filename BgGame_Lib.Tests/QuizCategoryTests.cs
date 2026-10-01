@@ -257,4 +257,93 @@ public class QuizCategoryTests
         Assert.True(Matches(QuizCategory.WrongRateOver(0.49), Cube, stats));
         Assert.False(Matches(QuizCategory.WrongRateOver(0.5), Cube, stats));
     }
+
+    // -----------------------------------------------------------------------
+    //  A cube record built through the fold (SPEC-scoring §3, 2026-10-01)
+    // -----------------------------------------------------------------------
+    //
+    // The new cube costs keep the lifetime record's unit, two decisions per
+    // cube answer, so the mix's measures keep their units and meaning:
+    // sightings are the count ÷ 2, and the wrong rate and the average loss
+    // are per half — No double included, whose take half is a correct zero.
+
+    /// <summary>The cube decision the folds below answer: a Double / Take truth (N +0.30, T +0.60).</summary>
+    private static CubeDecision DoubleTakeCube => TestSubmissions.CubeRecord(0.30, 0.60);
+
+    /// <summary>The lifetime record of <see cref="DoubleTakeCube"/> after <paramref name="answers"/>, folded in turn.</summary>
+    private static ProblemStats Folded(params CubeAnswer[] answers)
+    {
+        var decision = DoubleTakeCube;
+        var first = SubmittedCubeAnswer.Score(answers[0], decision);
+        return answers.Skip(1).Aggregate(
+            ProblemStats.From(first, Now),
+            (stats, answer) => stats.Plus(SubmittedCubeAnswer.Score(answer, decision), Now));
+    }
+
+    public static TheoryData<CubeAnswer> EveryCubeAnswer => new(Enum.GetValues<CubeAnswer>());
+
+    [Theory]
+    [MemberData(nameof(EveryCubeAnswer))]
+    public void FoldedCube_EveryAnswer_IsOneSighting(CubeAnswer answer)
+    {
+        var stats = Folded(answer);
+
+        Assert.Equal(2, stats.Tally.Submitted);
+        Assert.Equal(1, QuizStatsMeasures.Sightings(DoubleTakeCube, stats));
+        Assert.True(Matches(QuizCategory.SeenFewerThan(2), DoubleTakeCube, stats));
+        Assert.False(Matches(QuizCategory.SeenFewerThan(1), DoubleTakeCube, stats));
+    }
+
+    [Fact]
+    public void FoldedCube_TwoAnswers_AreTwoSightings()
+    {
+        var stats = Folded(CubeAnswer.NoDouble, CubeAnswer.DoublePass);
+
+        Assert.Equal(2, QuizStatsMeasures.Sightings(DoubleTakeCube, stats));
+        Assert.True(Matches(QuizCategory.SeenFewerThan(3), DoubleTakeCube, stats));
+        Assert.False(Matches(QuizCategory.SeenFewerThan(2), DoubleTakeCube, stats));
+    }
+
+    [Fact]
+    public void FoldedCube_NoDouble_ReadsPerHalf_ItsTakeHalfACorrectZero()
+    {
+        // No double misses the double, 0.30, and its take half is a correct
+        // zero: one of two halves wrong — a wrong rate of 0.5 — and an average
+        // loss of 0.15 per half.
+        var stats = Folded(CubeAnswer.NoDouble);
+
+        Assert.Equal(new ScoreSegment(2, 1, 0.30), stats.Tally);
+        Assert.True(Matches(QuizCategory.GotWrong, DoubleTakeCube, stats));
+        Assert.True(Matches(QuizCategory.WrongRateOver(0.49), DoubleTakeCube, stats));
+        Assert.False(Matches(QuizCategory.WrongRateOver(0.5), DoubleTakeCube, stats));
+        Assert.True(Matches(QuizCategory.AvgEquityLossOver(0.14), DoubleTakeCube, stats));
+        Assert.False(Matches(QuizCategory.AvgEquityLossOver(0.15), DoubleTakeCube, stats));
+    }
+
+    [Fact]
+    public void FoldedCube_TheRightAnswer_IsNeverWrong()
+    {
+        var stats = Folded(CubeAnswer.DoubleTake, CubeAnswer.DoubleTake);
+
+        Assert.Equal(new ScoreSegment(4, 4, 0.0), stats.Tally);
+        Assert.False(Matches(QuizCategory.GotWrong, DoubleTakeCube, stats));
+        Assert.False(Matches(QuizCategory.WrongRateOver(0.0), DoubleTakeCube, stats));
+        Assert.False(Matches(QuizCategory.AvgEquityLossOver(0.0), DoubleTakeCube, stats));
+    }
+
+    [Fact]
+    public void FoldedCube_PartsThatEachCountAsZero_AreTwoRightHalves()
+    {
+        // The halves are judged one by one: an answer wrong in the session's
+        // Total, whose parts each count as zero, never reads as got wrong.
+        var answer = TestSubmissions.PartsZeroWholeNot;
+        var decision = TestSubmissions.CubeRecord(0.5, 1.0 - TestSubmissions.ShowsAsZero);
+
+        var stats = ProblemStats.From(answer, Now);
+
+        Assert.False(answer.IsCorrect);
+        Assert.Equal(1, QuizStatsMeasures.Sightings(decision, stats));
+        Assert.False(Matches(QuizCategory.GotWrong, decision, stats));
+        Assert.False(Matches(QuizCategory.WrongRateOver(0.0), decision, stats));
+    }
 }

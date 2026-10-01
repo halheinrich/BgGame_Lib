@@ -1,15 +1,14 @@
 namespace BgGame_Lib;
 
+using System.Diagnostics;
 using BgDataTypes_Lib;
 
 /// <summary>
 /// A count of decisions by the kind of answer each one calls for: checker
-/// plays, plus one bucket per cube verdict from SPEC-scoring §3's table —
-/// the four reachable pairs of <see cref="CubeClaimPair"/>'s closed 3×2 that
-/// an analysis's best pair names as a verdict (halheinrich/backgammon#86;
-/// amended 2026-09-02 by halheinrich/backgammon#187). Immutable;
-/// <see cref="Add(BgDecisionData)"/> and <c>operator +</c> each return a new
-/// <see cref="AnswerTypeDistribution"/>.
+/// plays, plus one bucket per cube answer — the four of SPEC-scoring §3,
+/// amended 2026-09-30 on halheinrich/backgammon#326 — keyed by each cube
+/// decision's truth. Immutable; <see cref="Add(BgDecisionData)"/> and
+/// <c>operator +</c> each return a new <see cref="AnswerTypeDistribution"/>.
 ///
 /// <para>
 /// The question it answers is <b>collection-scoped, not session-scoped</b>:
@@ -29,70 +28,54 @@ using BgDataTypes_Lib;
 /// </para>
 ///
 /// <para>
-/// <b>A cube decision buckets once</b>, keyed by its best claim pair: pool
-/// membership counts rows, and one cube position is one row. This is
-/// deliberately <i>not</i> the two-half convention of
-/// <see cref="QuizScore.Plus(SubmittedCubeAction)"/> and
-/// <see cref="ProblemStats.Plus(SubmittedCubeAction, DateTimeOffset)"/>,
-/// where a cube position is two scored decisions (the doubler half and the
-/// taker half). Those count answers given; this counts problems present.
+/// <b>A cube decision buckets once</b>, keyed by its truth: pool membership
+/// counts rows, and one cube position is one row. This is deliberately
+/// <i>not</i> how a cube answer is scored, where it is one Total decision and
+/// up to two row decisions in the session (<see cref="QuizScore"/>) and two
+/// half decisions in the lifetime stats (<see cref="ProblemStats"/>). Those
+/// count answers given; this counts problems present.
 /// </para>
 ///
 /// <para>
-/// The four cube buckets are named for the canonical
-/// <see cref="CubeClaimPair"/> instances they count, so reading a bucket
-/// back to its pair needs no translation. The classifier <b>consumes the
-/// producer verdict</b> — <see cref="CubeDecisionData.BestClaimPair"/>, the one
-/// derivation site of the truth claim — and never walks the equities itself
-/// (SPEC-scoring §3, "Answer-type classification consumes the claim"). The
-/// sixth cell of the 3×2, the incoherent
-/// <see cref="CubeClaimPair.NoDoublePass"/> that the ruled tie-breaks
-/// compose as derived truth at the exact <c>NoDoubleEquity == 1</c>
-/// boundary, is <b>just too good</b>: it houses in
-/// <see cref="TooGoodPass"/> as the too-good posture's degenerate point,
-/// not a sixth bucket (SPEC-scoring §3, ruled 2026-09-01).
-/// </para>
-///
-/// <para>
-/// <b>The retired cell.</b> <see cref="CubeClaimPair.TooGoodTake"/> had a
-/// bucket of its own between the halheinrich/backgammon#86 leg and the
-/// 2026-09-02 amendment; it is now the one cell of the 3×2 with no bucket.
-/// Under the amended predicate Too Good requires the pass — a position the
-/// opponent would take is No double / Take whatever the no-double equity —
-/// so <see cref="CubeDecisionData.BestClaimPair"/> never derives that pair and a
-/// bucket for it could only ever read zero (SPEC-scoring §3, amendment
-/// consequence (iii): the classifier's cube buckets return to four). The
-/// data-types library keeps the cell representable, so the fold names it
-/// explicitly and refuses it rather than housing it silently: a producer
-/// that started deriving it again would be a regression, not a corpus to
-/// count. The fold stays total over every pair the producer can derive.
+/// <b>The classification consumes the producer's truth</b>,
+/// <see cref="CubeDecisionData.BestAnswer"/>, the one derivation of it, and
+/// never walks the equities itself (SPEC-scoring §3, "Answer-type
+/// classification consumes the claim"). The four cube buckets are named for
+/// the <see cref="CubeAnswer"/> members they count, so reading a bucket back
+/// to its answer needs no translation. The fourth is named by its meaning,
+/// "don't double, they'd pass", never by a label: it reads Too good where
+/// gammons are possible and No double / Pass where they are not
+/// (<see cref="CubeDecision.ClaimOf"/>), and both readings count here. At the
+/// tie of halheinrich/backgammon#293 the truth is the fourth answer, so the
+/// tie counts there too (SPEC-scoring §3: "(No Double, Pass) is just too
+/// good"), though more than one answer is correct at it. The buckets' display
+/// labels are the consuming app's copy.
 /// </para>
 /// </summary>
 /// <param name="CheckerPlays">Decisions whose answer is a checker play.</param>
-/// <param name="NoDoubleTake">
-/// Cube decisions whose best pair is <see cref="CubeClaimPair.NoDoubleTake"/>
-/// — including, by the 2026-09-02 ruling, every position where playing on
-/// beats being taken yet the opponent would still take (XG's "Too good to
-/// double/Take"), since Too Good requires the pass.
+/// <param name="NoDouble">
+/// Cube decisions whose truth is <see cref="CubeAnswer.NoDouble"/>: don't
+/// double, and they'd take — including, by the 2026-09-02 ruling, every
+/// position where playing on beats being taken yet the opponent would still
+/// take.
 /// </param>
 /// <param name="DoubleTake">
-/// Cube decisions whose best pair is <see cref="CubeClaimPair.DoubleTake"/>.
+/// Cube decisions whose truth is <see cref="CubeAnswer.DoubleTake"/>.
 /// </param>
 /// <param name="DoublePass">
-/// Cube decisions whose best pair is <see cref="CubeClaimPair.DoublePass"/>.
+/// Cube decisions whose truth is <see cref="CubeAnswer.DoublePass"/>.
 /// </param>
-/// <param name="TooGoodPass">
-/// Cube decisions whose best pair is <see cref="CubeClaimPair.TooGoodPass"/> —
-/// playing on beats cashing and a double would be passed — plus the
-/// boundary-composed <see cref="CubeClaimPair.NoDoublePass"/>, which
-/// classifies as just too good by ruling (SPEC-scoring §3, 2026-09-01).
+/// <param name="NoDoublePass">
+/// Cube decisions whose truth is <see cref="CubeAnswer.NoDoublePass"/>, the
+/// fourth answer: don't double, they'd pass — under either of its labels, and
+/// at the halheinrich/backgammon#293 tie.
 /// </param>
 public sealed record AnswerTypeDistribution(
     int CheckerPlays,
-    int NoDoubleTake,
+    int NoDouble,
     int DoubleTake,
     int DoublePass,
-    int TooGoodPass)
+    int NoDoublePass)
 {
     /// <summary>The empty distribution: every bucket 0.</summary>
     public static AnswerTypeDistribution Empty { get; } = new(0, 0, 0, 0, 0);
@@ -104,7 +87,7 @@ public sealed record AnswerTypeDistribution(
     /// also the number of decisions folded in.
     /// </summary>
     public int Total =>
-        CheckerPlays + NoDoubleTake + DoubleTake + DoublePass + TooGoodPass;
+        CheckerPlays + NoDouble + DoubleTake + DoublePass + NoDoublePass;
 
     /// <summary>
     /// Return a new distribution with <paramref name="decision"/> counted in
@@ -116,7 +99,7 @@ public sealed record AnswerTypeDistribution(
     /// The decision to classify, matched on its kind: a
     /// <see cref="CheckerPlayDecision"/> counts as a checker play; a
     /// <see cref="CubeDecision"/> is keyed by its category's
-    /// <see cref="CubeDecisionData.BestClaimPair"/> — the producer's verdict,
+    /// <see cref="CubeDecisionData.BestAnswer"/> — the producer's truth,
     /// never re-derived from equities here.
     /// </param>
     public AnswerTypeDistribution Add(BgDecisionData decision)
@@ -124,7 +107,7 @@ public sealed record AnswerTypeDistribution(
         ArgumentNullException.ThrowIfNull(decision);
         return this + decision.Match(
             checkerPlay: static _ => Empty with { CheckerPlays = 1 },
-            cube: static cube => ClassifyCube(cube.Decision.BestClaimPair, nameof(decision)));
+            cube: static cube => ClassifyCube(cube.Decision.BestAnswer));
     }
 
     /// <summary>Combine two distributions bucket-wise.</summary>
@@ -135,53 +118,26 @@ public sealed record AnswerTypeDistribution(
         ArgumentNullException.ThrowIfNull(b);
         return new AnswerTypeDistribution(
             a.CheckerPlays + b.CheckerPlays,
-            a.NoDoubleTake + b.NoDoubleTake,
+            a.NoDouble     + b.NoDouble,
             a.DoubleTake   + b.DoubleTake,
             a.DoublePass   + b.DoublePass,
-            a.TooGoodPass  + b.TooGoodPass);
+            a.NoDoublePass + b.NoDoublePass);
     }
 
     /// <summary>
-    /// The one-hot distribution for a cube decision whose best pair is
-    /// <paramref name="best"/>. With the checker-play arm of
+    /// The one-hot distribution for a cube decision whose truth is
+    /// <paramref name="truth"/>. With the checker-play arm of
     /// <see cref="Add(BgDecisionData)"/> it is the bucketing rule, and the
     /// reason <see cref="Total"/> counts decisions: every arm returns a
-    /// distribution whose buckets sum to 1. Total over every pair the
-    /// producer derives — the four reachable verdicts plus the
-    /// boundary-composed incoherent cell, housed by ruling rather than by
-    /// accident — so a legal corpus can never fail to fold.
+    /// distribution whose buckets sum to 1. Total over the four answers, the
+    /// only values the producer's truth takes.
     /// </summary>
-    /// <exception cref="ArgumentOutOfRangeException">
-    /// Thrown if a cube decision's best pair is one the producer does not
-    /// derive: the retired <see cref="CubeClaimPair.TooGoodTake"/> (Too Good
-    /// requires the pass — SPEC-scoring §3, amended 2026-09-02), or a pair
-    /// outside <see cref="CubeClaimPair"/>'s closed 3×2 (unreachable, since
-    /// that type guards both halves on construction). Both arms exist because
-    /// a silent extra bucket would break the fold contract rather than fail.
-    /// </exception>
-    private static AnswerTypeDistribution ClassifyCube(CubeClaimPair best, string paramName)
+    private static AnswerTypeDistribution ClassifyCube(CubeAnswer truth) => truth switch
     {
-        return (best.Claim, best.Taker) switch
-        {
-            (CubeClaim.NoDouble, CubeAction.Take) => Empty with { NoDoubleTake = 1 },
-            (CubeClaim.Double,   CubeAction.Take) => Empty with { DoubleTake   = 1 },
-            (CubeClaim.Double,   CubeAction.Pass) => Empty with { DoublePass   = 1 },
-            (CubeClaim.TooGood,  CubeAction.Pass) => Empty with { TooGoodPass  = 1 },
-            // "(No Double, Pass) is just too good" — the incoherent cell is
-            // the too-good posture's degenerate point, not a sixth bucket
-            // (SPEC-scoring §3, ruled 2026-09-01).
-            (CubeClaim.NoDouble, CubeAction.Pass) => Empty with { TooGoodPass  = 1 },
-            // The retired verdict: representable in the type, never derived
-            // by the producer since Too Good requires the pass (SPEC-scoring
-            // §3, amended 2026-09-02; halheinrich/backgammon#187). Named
-            // rather than left to the guard arm below so that a producer
-            // regression fails by name.
-            (CubeClaim.TooGood,  CubeAction.Take) => throw new ArgumentOutOfRangeException(
-                paramName, best,
-                "Cube best claim pair is the retired Too good / Take verdict, which the " +
-                "producer no longer derives (Too Good requires the pass)."),
-            _ => throw new ArgumentOutOfRangeException(paramName, best,
-                "Cube best claim pair is outside CubeClaimPair's closed 3×2."),
-        };
-    }
+        CubeAnswer.NoDouble => Empty with { NoDouble = 1 },
+        CubeAnswer.DoubleTake => Empty with { DoubleTake = 1 },
+        CubeAnswer.DoublePass => Empty with { DoublePass = 1 },
+        CubeAnswer.NoDoublePass => Empty with { NoDoublePass = 1 },
+        _ => throw new UnreachableException($"A cube decision's truth is one of the four answers, not {truth}."),
+    };
 }

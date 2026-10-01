@@ -30,8 +30,9 @@ using BgDataTypes_Lib;
 /// </para>
 /// <para>
 /// <b>Correctness is derived from the error, never carried.</b>
-/// <see cref="IsCorrect"/> is the one statement of the verdict, so it cannot
-/// disagree with <see cref="EquityLoss"/>.
+/// <see cref="IsCorrect"/> reads <see cref="EquityLoss"/> through the
+/// library's one verdict rule — the error counts as zero — so it cannot
+/// disagree with it.
 /// </para>
 /// <para>
 /// <b>Identity: the same problem and the same play</b> (Hal's ruling of
@@ -132,17 +133,22 @@ public sealed class SubmittedPlay : IEquatable<SubmittedPlay>
     /// The play's error under <see cref="Ranking"/>: the ranking's best play's
     /// equity minus the matched candidate's (<see cref="RankedPlay.Error"/>).
     /// Finite and never negative; 0 for the best play and any play tying it.
+    /// Exact, as the ranking derives it: the zero rule judges it
+    /// (<see cref="IsCorrect"/>) and changes nothing stored.
     /// </summary>
     public double EquityLoss { get; }
 
     /// <summary>
-    /// Whether the play is correct: its error under <see cref="Ranking"/> is
-    /// exactly 0 (SPEC-scoring §2a). Derived from <see cref="EquityLoss"/>,
-    /// never stored, so the two cannot disagree. This is the one statement of
-    /// the checker-play verdict; the pending threshold ruling of
-    /// halheinrich/backgammon#202 changes this predicate and nothing else.
+    /// Whether the play is correct: its error under <see cref="Ranking"/>
+    /// counts as zero, which is when it displays as <c>0.0000</c>
+    /// (SPEC-scoring §2a; halheinrich/backgammon#202, folded into
+    /// halheinrich/backgammon#326). So a play tied with the best is correct,
+    /// and so is one whose error is below the display's precision. Derived
+    /// from <see cref="EquityLoss"/> by the library's one verdict rule (the
+    /// internal <c>Correctness</c>, which a cube answer's verdicts read too),
+    /// never stored, so the two cannot disagree.
     /// </summary>
-    public bool IsCorrect => EquityLoss == 0.0;
+    public bool IsCorrect => Correctness.IsCorrect(EquityLoss);
 
     /// <summary>
     /// Whether <paramref name="other"/> is the same submitted play: the same

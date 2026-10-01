@@ -27,8 +27,12 @@ https://github.com/halheinrich/BgGame_Lib — branch `main`.
   `CheckerPlayDecision` / `CubeDecision` (with a checker play's derived
   after-boards, `AfterBoardOf`), the content key `ProblemKey` (every
   record's, via `ProblemKey.From`), the ranking (`PlayRanking`,
-  `RankedPlays`), `CubeOwner`, `CubeAction`, plus the enums' string
-  serialization contract. The test project also references its
+  `RankedPlays`), the four cube answers (`CubeAnswer`, with its projections
+  and `CommitsToResponse`), a cube answer's truth and cost
+  (`CubeDecisionData.BestAnswer`, `CubeDecision.CostOf` → `CubeAnswerCost`),
+  the one display of a loss and its zero rule (`EquityLoss`), `CubeOwner`,
+  `CubeAction`, plus the enums' string serialization contract. The test
+  project also references its
   `BgDataTypes_Lib.TestSupport` for the record builders (`TestRecords`).
 - **BgMoveGen** — `MoveGenerator` (legal-play enumeration and the
   validating turn-boundary `MoveGenerator.ApplyPlay`).
@@ -65,10 +69,10 @@ and `Directory.Packages.props` (Central Package Management).
   `MixCompositionEntry` telemetry).
 - **Quiz scoring** — `PlaySubmission` (with `PlaySubmissionKind`), the one
   place a submitted play is scored under a ranking; `SubmittedPlay` and
-  `SubmittedCubeAction`, the scored submissions; `ScoreSegment` and
-  `QuizScore`, the running tallies;
-  `AnswerTypeDistribution`, a pool counted by the answer each decision calls
-  for.
+  `SubmittedCubeAnswer`, the scored submissions; the internal `Correctness`,
+  the one statement of the verdict; `ScoreSegment` and `QuizScore`, the
+  running tallies; `AnswerTypeDistribution`, a pool counted by the answer
+  each decision calls for.
 - **Lifetime stats and the weighted mix** — `ProblemStats` and
   `ProblemStatsDocument`, the persistent per-problem record, with the
   document's bundled converter and its two version signals
@@ -90,8 +94,9 @@ Python reference and cross-checked against openssl. BgTournament's
 and problem-source contracts, dice (the vectors pinned), state, the runner,
 scoring, stats and the mix (their wire bytes pinned), and the
 source-generation gate. Three helpers: `TestAgents`, in-process baseline
-bots; `TestSubmissions`, scored plays built the way production builds them
-(through `PlaySubmission.Score`); and `VerifiableDiceVectors`, the loader for
+bots; `TestSubmissions`, scored plays and cube answers built the way
+production builds them (through `PlaySubmission.Score` and
+`SubmittedCubeAnswer.Score`); and `VerifiableDiceVectors`, the loader for
 `spec/`. Decision records are built with the producer's `TestRecords`, never
 by hand.
 
@@ -179,8 +184,10 @@ play on from it.
 | Type | Mutability | Rationale |
 |---|---|---|
 | `MatchState`, `GameState`, `Transcript` | Mutable, append-only or method-driven transitions | Game and match progression naturally mutate; matches BgMoveGen's apply/undo idiom. |
-| `MatchSnapshot`, `GameSnapshot`, `TranscriptEntry` and subtypes, `GameResult`, `SubmittedCubeAction`, `ScoreSegment`, `QuizScore` | Immutable records, init-only / by-value | Transcript-friendly; safe to share across threads and across history. |
+| `MatchSnapshot`, `GameSnapshot`, `TranscriptEntry` and subtypes, `GameResult`, `ScoreSegment` | Immutable records, init-only / by-value | Transcript-friendly; safe to share across threads and across history. |
 | `SubmittedPlay`, `PlaySubmission` | Immutable classes, no public constructor, hand-written equality | Built only by `PlaySubmission.Score`, so facts derived together cannot be set apart (a record's `with` could); a record's generated equality would reach the `Play` and throw. |
+| `SubmittedCubeAnswer` | Immutable class, no public constructor, hand-written equality | Built only by `SubmittedCubeAnswer.Score`, from one record, so its key, truth and cost cannot be set apart or paired with another decision's (halheinrich/backgammon#285); identity is the problem and the answer, as a play's is the problem and the play. |
+| `QuizScore` | Immutable class, no public constructor, hand-written value equality | Built only from `Empty` by its folds: its Total's correct count is a fact the rows cannot give, so neither a constructor nor a record's `with` may state one. |
 
 `Snapshot()` methods on `MatchState` and `GameState` produce immutable
 records. `GameSnapshot.Board` is a `BoardPosition` (`BoardState.ToPosition()`),
@@ -543,10 +550,8 @@ case (`PlaySubmissionKind`):
   in the next mover's frame), the user's own encoding (`UserPlay`), the
   `Ranking`, the `MatchedCandidateIndex` (stored order) and the
   `EquityLoss` — the ranking's error, the ranking's best play's equity
-  minus the candidate's. `IsCorrect` is **derived**, exactly 0
-  (SPEC-scoring §2a), so it cannot disagree with the error; it is the one
-  statement of the verdict, and halheinrich/backgammon#202's pending
-  threshold ruling changes that predicate and nothing else.
+  minus the candidate's, exact. `IsCorrect` is **derived** from it by the
+  zero rule (see "Correctness" below), so it cannot disagree with the error.
 - **`NotScored`** — the play is a candidate the ranking does not score
   (depth first only), carrying that candidate's index; and **`OffList`** —
   the play is no candidate, a play invalid from the position included. Both
@@ -579,46 +584,53 @@ over its case and what the case carries: a scored outcome compares its
 `SubmittedPlay`, a not-scored one its candidate index, an off-list one
 nothing more.
 
-**`SubmittedCubeAction`** is the cube analog — the scored carrier for one
-cube position. A cube position is two independent decisions (the doubler's
-three-valued **claim** and the taker's response-if-doubled), so the record
-holds two `CubeClaimPair`s — the user's `UserDecision` and the analysis'
-`BestDecision` — plus `DoublerEquityLoss` / `TakerEquityLoss`.
-`DoublerCorrect` / `TakerCorrect` are **derived** from those two pairs, not
-carried: claim vs. claim on the doubler half, action vs. action on the taker
-half (SPEC-scoring §3, ruled 2026-08-26; halheinrich/backgammon#86).
+**A submitted cube answer is scored at its record, in one place, and its
+facts cannot disagree** (SPEC-scoring §3, amended 2026-09-30 and 2026-10-01
+on halheinrich/backgammon#326; halheinrich/backgammon#285).
+`SubmittedCubeAnswer.Score(answer, decision)` is that place. It takes the
+answer, one of BgDataTypes_Lib's four `CubeAnswer`s, and the record it
+answers, a `CubeDecision` — the record, not its category, because what an
+answer costs depends on whether gammons are possible, a fact of the
+position and session only the record sees (`CubeDecision.GammonsPossible`).
+Everything else is read off that one record together: the key
+(`ProblemKey.From`, never null and never a caller's), the truth
+(`CubeDecisionData.BestAnswer`) and the cost (`CubeDecision.CostOf` → a
+`CubeAnswerCost`, its `DoublingPart`, `TakePart` and `Total`, exact as the
+producer derives them). Nothing here re-derives a truth or a cost from
+equities, and nothing compares the answer with the truth: the truth is the
+producer's single representative, which review and classification read, and
+at an equity tie more than one answer costs nothing and is correct.
 
-- **Why claim-vs-claim.** `CubeClaim.NoDouble` and `CubeClaim.TooGood`
-  collapse to the identical board action, so an action-level comparison
-  would score a no-double answer on a too-good position as fully correct —
-  the exact mistake the claim layer exists to catch. A wrong claim over the
-  right action is therefore **incorrect at +0.000**: the claims differ, the
-  equity does not. That "right action, wrong reason" verdict is ruled; no
-  partial-credit tier exists in `ScoreSegment` and none is added. The
-  incoherent `CubeClaimPair.NoDoublePass` is submittable like any other
-  answer and scored by the same rule — right only on the measure-zero
-  `NoDoubleEquity == 1` boundary, where the ruled tie-breaks compose it as
-  the derived truth.
-- **Why correctness is derived and the rest is carried.** The truth pair is
-  a producer fact (`CubeDecisionData.BestClaimPair`, the ecosystem's one
-  derivation site) and the equity losses are facts about the analysis'
-  equities, which this carrier deliberately does not hold — both enter from
-  outside, and nothing here re-derives a claim from equities. Correctness,
-  by contrast, is a pure function of the two pairs the record already holds,
-  so deriving it is what stops a stated verdict from disagreeing with the
-  answer it describes.
-- **`SubmittedCubeAction.From(problemKey, answer, decision)`** is the one
-  construction that reads truth and both losses off a cube decision's
-  category, `CubeDecisionData`, together — including the claim-to-action
-  collapse (`CubeClaimExtensions.ToCubeAction`) the doubler-side equity read
-  needs. Consumers should build submissions through it rather than
-  assembling the five fields by hand, which is the only way to pair an
-  answer with a truth or a loss belonging to some other decision. A checker
-  play cannot be passed: the parameter is the cube kind's own category.
-  Unlike a play's, the key is still the caller's to supply — the record's
-  `ProblemKey.From`, or null, which records nothing — because the factory
-  takes the category, not the record; deriving it, and retiring the public
-  constructor, is halheinrich/backgammon#285's.
+`SubmittedCubeAnswer` has **no public constructor, no settable member and
+no `with`** — the factory-only posture of `SubmittedPlay` — so no caller
+can pair an answer with another decision's truth or cost, file it under
+another problem, or state a verdict its cost contradicts. Its three verdicts
+are **derived** from the cost by the zero rule: `IsCorrect` on the whole
+cost, `IsDoublingPartCorrect` and `IsTakePartCorrect` each on its part. No
+double's take part is 0 — its implied take is never charged — so its take
+part is always correct.
+
+**A submitted cube answer's identity is the problem and the answer**, the
+cube twin of a submitted play's: equality and the hash compare `ProblemKey`
+and `Answer`, and nothing else. The truth, the cost and the verdicts are the
+result under one analysis, and a content-equal record may carry another, so
+they are facts about one submission, outside identity.
+
+**Correctness lives in one place: the zero rule** (SPEC-scoring §2a and
+§3's second 2026-10-01 amendment; halheinrich/backgammon#202, folded into
+halheinrich/backgammon#326). A checker play, each part of a cube answer and
+each whole cube answer is correct exactly when its loss counts as zero —
+when BgDataTypes_Lib's `EquityLoss.CountsAsZero` says so, which is when the
+loss displays as `0.0000`. The internal `Correctness.IsCorrect(loss)` is the
+library's one statement of that verdict; `SubmittedPlay.IsCorrect` and the
+three `SubmittedCubeAnswer` verdicts all read it, and nothing else compares
+a loss with zero or an answer with a truth. It keeps no precision and no
+threshold of its own — both are `EquityLoss`'s — so what a consumer shows
+through `EquityLoss.Format` and what is scored here cannot disagree. The
+rule changes verdicts only: every stored error and cost stays exact. A sum
+is judged as a sum, so two parts that each count as zero can make a whole
+that does not. The user-set error tolerance of halheinrich/backgammon#30 is
+planned as a widening of this one predicate, not a second rule beside it.
 
 **`ScoreSegment`** is the single accumulation primitive: an immutable
 `(Submitted, Correct, TotalEquityLoss)` tally with derived `AverageEquityLoss`
@@ -628,22 +640,33 @@ loss)` and `operator +` both return a fresh segment; `Add` is defined in terms
 of `operator +`, so component-wise combination has one definition.
 `operator +` null-guards both operands (records are reference types).
 
-**`QuizScore`** is an immutable cumulative record holding three independent
-`ScoreSegment`s — `PlayDecisions`, `DoubleDecisions`, `TakeDecisions` — plus a
-derived `Total` (their sum via `operator +`, never stored, so it cannot drift).
-Two overloads fold submissions in and return a fresh score (no aliasing, fitting
-Razor's render-state model):
+**`QuizScore`** is the session score, in the rows SPEC-scoring §3's
+2026-10-01 amendment rules — Play, Double, Take and Total — each a
+`ScoreSegment`. Two overloads fold submissions in and return a fresh score
+(no aliasing, fitting Razor's render-state model):
 
-- `Plus(SubmittedPlay)` adds one submission to `PlayDecisions`.
-- `Plus(SubmittedCubeAction)` adds **one submission to each** of
-  `DoubleDecisions` and `TakeDecisions` — a cube position scores its doubler
-  and taker halves independently; there is no combine rule across the two.
-  Correctness comes from the submission's own claim-vs-claim /
-  action-vs-action derivation, so a wrong claim over the right board action
-  folds as one incorrect doubler decision carrying +0.000 equity loss.
+- `Plus(SubmittedPlay)` adds one decision to `PlayDecisions`.
+- `Plus(SubmittedCubeAnswer)` adds one decision to `DoubleDecisions` for
+  **every** answer, with its doubling part; and one to `TakeDecisions` only
+  for an answer that **commits to a response**
+  (`CubeAnswerExtensions.CommitsToResponse`), with its take part — No double
+  is left out of the Take row. Each row's decision is correct when its part
+  counts as zero.
+
+`Total` counts **each checker play and each cube answer once**, so it is not
+the sum of the rows: its submitted count is Play's plus Double's; its
+correct count is the correct plays plus the cube answers whose **whole**
+cost counts as zero, judged on the whole and not as the parts' verdicts
+combined; its loss is the sum of the rows' losses. The correct count is the
+one fact the rows cannot give, so the score holds it beside them and derives
+everything else of the Total from the rows on each read. That is why
+`QuizScore` is a class with **no public constructor and no `with`**: it is
+built only from `Empty` by its folds, so no caller can state a row or a
+Total its folds did not produce. Value equality compares the three rows and
+that count. The score never reads a submission's key.
 
 The per-problem history is intentionally not in the score — consumers that
-need it keep an `IReadOnlyList<SubmittedPlay>` / `SubmittedCubeAction`
+need it keep an `IReadOnlyList<SubmittedPlay>` / `SubmittedCubeAnswer`
 alongside.
 
 ### Per-problem lifetime stats
@@ -661,26 +684,31 @@ key is `ProblemKey` — the content identity derived from the decision's facts
 — not the file-relative `DecisionId`, so every content-equal copy of a
 problem across files and matches folds into and reads one lifetime record.
 Every record has a key (`ProblemKey.From`; SPEC-stats-identity.md §2, amended
-2026-09-27), and a scored play carries its record's, derived where it is
-scored (see "Quiz-result records"). A cube submission's key is still supplied
-by its caller (halheinrich/backgammon#285); one supplied as null still scores
-the session (`QuizScore` never reads the key) but is not recorded —
-`ProblemStatsDocument.Plus` returns the document unchanged, and that
-document-level skip is the *single* keyless filter (degrade, never block).
+2026-09-27), and every submission carries its record's, derived where it is
+scored — `PlaySubmission.Score` for a play, `SubmittedCubeAnswer.Score` for a
+cube answer (see "Quiz-result records") — so no submission is keyless and
+the document records every one (halheinrich/backgammon#285).
 
 **`ProblemStats`** is one problem's lifetime record: its `ProblemKey`, a
 composed `ScoreSegment` tally, and the last-quizzed date. Composing
 `ScoreSegment` (rather than local correct/wrong fields) keeps the library's
 single accumulation primitive single-sourced; the wrong count is the derived
-`Wrong` (`Submitted − Correct`), never stored. The fold rule **agrees with
-`QuizScore`** on how many decisions a cube position is worth: two — the
-doubler half and the taker half — so a cube submission adds 2 submitted and
-one correct per half that was right, with both halves' equity losses
-accumulated. One quizzed position still produces exactly one lifetime record
-keyed by its `ProblemKey`; only the counting granularity inside that record
-is per-half. Folding a submission whose key is null or differs from the
-record's throws `ArgumentException` (wrong-key folds are data corruption) —
-and since a play key and a cube key are distinct by grammar (the dice
+`Wrong` (`Submitted − Correct`), never stored. **A cube answer adds two
+decisions** — its doubling half and its take half, each correct when its
+part of the cost counts as zero, with the whole cost as the loss — the shape,
+unit and version (v3) the record has always had (SPEC-scoring §3, 2026-10-01;
+SPEC-stats-identity.md §3, kept 2026-10-01). No double's take part is 0, so
+its take half is a correct zero, and every answer adds two. The halves are
+judged one by one: an answer whose two parts each count as zero is two right
+halves here, though the session's Total counts it wrong. Records written
+before the amendment keep the costs they were folded with; nothing is
+re-scored or restarted, and a new fold only adds. One quizzed position still
+produces exactly one lifetime record keyed by its `ProblemKey`; only the
+counting granularity inside that record is per-half. Folding a submission
+whose key differs from the record's throws `ArgumentException` (wrong-key
+folds are data corruption; a submission's key is its record's, but it can
+still be handed to another problem's record), as does merging two problems'
+records — and since a play key and a cube key are distinct by grammar (the dice
 discriminant), **kind purity is structural**: a record only ever folds one
 decision kind, which keeps per-kind tally derivations (sightings' cube
 divide-by-two) exact. The static `From` factories are defined as an empty
@@ -775,9 +803,11 @@ token disagreeing with its key's grammar, v3's bare record under a v4
 version, any malformed record, trailing content), then folds the result
 with `Merge`. Two types rather than a disposition flag on one because the
 dispositions differ — retired is set aside unread, foldable is read and
-merged — and a v4's tallies are comparable with v3's under the amended Too
-Good predicate (SPEC-scoring.md §3, consequence (iv)), so losing them is
-not the ruled-acceptable cost it was. The dispatch order is the retired
+merged — and a v4's tallies are kept, not lost: the 2026-09-02 amendment
+ruled them foldable into v3 (SPEC-stats-identity.md §3). Its premise, that
+the two scorings coincide (SPEC-scoring.md §3, consequence (iv)), was
+corrected on 2026-09-30 for two cases, which by Hal's ruling are not
+migrated (halheinrich/backgammon#326). The dispatch order is the retired
 range, then the foldable version, then the newer-than-current refusal: 4 is
 the one version above current that is not refused as newer. The file dance
 — which file is the base, the rename-aside as merged — is the consumer's
@@ -1022,50 +1052,47 @@ stays responsive without paying a per-item cost.
 ### Answer-type distribution over a decision pool
 
 `AnswerTypeDistribution` counts a pool of decisions by the kind of answer each
-one calls for: checker plays, plus one bucket per cube verdict from
-SPEC-scoring §3's table (`NoDoubleTake`, `DoubleTake`, `DoublePass`,
-`TooGoodPass` — halheinrich/backgammon#86's claim vocabulary, cut to the four
-reachable pairs by halheinrich/backgammon#187's 2026-09-02 amendment: Too
-Good requires the pass, so the `TooGoodTake` bucket of the interim shape is
-retired and its former population — playing on beats being taken, yet the
-opponent takes — is `NoDoubleTake` by ruling), with a derived `Total`. The
-retired pair stays representable in `CubeClaimPair`; the classifier names
-it in a throwing arm rather than housing it, so a producer that started
-deriving it again fails by name instead of counting silently. It answers a
-**collection-scoped** question — "what is
+one calls for: checker plays, plus one bucket per cube answer of SPEC-scoring
+§3 (amended 2026-09-30 on halheinrich/backgammon#326) — `NoDouble`,
+`DoubleTake`, `DoublePass` and `NoDoublePass`, named for the `CubeAnswer`
+members they count — with a derived `Total`. The fourth bucket is named by
+its meaning, "don't double, they'd pass", never by a label: it counts the
+fourth answer under both of its readings, Too good where gammons are
+possible and No double / Pass where they are not. The buckets' display
+labels are the consuming app's copy. A position where playing on beats being
+taken yet the opponent takes is `NoDouble`, by the 2026-09-02 ruling. It
+answers a **collection-scoped** question — "what is
 my saved corpus actually made of?", the curation-bias check a beta tester
 asked for (over-saved takes, no too-good positions at all) — not a
 session-scoped one. Immutable, `ScoreSegment`'s shape throughout: `Empty`, a
 fold returning a new instance, and `operator +` as the single definition of how
 instances combine.
 
-- **The classification consumes the producer verdict.** `Add(BgDecisionData)`
+- **The classification consumes the producer's truth.** `Add(BgDecisionData)`
   matches on the record's kind (`Match`, so a third kind would fail to
   compile here): a checker play is one checker play; a cube decision keys
-  the bucket by its category's `BestClaimPair` — the one derivation site of
-  the truth claim, beside `BestDoublerAction` / `BestTakerAction` — and
-  matches its `(Claim, Taker)` halves. Nothing here
-  re-derives a verdict from equities (SPEC-scoring §3, "Answer-type
-  classification consumes the claim"), and consumers stream decisions in
-  without owning the bucketing rule. The private one-hot `Classify` is what
-  makes the fold contract structural rather than merely asserted. The 3×2's
-  sixth cell — the incoherent `NoDoublePass` the ruled tie-breaks compose as
-  derived truth at the exact `NoDoubleEquity == 1` boundary — is **just too
-  good** and houses in `TooGoodPass` (SPEC-scoring §3, ruled 2026-09-01):
-  the too-good posture's degenerate point, not a sixth bucket, so the match
-  is total over every pair the producer derives and a legal corpus can never
-  fail to fold.
+  the bucket by its category's `BestAnswer` — the one derivation of the
+  truth, from the two best actions. Nothing here re-derives a truth from
+  equities (SPEC-scoring §3, "Answer-type classification consumes the
+  claim"), and consumers stream decisions in without owning the bucketing
+  rule. The private one-hot `ClassifyCube` is what makes the fold contract
+  structural rather than merely asserted; it is total over the four
+  answers, so a legal corpus can never fail to fold. At the
+  halheinrich/backgammon#293 tie (no-double equity exactly the cash, with a
+  pass) the truth is the fourth answer, so the tie counts there, once
+  ("(No Double, Pass) is just too good", SPEC-scoring §3), though more than
+  one answer is correct at it.
 - **The fold contract leg 2 depends on: exactly one bucket per `Add`.** Hence
   `Total` equals the number of decisions folded. That is what lets BgQuiz's
   Home derive its "N decisions matched" count from `Total` instead of running a
   second count-only pass over the same pool — `CountMatchesAsync` enumerates
   that pool anyway, and two computations of "what matches" would drift.
-- **A cube decision buckets once**, keyed by its best pair. Deliberately *not*
-  the two-half convention of `QuizScore.Plus(SubmittedCubeAction)` /
-  `ProblemStats.Plus(SubmittedCubeAction, …)`, where a cube position is two
-  scored decisions: those count answers *given*, this counts problems
-  *present*, and pool membership counts rows. The two conventions measure
-  different things and are not required to reconcile.
+- **A cube decision buckets once**, keyed by its truth. Deliberately *not*
+  how a cube answer is scored — one Total decision and up to two row
+  decisions in `QuizScore`, two half decisions in `ProblemStats`: those
+  count answers *given*, this counts problems *present*, and pool membership
+  counts rows. The conventions measure different things and are not required
+  to reconcile.
 - **Not a score.** Nothing here records how the user answered; that axis stays
   on `ScoreSegment` / `QuizScore`. Keeping the two apart is why this record
   needs no submission type and no clock.
@@ -1362,9 +1389,10 @@ public sealed class ShuffledProblemSetSource : IProblemSetSource   // decorator:
         // drains + re-shuffles the inner source each call → a fresh permutation per enumeration
 }
 
-// Quiz scoring. ProblemKey is the content identity: a play's is its record's
-// (ProblemKey.From, derived by Score); a cube's is still its caller's, and
-// null there scores the session but is never recorded in lifetime stats.
+// Quiz scoring. ProblemKey is the content identity: every submission's is its
+// record's (ProblemKey.From, derived by Score), never null, never a caller's.
+// Every verdict is the zero rule (EquityLoss.CountsAsZero), stated once, on the
+// internal Correctness (see "Quiz-result records").
 public enum PlaySubmissionKind { Scored = 1, NotScored = 2, OffList = 3 }
 
 public sealed class PlaySubmission : IEquatable<PlaySubmission>   // value equality; + ==, !=
@@ -1387,21 +1415,24 @@ public sealed class SubmittedPlay : IEquatable<SubmittedPlay>   // no public cto
     public Play UserPlay { get; }             // the user's own encoding; not in equality
     public PlayRanking Ranking { get; }
     public int MatchedCandidateIndex { get; } // into Plays (stored order); not in equality
-    public double EquityLoss { get; }         // the ranking's error; finite, ≥ 0
-    public bool IsCorrect { get; }            // derived: EquityLoss == 0.0 (the one verdict)
+    public double EquityLoss { get; }         // the ranking's error; finite, ≥ 0; exact
+    public bool IsCorrect { get; }            // derived: EquityLoss counts as zero (shows as 0.0000)
     // Equality and hash: ProblemKey and AfterBoard only — same problem, same play.
 }
 
-public sealed record SubmittedCubeAction(
-    ProblemKey? ProblemKey,               // the caller's: the record's key, or null (not recorded)
-    CubeClaimPair UserDecision,           // the user's (claim, taker) answer
-    CubeClaimPair BestDecision,           // CubeDecisionData.BestClaimPair — the producer's truth
-    double DoublerEquityLoss, double TakerEquityLoss)
+public sealed class SubmittedCubeAnswer : IEquatable<SubmittedCubeAnswer>   // no public ctor; + ==, !=
 {
-    public bool DoublerCorrect { get; }   // derived: claim vs claim (NOT action vs action)
-    public bool TakerCorrect { get; }     // derived: taker action vs taker action
-    public static SubmittedCubeAction From(                 // the one producer read
-        ProblemKey? problemKey, CubeClaimPair answer, CubeDecisionData decision);
+    public static SubmittedCubeAnswer Score(            // THE one place a submitted cube answer is scored:
+        CubeAnswer answer, CubeDecision decision);      //   key, truth and cost all read off this one record
+                                                        //   (ArgumentOutOfRangeException: an undefined answer)
+    public ProblemKey ProblemKey { get; }      // ProblemKey.From(decision); never null
+    public CubeAnswer Answer { get; }          // the user's answer
+    public CubeAnswer BestAnswer { get; }      // CubeDecisionData.BestAnswer: the representative; not in equality
+    public CubeAnswerCost Cost { get; }        // CubeDecision.CostOf(Answer): DoublingPart, TakePart, Total; exact
+    public bool IsCorrect { get; }             // derived: Cost.Total counts as zero — the whole, not the parts combined
+    public bool IsDoublingPartCorrect { get; } // derived: Cost.DoublingPart counts as zero
+    public bool IsTakePartCorrect { get; }     // derived: Cost.TakePart counts as zero (always, for No double)
+    // Equality and hash: ProblemKey and Answer only — same problem, same answer.
 }
 
 public sealed record ScoreSegment(int Submitted, int Correct, double TotalEquityLoss)
@@ -1413,12 +1444,18 @@ public sealed record ScoreSegment(int Submitted, int Correct, double TotalEquity
     public static ScoreSegment operator +(ScoreSegment a, ScoreSegment b);   // null-guards both operands
 }
 
-public sealed record QuizScore(ScoreSegment PlayDecisions, ScoreSegment DoubleDecisions, ScoreSegment TakeDecisions)
+public sealed class QuizScore : IEquatable<QuizScore>   // no public ctor, no `with`; value equality; + ==, !=
 {
     public static QuizScore Empty { get; }
-    public ScoreSegment Total { get; }         // derived: PlayDecisions + DoubleDecisions + TakeDecisions
+    public ScoreSegment PlayDecisions { get; }     // one per play
+    public ScoreSegment DoubleDecisions { get; }   // one per cube answer, every answer: its doubling part
+    public ScoreSegment TakeDecisions { get; }     // one per answer that CommitsToResponse (not No double): its take part
+    public ScoreSegment Total { get; }             // each play and each cube answer once — derived on each read:
+                                                   //   Submitted = Play's + Double's; Correct = correct plays + cube
+                                                   //   answers whose whole cost counts as zero (the one fact held
+                                                   //   beside the rows); loss = the rows' losses summed
     public QuizScore Plus(SubmittedPlay play);
-    public QuizScore Plus(SubmittedCubeAction cube);   // one double + one take decision
+    public QuizScore Plus(SubmittedCubeAnswer cube);
 }
 
 // Per-problem lifetime stats (the BgQuiz persistent stats-file model, content-keyed)
@@ -1426,10 +1463,12 @@ public sealed record ProblemStats(ProblemKey Key, ScoreSegment Tally, DateTimeOf
 {
     public int Wrong { get; }                  // derived: Tally.Submitted − Tally.Correct; never stored
     public static ProblemStats From(SubmittedPlay play, DateTimeOffset quizzedAt);       // first-ever fold
-    public static ProblemStats From(SubmittedCubeAction cube, DateTimeOffset quizzedAt); // throws on a null key
+    public static ProblemStats From(SubmittedCubeAnswer cube, DateTimeOffset quizzedAt);
     public ProblemStats Plus(SubmittedPlay play, DateTimeOffset quizzedAt);       // ArgumentException on a mismatched key
-    public ProblemStats Plus(SubmittedCubeAction cube, DateTimeOffset quizzedAt); // TWO decisions (per half), as QuizScore;
-                                                                                  //   ArgumentException on a null/mismatched key
+    public ProblemStats Plus(SubmittedCubeAnswer cube, DateTimeOffset quizzedAt); // TWO decisions, every answer: the doubling
+                                                                                  //   half and the take half, each judged on its
+                                                                                  //   part; the whole cost as the loss;
+                                                                                  //   ArgumentException on a mismatched key
     public ProblemStats Merge(ProblemStats other);   // same key: tallies summed, LastQuizzed the later; ArgumentException otherwise
 }
 
@@ -1444,8 +1483,7 @@ public sealed class ProblemStatsDocument                      // immutable; refe
     public int Count { get; }
     public IReadOnlyDictionary<ProblemKey, ProblemStats> Problems { get; }
     public ProblemStatsDocument Plus(SubmittedPlay play, TimeProvider clock);        // clock resolved here — the model
-    public ProblemStatsDocument Plus(SubmittedCubeAction cube, TimeProvider clock);  //   never reads ambient time;
-                                                                                     //   null-key submission → same document
+    public ProblemStatsDocument Plus(SubmittedCubeAnswer cube, TimeProvider clock);  //   never reads ambient time
     public ProblemStatsDocument Merge(ProblemStatsDocument other);   // pure per-key sum; commutative, associative, Empty identity
 }
 
@@ -1564,19 +1602,19 @@ public sealed record MixCompositionEntry(
     int Drawn);                                      // actual, incl. redistribution top-ups
 
 // Answer-type distribution over a decision pool (collection-scoped, not a score).
-// The four cube buckets are named for the CubeClaimPair instances they count.
+// The four cube buckets are named for the CubeAnswer members they count; the
+// fourth by its meaning, whichever label (Too good, No double / Pass) it reads.
 public sealed record AnswerTypeDistribution(
     int CheckerPlays,
-    int NoDoubleTake, int DoubleTake, int DoublePass, int TooGoodPass)
+    int NoDouble, int DoubleTake, int DoublePass, int NoDoublePass)
 {
     public static AnswerTypeDistribution Empty { get; }
     public int Total { get; }                        // derived: sum of the five buckets
     public AnswerTypeDistribution Add(BgDecisionData decision);
         // increments EXACTLY ONE bucket → Total == decisions folded (see Pitfalls);
         // matched on the record's kind; cube decisions keyed by their
-        // category's BestClaimPair (the producer verdict); the
-        // boundary-composed incoherent NoDoublePass houses in TooGoodPass by ruling;
-        // the retired TooGoodTake (never derived) throws ArgumentOutOfRangeException
+        // category's BestAnswer (the producer's truth); at the
+        // halheinrich/backgammon#293 tie that is the fourth answer
     public static AnswerTypeDistribution operator +(
         AnswerTypeDistribution a, AnswerTypeDistribution b);   // null-guards both operands
 }
@@ -1620,11 +1658,24 @@ public sealed record AnswerTypeDistribution(
   best, and a candidate's error differs between rankings. So do not find the
   candidate yourself, compare plays by encoding (a play has no equality —
   see `Play`), or read an error off anything but the ranking.
-  `SubmittedPlay.IsCorrect` is derived from its `EquityLoss` (exactly 0) and
-  is the one verdict: consumers should not state another rule (e.g.,
-  "within 0.001 equity"); halheinrich/backgammon#202 changes that one
-  predicate if its threshold ruling lands. A not-scored or off-list play is
-  a skip of record: there is no `SubmittedPlay` to fold, by construction.
+  `SubmittedPlay.IsCorrect` is derived from its `EquityLoss` by the zero
+  rule and is the verdict: consumers should not state another rule (e.g.,
+  "within 0.001 equity", or `EquityLoss == 0`). A not-scored or off-list
+  play is a skip of record: there is no `SubmittedPlay` to fold, by
+  construction.
+- **A verdict is never `loss == 0`, and never "equals the truth".** Every
+  verdict in the library — a play's, each part of a cube answer, each whole
+  cube answer — is the zero rule, stated once on the internal `Correctness`
+  and owned by BgDataTypes_Lib's `EquityLoss.CountsAsZero`: a loss that
+  displays as `0.0000` is correct, so a nonzero loss below 0.00005 is
+  correct and stays stored as it is (SPEC-scoring §2a and §3;
+  halheinrich/backgammon#202). Show a loss through `EquityLoss.Format`, so
+  what is shown and what is scored agree; do not keep a format string or a
+  threshold of your own. A cube answer is never judged by comparing it with
+  `BestAnswer`, the producer's one representative: at an equity tie several
+  answers cost nothing and each is correct. And a whole answer is judged on
+  its whole cost — two parts that each count as zero can sum to one that
+  does not — so do not combine the part verdicts into a whole one.
 - **Equal submitted plays are the same play of the same problem — not the
   same result.** `SubmittedPlay` equality compares `ProblemKey` and
   `AfterBoard` only, so submissions scored under different rankings, against
@@ -1633,34 +1684,29 @@ public sealed record AnswerTypeDistribution(
   submissions — that merges submissions whose errors and verdicts differ;
   read `EquityLoss`, `IsCorrect` and `Ranking` when the result is the
   question.
-- **A cube half's correctness is NOT `EquityLoss == 0.0` — unlike
-  `SubmittedPlay`'s.** On the doubler half the two run apart by ruling: a
-  `NoDouble` answer to a too-good position (or a `TooGood` answer to a
-  plain no-double one) has the right board action and so costs +0.000, yet
-  scores **incorrect**, because the claims differ (SPEC-scoring §3;
-  halheinrich/backgammon#86). Do not "simplify"
-  `SubmittedCubeAction.DoublerCorrect` to a zero-loss test, and do not read
-  a zero doubler loss in a review or stats surface as evidence the user was
-  right. The taker half does still coincide with zero loss, but derive it
-  from `TakerCorrect` anyway so both halves read from one rule.
-- **`ProblemStats` and `QuizScore` count a cube position the same way: TWO
-  decisions.** Both fold the doubler half and the taker half as independent
-  submissions, so a half-right cube reads **1-of-2, not 0-of-1** — a
-  deliberate alignment, since two counting rules for the same event are
-  user-visible the moment lifetime stats sit beside a session score. The
-  difference is only in shape: `QuizScore` splits them across its
-  `DoubleDecisions` / `TakeDecisions` segments, while `ProblemStats` sums
-  both halves into the one tally of the one record keyed by that position's
-  `ProblemKey`. A document's tallies therefore reconcile with a
-  `QuizScore.Total` over the same submissions **only when every submission
-  carried a key**. Every play does; a cube submission whose caller supplied
-  no key scores the session but never the document, so such a caller
-  legitimately leaves the document short — the keyless skip, not a fold
-  bug.
-- **`AnswerTypeDistribution` counts a cube position as ONE — the opposite of
-  the bullet above, deliberately.** It buckets pool *membership* (one row per
-  decision, keyed by its best pair), while `QuizScore` / `ProblemStats` count
-  *answers given* (two per cube, one per half). Do not "fix" the discrepancy by
+- **Equal submitted cube answers are the same answer to the same problem —
+  not the same result.** `SubmittedCubeAnswer` equality compares
+  `ProblemKey` and `Answer` only, so the same answer scored against two
+  analyses of one problem compares equal though its truth, cost and verdicts
+  differ. Read `Cost` and the verdicts when the result is the question.
+- **`QuizScore` and `ProblemStats` count a cube answer differently, by
+  ruling** (SPEC-scoring §3, 2026-10-01). The session score adds every
+  answer to its Double row, only the answers that commit to a response to
+  its Take row (No double is left out), and each answer **once** to its
+  Total, judged on the whole cost. The lifetime record adds **two**
+  decisions for every answer — No double's take half a correct zero — each
+  half judged on its own part: the unit v3 has always had, which the quiz
+  mix's sightings (count ÷ 2) and per-half measures rest on. So a document's
+  cube tallies do not reconcile with a session's Total or rows over the same
+  answers, and an answer whose parts each count as zero but whose whole does
+  not is wrong in the Total and two right halves in the record. Neither is
+  a fold bug; do not align them. Do not derive a Total by summing the rows
+  either: its submitted count is Play's plus Double's, and its correct count
+  is its own.
+- **`AnswerTypeDistribution` counts a cube position as ONE — unlike both
+  scorings above, deliberately.** It buckets pool *membership* (one row per
+  decision, keyed by its truth), while `QuizScore` / `ProblemStats` count
+  *answers given*. Do not "fix" the discrepancy by
   aligning them: they measure different things and are not required to
   reconcile. The one-bucket-per-`Add` rule is load-bearing, not incidental —
   `Total` is contractually the number of decisions folded in, which is what lets
@@ -1668,7 +1714,7 @@ public sealed record AnswerTypeDistribution(
   Anything that made an `Add` increment zero or two buckets (a "skip
   unclassifiable decisions" escape hatch, a per-half cube fold) would silently
   break that count. `Add` takes the record (`BgDecisionData`) and matches on
-  its kind; a cube's `BestClaimPair` is read off its category.
+  its kind; a cube's `BestAnswer` is read off its category.
 - **`ProblemStatsDocument` JSON pins names and ordering, not whitespace.**
   The bundled converter hand-writes fixed property names ordered by canonical
   key, so the consumer's naming policy cannot change the format — but
@@ -1706,15 +1752,15 @@ public sealed record AnswerTypeDistribution(
   going internal. Adding a wire unit whose converter delegates a nested type
   to the active options means declaring that type too: nothing here does today
   (see "Source generation & trimming"), which is why this context chains none.
-- **A keyless cube submission vanishes from lifetime stats silently.**
-  `ProblemStatsDocument.Plus` with a cube submission whose `ProblemKey` is
-  null returns the *same* document (degrade, never block); nothing throws
-  and no counter ticks. That document-level skip is the single filter —
-  `ProblemStats.From`/`Plus` treat a keyless fold as a caller bug
-  (`ArgumentException`). It is reachable only from a caller that supplies no
-  key, since every record has one; a play cannot reach it, its key being its
-  record's. Deriving the cube's key from the record, which retires the null,
-  is halheinrich/backgammon#285's.
+- **A cube record's history can span two scoring rules.** The cube costs of
+  halheinrich/backgammon#326 kept the v3 record, its unit and its version, so
+  a record written before 2026-10-01 holds tallies folded under the earlier
+  cube scoring, and new folds add to them; nothing is re-scored or restarted
+  (SPEC-stats-identity.md §3, kept 2026-10-01). Do not try to tell the two
+  apart in a stored tally — it holds totals, not answers — and do not
+  "migrate" one. The quiz mix's thresholds keep their units and saved
+  values, though the new costs and the zero rule can change which problems
+  meet them.
 - **`QuizCategory` measures are per-half and its thresholds are fractions;
   "seen" means sightings.** `SeenFewerThan` counts sightings derived from the
   tally (`Submitted / 2` for a cube decision — the two-half fold), so the

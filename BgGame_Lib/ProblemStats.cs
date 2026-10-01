@@ -19,12 +19,21 @@ using BgDataTypes_Lib;
 /// The tally reuses <see cref="ScoreSegment"/> — the library's single
 /// accumulation primitive — rather than restating submitted/correct/loss
 /// fields locally; the wrong count is the derived <see cref="Wrong"/>, never
-/// stored. Cube positions are counted the same way here as in
-/// <see cref="QuizScore.Plus(SubmittedCubeAction)"/>: the doubler and taker
-/// halves are two decisions, so a cube submission adds <b>two</b> to the
-/// tally — one per half that was right — with both halves' equity losses
-/// accumulated. One quizzed position still yields one lifetime record; only
-/// the counting granularity inside it is per-half.
+/// stored. <b>A cube answer adds two decisions</b>, its doubling half and its
+/// take half, each correct when its part of the cost counts as zero, with the
+/// whole cost as the loss: the shape, unit and schema version the record has
+/// always had (SPEC-scoring §3, 2026-10-01; SPEC-stats-identity §3, v3). No
+/// double's take part is 0, so its take half is a correct zero. One quizzed
+/// position still yields one lifetime record; only the counting granularity
+/// inside it is per-half. The session score counts a cube answer otherwise
+/// (<see cref="QuizScore.Plus(SubmittedCubeAnswer)"/>: no Take row for No
+/// double, and the Total counts each answer once), so the two are not
+/// required to reconcile for cube answers.
+/// </para>
+/// <para>
+/// <b>Records written before the 2026-10-01 amendment are kept as they
+/// are.</b> Their tallies were folded under the earlier cube scoring and are
+/// not re-scored or restarted; a new fold adds to them.
 /// </para>
 ///
 /// <para>
@@ -41,11 +50,15 @@ using BgDataTypes_Lib;
 /// <see cref="TimeProvider"/>: the clock seam lives one level up, on
 /// <see cref="ProblemStatsDocument"/> (the consumer's entry point), keeping
 /// this record's fold a pure value computation — deliberate asymmetry, see
-/// the document type. So is the keyless filter: a play always carries its
-/// record's key, and a cube submission whose caller supplied none is skipped
-/// by the document's <c>Plus</c> and can never reach — or seed — a record
-/// here; at this level a null or mismatched key is rejected as data
-/// corruption.
+/// the document type.
+/// </para>
+///
+/// <para>
+/// <b>Every submission carries its record's key</b>, derived where it is
+/// scored (<see cref="PlaySubmission.Score"/>, <see cref="SubmittedCubeAnswer.Score"/>),
+/// so there is no keyless case. A submission can still be handed to another
+/// problem's record, and that is refused: folding under a key that is not
+/// <see cref="Key"/>, or merging another problem's record, is data corruption.
 /// </para>
 /// </summary>
 /// <param name="Key">Content identity of the quizzed problem.</param>
@@ -74,13 +87,13 @@ public sealed record ProblemStats(ProblemKey Key, ScoreSegment Tally, DateTimeOf
     public static ProblemStats From(SubmittedPlay play, DateTimeOffset quizzedAt)
     {
         ArgumentNullException.ThrowIfNull(play);
-        return Seed(play.ProblemKey, nameof(play)).Plus(play, quizzedAt);
+        return Seed(play.ProblemKey).Plus(play, quizzedAt);
     }
 
     /// <summary>
     /// Create the first-ever record for <paramref name="cube"/>'s problem,
-    /// with that submission folded in. Defined as an empty seed plus
-    /// <see cref="Plus(SubmittedCubeAction, DateTimeOffset)"/>, so the fold
+    /// with that answer folded in. Defined as an empty seed plus
+    /// <see cref="Plus(SubmittedCubeAnswer, DateTimeOffset)"/>, so the fold
     /// rule has a single definition.
     /// </summary>
     /// <param name="cube">The first submission for this problem.</param>
@@ -88,26 +101,14 @@ public sealed record ProblemStats(ProblemKey Key, ScoreSegment Tally, DateTimeOf
     /// <exception cref="ArgumentNullException">
     /// Thrown when <paramref name="cube"/> is <see langword="null"/>.
     /// </exception>
-    /// <exception cref="ArgumentException">
-    /// Thrown when the submission carries no <see cref="ProblemKey"/> — its
-    /// caller supplied none, and a keyless submission is never recorded (the
-    /// document-level <c>Plus</c> is the single filter), so seeding a record
-    /// from one is a caller bug.
-    /// </exception>
-    public static ProblemStats From(SubmittedCubeAction cube, DateTimeOffset quizzedAt)
+    public static ProblemStats From(SubmittedCubeAnswer cube, DateTimeOffset quizzedAt)
     {
         ArgumentNullException.ThrowIfNull(cube);
-        return Seed(cube.ProblemKey, nameof(cube)).Plus(cube, quizzedAt);
+        return Seed(cube.ProblemKey).Plus(cube, quizzedAt);
     }
 
-    private static ProblemStats Seed(ProblemKey? key, string paramName)
-    {
-        if (key is null)
-            throw new ArgumentException(
-                "Submission carries no ProblemKey; a keyless submission is not recorded " +
-                "and cannot seed a lifetime record.", paramName);
-        return new(key, ScoreSegment.Empty, LastQuizzed: default);
-    }
+    /// <summary>The empty record of <paramref name="key"/>'s problem, which a first fold starts from.</summary>
+    private static ProblemStats Seed(ProblemKey key) => new(key, ScoreSegment.Empty, LastQuizzed: default);
 
     /// <summary>
     /// Return a new record with <paramref name="play"/> folded in: one
@@ -135,30 +136,38 @@ public sealed record ProblemStats(ProblemKey Key, ScoreSegment Tally, DateTimeOf
 
     /// <summary>
     /// Return a new record with <paramref name="cube"/> folded in as <b>two</b>
-    /// decisions — the doubler half and the taker half — matching
-    /// <see cref="QuizScore.Plus(SubmittedCubeAction)"/>: two submissions, one
-    /// correct per half that was right, both halves' equity losses
-    /// accumulated, and <see cref="LastQuizzed"/> advanced to
-    /// <paramref name="quizzedAt"/>. A half-right cube therefore reads
-    /// 1-of-2, not 0-of-1.
-    ///
-    /// <para>
-    /// "Right" per half is the submission's own claim-vs-claim / action-vs-action
-    /// derivation (<see cref="SubmittedCubeAction.DoublerCorrect"/> /
-    /// <see cref="SubmittedCubeAction.TakerCorrect"/>), the same source
-    /// <see cref="QuizScore.Plus(SubmittedCubeAction)"/> folds — so a wrong
-    /// claim over the right board action folds here too as one wrong half at
-    /// +0.000 (SPEC-scoring §3; halheinrich/backgammon#86).
-    /// </para>
+    /// decisions (SPEC-scoring §3, 2026-10-01): its doubling half, correct by
+    /// <see cref="SubmittedCubeAnswer.IsDoublingPartCorrect"/>, and its take
+    /// half, correct by <see cref="SubmittedCubeAnswer.IsTakePartCorrect"/>,
+    /// with the whole cost (<see cref="CubeAnswerCost.Total"/>) accumulated
+    /// and <see cref="LastQuizzed"/> advanced to <paramref name="quizzedAt"/>.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Every answer adds both halves, No double included: its implied take is
+    /// never charged, so its take part is 0 and its take half a correct zero.
+    /// That keeps the unit at two per cube answer, which the record has always
+    /// had, so a cube record's sightings stay its count ÷ 2 and its wrong rate
+    /// and average loss stay per half.
+    /// </para>
+    /// <para>
+    /// The halves are judged one by one. An answer whose two parts each count
+    /// as zero is two correct halves here, even where their sum does not count
+    /// as zero and the session's Total counts the answer wrong
+    /// (<see cref="QuizScore.Plus(SubmittedCubeAnswer)"/>).
+    /// </para>
+    /// </remarks>
     /// <param name="cube">The submission to fold.</param>
     /// <param name="quizzedAt">The resolved fold timestamp.</param>
+    /// <exception cref="ArgumentNullException">
+    /// Thrown when <paramref name="cube"/> is <see langword="null"/>.
+    /// </exception>
     /// <exception cref="ArgumentException">
-    /// Thrown when the submission's <see cref="SubmittedCubeAction.ProblemKey"/>
-    /// is null or not <see cref="Key"/> — folding under the wrong key is data
+    /// Thrown when the submission's <see cref="SubmittedCubeAnswer.ProblemKey"/>
+    /// is not <see cref="Key"/> — folding under the wrong key is data
     /// corruption.
     /// </exception>
-    public ProblemStats Plus(SubmittedCubeAction cube, DateTimeOffset quizzedAt)
+    public ProblemStats Plus(SubmittedCubeAnswer cube, DateTimeOffset quizzedAt)
     {
         ArgumentNullException.ThrowIfNull(cube);
         RequireMatchingKey(cube.ProblemKey, nameof(cube));
@@ -166,8 +175,8 @@ public sealed record ProblemStats(ProblemKey Key, ScoreSegment Tally, DateTimeOf
         {
             Tally = Tally.Add(
                 2,
-                (cube.DoublerCorrect ? 1 : 0) + (cube.TakerCorrect ? 1 : 0),
-                cube.DoublerEquityLoss + cube.TakerEquityLoss),
+                (cube.IsDoublingPartCorrect ? 1 : 0) + (cube.IsTakePartCorrect ? 1 : 0),
+                cube.Cost.Total),
             LastQuizzed = quizzedAt,
         };
     }
@@ -216,12 +225,16 @@ public sealed record ProblemStats(ProblemKey Key, ScoreSegment Tally, DateTimeOf
         return a.Offset >= b.Offset ? a : b;
     }
 
-    private void RequireMatchingKey(ProblemKey? submissionKey, string paramName)
+    /// <summary>
+    /// Refuses <paramref name="key"/> unless it is this record's
+    /// <see cref="Key"/>: a submission folded into, or a record merged with,
+    /// another problem's record is data corruption.
+    /// </summary>
+    private void RequireMatchingKey(ProblemKey key, string paramName)
     {
-        if (submissionKey != Key)
+        if (key != Key)
             throw new ArgumentException(
-                $"Submission is for problem '{submissionKey?.ToString() ?? "<no key>"}' " +
-                $"but this record tracks '{Key}'.",
+                $"Submission is for problem '{key}' but this record tracks '{Key}'.",
                 paramName);
     }
 }

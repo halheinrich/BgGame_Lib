@@ -1,35 +1,34 @@
 namespace BgGame_Lib.Tests;
 
+using System.Reflection;
 using BgDataTypes_Lib;
-using BgDataTypes_Lib.TestSupport;
 
+/// <summary>
+/// The session score's rows, Play, Double and Take, and its Total, as
+/// SPEC-scoring §3's 2026-10-01 amendment rules them. Every submission here
+/// is scored the way production scores it (<see cref="TestSubmissions"/>), so
+/// a fold's verdicts are the submission's own.
+/// </summary>
 public class QuizScoreTests
 {
-    // QuizScore folds these records by reading their result fields; it never
-    // reads ProblemKey — session scoring is deliberately key-independent. A
-    // play always carries its record's key; a cube submission's is still its
-    // caller's (halheinrich/backgammon#285), and the cube helper's null pins
-    // that even a keyless one folds. A play's correctness follows from its
-    // error (exactly 0), as scored.
+    // QuizScore never reads a submission's key: session scoring is
+    // deliberately key-independent.
+
     private static SubmittedPlay Play(double equityLoss) =>
         TestSubmissions.Play(equityLoss);
 
-    // Per-half correctness is derived from the answer/truth pair rather than
-    // stated, so this helper composes pairs that realize the requested
-    // verdicts: the truth is always (Double, Take) and each half of the
-    // answer either matches it or is bent away from it. The accumulation
-    // assertions below are unchanged in intent by that.
-    private static SubmittedCubeAction Cube(
-        double doublerLoss, bool doublerCorrect, double takerLoss, bool takerCorrect) =>
-        new(ProblemKey: null,
-            new CubeClaimPair(
-                doublerCorrect ? CubeClaim.Double : CubeClaim.NoDouble,
-                takerCorrect ? CubeAction.Take : CubeAction.Pass),
-            CubeClaimPair.DoubleTake,
-            DoublerEquityLoss: doublerLoss, TakerEquityLoss: takerLoss);
+    /// <summary>
+    /// <paramref name="answer"/> at a Double / Take truth (N +0.30, T +0.60),
+    /// gammons possible. Its parts: No double (0.30, 0); Double / Take (0, 0);
+    /// Double / Pass (0, 0.40); Too good (0.40, 0.40).
+    /// </summary>
+    private static SubmittedCubeAnswer AtDoubleTake(CubeAnswer answer) =>
+        TestSubmissions.Cube(answer, noDoubleEquity: 0.30, doubleTakeEquity: 0.60);
+
+    public static TheoryData<CubeAnswer> EveryAnswer => new(Enum.GetValues<CubeAnswer>());
 
     [Fact]
-    public void Empty_AllSegmentsAndTotalAreEmpty()
+    public void Empty_AllRowsAndTotalAreEmpty()
     {
         var s = QuizScore.Empty;
         Assert.Equal(ScoreSegment.Empty, s.PlayDecisions);
@@ -38,14 +37,16 @@ public class QuizScoreTests
         Assert.Equal(ScoreSegment.Empty, s.Total);
     }
 
+    // -----------------------------------------------------------------------
+    //  The Play row
+    // -----------------------------------------------------------------------
+
     [Fact]
     public void PlusPlay_CorrectPlay_IncrementsPlaySubmittedAndCorrect()
     {
         var s = QuizScore.Empty.Plus(Play(equityLoss: 0.0));
 
-        Assert.Equal(1, s.PlayDecisions.Submitted);
-        Assert.Equal(1, s.PlayDecisions.Correct);
-        Assert.Equal(0.0, s.PlayDecisions.TotalEquityLoss);
+        Assert.Equal(new ScoreSegment(1, 1, 0.0), s.PlayDecisions);
     }
 
     [Fact]
@@ -61,7 +62,7 @@ public class QuizScoreTests
     }
 
     [Fact]
-    public void PlusPlay_LeavesCubeSegmentsUntouched()
+    public void PlusPlay_LeavesTheCubeRowsUntouched()
     {
         var s = QuizScore.Empty.Plus(Play(equityLoss: 0.05));
 
@@ -69,55 +70,236 @@ public class QuizScoreTests
         Assert.Equal(ScoreSegment.Empty, s.TakeDecisions);
     }
 
-    [Fact]
-    public void PlusCube_BumpsDoubleAndTakeByOneEach_PlayUntouched()
+    // -----------------------------------------------------------------------
+    //  The Double row: every cube answer
+    // -----------------------------------------------------------------------
+
+    [Theory]
+    [MemberData(nameof(EveryAnswer))]
+    public void PlusCube_EveryAnswer_AddsOneDoubleDecision_ItsDoublingPart(CubeAnswer answer)
     {
-        var s = QuizScore.Empty
-            .Plus(Cube(doublerLoss: 0.0, doublerCorrect: true, takerLoss: 0.12, takerCorrect: false));
+        var cube = AtDoubleTake(answer);
 
-        Assert.Equal(1, s.DoubleDecisions.Submitted);
-        Assert.Equal(1, s.DoubleDecisions.Correct);
-        Assert.Equal(0.0, s.DoubleDecisions.TotalEquityLoss);
+        var s = QuizScore.Empty.Plus(cube);
 
-        Assert.Equal(1, s.TakeDecisions.Submitted);
-        Assert.Equal(0, s.TakeDecisions.Correct);
-        Assert.Equal(0.12, s.TakeDecisions.TotalEquityLoss, precision: 9);
-
+        Assert.Equal(
+            new ScoreSegment(1, cube.IsDoublingPartCorrect ? 1 : 0, cube.Cost.DoublingPart),
+            s.DoubleDecisions);
         Assert.Equal(ScoreSegment.Empty, s.PlayDecisions);
     }
 
+    [Theory]
+    [InlineData(CubeAnswer.NoDouble, false, 0.30)]
+    [InlineData(CubeAnswer.DoubleTake, true, 0.0)]
+    [InlineData(CubeAnswer.DoublePass, true, 0.0)]
+    [InlineData(CubeAnswer.NoDoublePass, false, 0.40)]
+    public void PlusCube_TheDoubleRow_JudgesTheDoublingPart(CubeAnswer answer, bool correct, double loss)
+    {
+        // At the Double / Take truth: doubling is right, so both doubling
+        // answers' doubling parts are 0; not doubling misses T − N = 0.30,
+        // and Too good when they'd take is charged 1 − T = 0.40 here.
+        var s = QuizScore.Empty.Plus(AtDoubleTake(answer));
+
+        Assert.Equal(correct ? 1 : 0, s.DoubleDecisions.Correct);
+        Assert.Equal(loss, s.DoubleDecisions.TotalEquityLoss, precision: 12);
+    }
+
+    // -----------------------------------------------------------------------
+    //  The Take row: every answer but No double
+    // -----------------------------------------------------------------------
+
+    [Theory]
+    [MemberData(nameof(EveryAnswer))]
+    public void PlusCube_TheTakeRow_GainsEveryAnswerThatCommitsToAResponse(CubeAnswer answer)
+    {
+        var cube = AtDoubleTake(answer);
+
+        var s = QuizScore.Empty.Plus(cube);
+
+        if (answer == CubeAnswer.NoDouble)
+        {
+            Assert.Equal(ScoreSegment.Empty, s.TakeDecisions);
+        }
+        else
+        {
+            Assert.Equal(
+                new ScoreSegment(1, cube.IsTakePartCorrect ? 1 : 0, cube.Cost.TakePart),
+                s.TakeDecisions);
+        }
+    }
+
     [Fact]
-    public void Total_IsTheSumOfAllThreeSegments()
+    public void PlusCube_NoDouble_IsLeftOutOfTheTakeRow_EvenWhereTheTakeItImpliesIsWrong()
+    {
+        // At a Double / Pass truth No double's implied take would be wrong;
+        // it is never charged, so the Take row does not see it at all.
+        var noDouble = TestSubmissions.Cube(CubeAnswer.NoDouble, noDoubleEquity: 0.50, doubleTakeEquity: 1.20);
+
+        var s = QuizScore.Empty.Plus(noDouble);
+
+        Assert.Equal(ScoreSegment.Empty, s.TakeDecisions);
+        Assert.Equal(new ScoreSegment(1, 0, noDouble.Cost.DoublingPart), s.DoubleDecisions);
+    }
+
+    // -----------------------------------------------------------------------
+    //  The Total: each play and each answer once
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void Total_CountsEachPlayAndEachCubeAnswerOnce_NotTheSumOfTheRows()
+    {
+        // One correct play and all four answers at the Double / Take truth.
+        // The rows count 1 + 4 + 3 = 8 decisions; the Total 1 + 4 = 5. Correct
+        // in the Total: the play and Double / Take, the one answer whose whole
+        // cost is 0 — 2, where the rows' correct counts sum to 1 + 2 + 1 = 4.
+        var s = Enum.GetValues<CubeAnswer>()
+            .Aggregate(QuizScore.Empty.Plus(Play(equityLoss: 0.0)), (score, a) => score.Plus(AtDoubleTake(a)));
+
+        Assert.Equal(new ScoreSegment(1, 1, 0.0), s.PlayDecisions);
+        Assert.Equal(4, s.DoubleDecisions.Submitted);
+        Assert.Equal(2, s.DoubleDecisions.Correct);
+        Assert.Equal(3, s.TakeDecisions.Submitted);
+        Assert.Equal(1, s.TakeDecisions.Correct);
+
+        Assert.Equal(s.PlayDecisions.Submitted + s.DoubleDecisions.Submitted, s.Total.Submitted);
+        Assert.Equal(5, s.Total.Submitted);
+        Assert.Equal(2, s.Total.Correct);
+        Assert.NotEqual(
+            s.PlayDecisions.Submitted + s.DoubleDecisions.Submitted + s.TakeDecisions.Submitted,
+            s.Total.Submitted);
+        Assert.NotEqual(
+            s.PlayDecisions.Correct + s.DoubleDecisions.Correct + s.TakeDecisions.Correct,
+            s.Total.Correct);
+    }
+
+    [Fact]
+    public void Total_ItsLossIsTheSumOfTheRowsLosses()
     {
         var s = QuizScore.Empty
             .Plus(Play(equityLoss: 0.02))
-            .Plus(Cube(doublerLoss: 0.03, doublerCorrect: false, takerLoss: 0.0, takerCorrect: true));
+            .Plus(AtDoubleTake(CubeAnswer.NoDoublePass))
+            .Plus(AtDoubleTake(CubeAnswer.NoDouble));
 
-        Assert.Equal(3, s.Total.Submitted);   // 1 play + 1 double + 1 take
-        Assert.Equal(1, s.Total.Correct);     // only the taker half was correct
-        Assert.Equal(0.05, s.Total.TotalEquityLoss, precision: 9);
+        Assert.Equal(
+            s.PlayDecisions.TotalEquityLoss + s.DoubleDecisions.TotalEquityLoss + s.TakeDecisions.TotalEquityLoss,
+            s.Total.TotalEquityLoss);
+        Assert.Equal(0.02 + 0.80 + 0.30, s.Total.TotalEquityLoss, precision: 12);
     }
 
     [Fact]
-    public void Total_IsDerived_ChangingASegmentChangesTotal()
+    public void Total_JudgesACubeAnswerOnItsWholeCost_NotOnItsPartsVerdicts()
+    {
+        // Both parts count as zero, the whole does not: right in both rows,
+        // wrong in the Total.
+        var s = QuizScore.Empty.Plus(TestSubmissions.PartsZeroWholeNot);
+
+        Assert.Equal(1, s.DoubleDecisions.Correct);
+        Assert.Equal(1, s.TakeDecisions.Correct);
+        Assert.Equal(1, s.Total.Submitted);
+        Assert.Equal(0, s.Total.Correct);
+    }
+
+    [Fact]
+    public void Total_IsDerived_FoldingAnAnswerMovesIt()
     {
         var before = QuizScore.Empty.Plus(Play(equityLoss: 0.04));
-        var after = before.Plus(Cube(doublerLoss: 0.06, doublerCorrect: false, takerLoss: 0.0, takerCorrect: true));
+        var after = before.Plus(AtDoubleTake(CubeAnswer.DoubleTake));
 
-        Assert.Equal(1, before.Total.Submitted);
-        Assert.Equal(3, after.Total.Submitted);
-        Assert.Equal(0.10, after.Total.TotalEquityLoss, precision: 9);
+        Assert.Equal(new ScoreSegment(1, 0, 0.04), before.Total);
+        Assert.Equal(new ScoreSegment(2, 1, 0.04), after.Total);
+    }
+
+    // -----------------------------------------------------------------------
+    //  Immutable, factory-only, value-equal
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void Plus_ReturnsANewScore_TheOriginalUnchanged()
+    {
+        var original = QuizScore.Empty;
+        var updated = original.Plus(Play(equityLoss: 0.05)).Plus(AtDoubleTake(CubeAnswer.DoubleTake));
+
+        Assert.NotSame(original, updated);
+        Assert.Equal(ScoreSegment.Empty, original.Total);
+        Assert.Equal(2, updated.Total.Submitted);
     }
 
     [Fact]
-    public void Plus_ReturnsNewInstance_OriginalUnchanged()
+    public void QuizScore_HasNoPublicConstructor_AndNoWith()
     {
-        var original = QuizScore.Empty;
-        var updated = original.Plus(Play(equityLoss: 0.05));
+        // The Total's correct count is held beside the rows; a public
+        // constructor or a record's `with` could state one the folds did not.
+        Assert.Empty(typeof(QuizScore).GetConstructors(BindingFlags.Public | BindingFlags.Instance));
+        Assert.Null(typeof(QuizScore).GetMethod("<Clone>$"));
+        Assert.All(
+            typeof(QuizScore).GetProperties(BindingFlags.Public | BindingFlags.Instance),
+            p => Assert.Null(p.SetMethod));
+    }
 
-        Assert.Equal(0, original.PlayDecisions.Submitted);
-        Assert.Equal(1, updated.PlayDecisions.Submitted);
-        Assert.NotSame(original, updated);
+    [Fact]
+    public void Equality_TheSameFolds_AreTheSameScore()
+    {
+        QuizScore Fold() => QuizScore.Empty
+            .Plus(Play(equityLoss: 0.02))
+            .Plus(AtDoubleTake(CubeAnswer.DoublePass))
+            .Plus(TestSubmissions.PartsZeroWholeNot);
+
+        var a = Fold();
+        var b = Fold();
+
+        Assert.NotSame(a, b);
+        Assert.Equal(a, b);
+        Assert.True(a == b);
+        Assert.False(a != b);
+        Assert.Equal(a.GetHashCode(), b.GetHashCode());
+    }
+
+    [Fact]
+    public void Equality_ADifferentRow_IsADifferentScore()
+    {
+        var a = QuizScore.Empty.Plus(AtDoubleTake(CubeAnswer.DoubleTake));
+        var b = QuizScore.Empty.Plus(AtDoubleTake(CubeAnswer.DoublePass));
+
+        Assert.NotEqual(a, b);
+        Assert.True(a != b);
+    }
+
+    [Fact]
+    public void Equality_TheSameRows_ButAnotherTotal_IsADifferentScore()
+    {
+        // Two sessions with identical rows whose Totals differ, because the
+        // Total's correct count is not in the rows. e is 2^-15, which counts as
+        // zero; 2e does not.
+        //   X: Too good at e below the cash (e, e), then Double / Take there
+        //      (0, 0) — one answer wholly correct.
+        //   Y: Double / Take where not doubling is e better (e, 0), then
+        //      Double / Pass at e below the cash (0, e) — two wholly correct.
+        const double e = TestSubmissions.ShowsAsZero;
+        var x = QuizScore.Empty
+            .Plus(TestSubmissions.PartsZeroWholeNot)
+            .Plus(TestSubmissions.Cube(CubeAnswer.DoubleTake, 0.5, 1.0 - e));
+        var y = QuizScore.Empty
+            .Plus(TestSubmissions.Cube(CubeAnswer.DoubleTake, 0.5 + e, 0.5))
+            .Plus(TestSubmissions.Cube(CubeAnswer.DoublePass, 0.5, 1.0 - e));
+
+        Assert.Equal(x.PlayDecisions, y.PlayDecisions);
+        Assert.Equal(new ScoreSegment(2, 2, e), x.DoubleDecisions);
+        Assert.Equal(x.DoubleDecisions, y.DoubleDecisions);
+        Assert.Equal(new ScoreSegment(2, 2, e), x.TakeDecisions);
+        Assert.Equal(x.TakeDecisions, y.TakeDecisions);
+
+        Assert.Equal(new ScoreSegment(2, 1, 2 * e), x.Total);
+        Assert.Equal(new ScoreSegment(2, 2, 2 * e), y.Total);
+        Assert.NotEqual(x, y);
+        Assert.True(x != y);
+    }
+
+    [Fact]
+    public void Equality_WithNull()
+    {
+        Assert.False(QuizScore.Empty.Equals(null));
+        Assert.False(QuizScore.Empty == null);
+        Assert.True((QuizScore?)null == null);
     }
 
     [Fact]
@@ -129,420 +311,6 @@ public class QuizScoreTests
     [Fact]
     public void PlusCube_Null_Throws()
     {
-        Assert.Throws<ArgumentNullException>(() => QuizScore.Empty.Plus((SubmittedCubeAction)null!));
-    }
-
-    // =====================================================================
-    //  Claim-vs-claim cube scoring (SPEC-scoring §3; halheinrich/backgammon#86)
-    // =====================================================================
-    //
-    // The fold below scores a submitted CubeClaimPair against the position's
-    // derived truth (CubeDecisionData.BestClaimPair) — the doubler half claim to
-    // claim, the taker half action to action. Every fixture here states the
-    // two equities and lets the producer derive the truth; nothing in this
-    // suite re-derives a claim.
-    //
-    //   BestDoublerAction = Double  iff min(E_DT, 1) > E_ND
-    //   BestTakerAction   = Take    iff E_DT < 1
-    //   BestDoublerClaim  = TooGood iff best action is NoDouble and E_ND > 1
-    //                                   and best taker action is Pass
-    //
-    // The third term is the 2026-09-02 amendment (halheinrich/backgammon#187):
-    // Too Good requires the pass, so (Too good, Take) is never derived as
-    // truth — it stays a submittable answer, scored like any other wrong
-    // claim.
-
-    private static CubeDecisionData CubeDecision(double noDoubleEquity, double doubleTakeEquity) =>
-        TestRecords.CubeData(noDoubleEquity: noDoubleEquity, doubleTakeEquity: doubleTakeEquity);
-
-    /// <summary>
-    /// The analysed decision whose derived truth is <paramref name="truth"/> —
-    /// one fixture per cell of <see cref="CubeClaimPair"/>'s closed 3×2 that
-    /// the producer derives. Four cells are the reachable verdicts off the
-    /// tie boundaries; the incoherent (No double, Pass) is reachable as truth
-    /// only ON the <c>NoDoubleEquity == 1</c> boundary, where the ruled
-    /// tie-breaks compose it (SPEC-scoring §3, amended 2026-09-01). The sixth
-    /// cell, (Too good, Take), has no fixture: since Too Good requires the
-    /// pass (amended 2026-09-02) no equities derive it, and asking for one is
-    /// a suite bug.
-    /// </summary>
-    private static CubeDecisionData TruthFixture(CubeClaimPair truth) =>
-        (truth.Claim, truth.Taker) switch
-        {
-            (CubeClaim.NoDouble, CubeAction.Take) => CubeDecision(0.20, 0.10),
-            (CubeClaim.Double,   CubeAction.Take) => CubeDecision(0.30, 0.60),
-            (CubeClaim.Double,   CubeAction.Pass) => CubeDecision(0.50, 1.20),
-            (CubeClaim.TooGood,  CubeAction.Pass) => CubeDecision(1.30, 1.50),
-            (CubeClaim.NoDouble, CubeAction.Pass) => CubeDecision(1.00, 1.20),
-            _ => throw new ArgumentOutOfRangeException(nameof(truth), truth,
-                "Not a CubeClaimPair cell the producer derives as truth."),
-        };
-
-    /// <summary>
-    /// XG's "Too good to double/Take" — playing on (1.10) beats being taken
-    /// (0.90) and the opponent takes. Its derived truth is No double / Take by
-    /// the 2026-09-02 ruling; it is the position that decided the amendment.
-    /// </summary>
-    private static CubeDecisionData PlayingOnBeatsBeingTaken => CubeDecision(1.10, 0.90);
-
-    /// <summary>The whole closed 3×2 of answers, in the ruled claim-axis order.</summary>
-    public static TheoryData<CubeClaim, CubeAction> AllAnswers => new()
-    {
-        { CubeClaim.NoDouble, CubeAction.Take },
-        { CubeClaim.NoDouble, CubeAction.Pass },
-        { CubeClaim.Double,   CubeAction.Take },
-        { CubeClaim.Double,   CubeAction.Pass },
-        { CubeClaim.TooGood,  CubeAction.Take },
-        { CubeClaim.TooGood,  CubeAction.Pass },
-    };
-
-    /// <summary>
-    /// The cells the producer derives as truth: the four reachable verdicts
-    /// plus the boundary-composed incoherent cell. <see cref="AllAnswers"/>
-    /// minus (Too good, Take).
-    /// </summary>
-    public static TheoryData<CubeClaim, CubeAction> AllTruths => new()
-    {
-        { CubeClaim.NoDouble, CubeAction.Take },
-        { CubeClaim.NoDouble, CubeAction.Pass },
-        { CubeClaim.Double,   CubeAction.Take },
-        { CubeClaim.Double,   CubeAction.Pass },
-        { CubeClaim.TooGood,  CubeAction.Pass },
-    };
-
-    private static SubmittedCubeAction Submit(CubeClaimPair truth, CubeClaimPair answer) =>
-        SubmittedCubeAction.From(problemKey: null, answer, TruthFixture(truth));
-
-    // ---------------------------------------------------------------------
-    //  Fixtures
-    // ---------------------------------------------------------------------
-
-    [Theory]
-    [MemberData(nameof(AllTruths))]
-    public void TruthFixtures_DeriveTheCellTheyAreIndexedBy(CubeClaim claim, CubeAction taker)
-    {
-        // A grid failure below can then never be mistaken for a mis-built
-        // fixture.
-        var cell = new CubeClaimPair(claim, taker);
-
-        Assert.Equal(cell, TruthFixture(cell).BestClaimPair);
-    }
-
-    [Fact]
-    public void PlayingOnBeatsBeingTakenFixture_DerivesNoDoubleTake()
-    {
-        // The retired verdict's former population derives No double / Take
-        // now (SPEC-scoring §3, amended 2026-09-02) — pinned so the scoring
-        // pin below cannot pass on a mis-built fixture.
-        Assert.Equal(CubeClaimPair.NoDoubleTake, PlayingOnBeatsBeingTaken.BestClaimPair);
-    }
-
-    // ---------------------------------------------------------------------
-    //  The 5×6 truth-vs-submission grid — five derivable truths, six answers
-    // ---------------------------------------------------------------------
-
-    /// <summary>
-    /// Every cell of the grid: which halves the fold counts correct when the
-    /// answered pair is submitted against the decision whose derived truth is
-    /// the truth pair. The diagonal is doubly correct; every off-diagonal
-    /// cell is wrong on exactly the halves that differ — including the two
-    /// no-double claims, which share a board action and are still
-    /// distinguished. The retired (Too good, Take) appears only as an answer:
-    /// no truth row exists for it, because no position derives it.
-    /// </summary>
-    [Theory]
-    // truth = (No double, Take)   — E_ND 0.20 / E_DT 0.10
-    [InlineData(CubeClaim.NoDouble, CubeAction.Take, CubeClaim.NoDouble, CubeAction.Take, true,  true)]
-    [InlineData(CubeClaim.NoDouble, CubeAction.Take, CubeClaim.NoDouble, CubeAction.Pass, true,  false)]
-    [InlineData(CubeClaim.NoDouble, CubeAction.Take, CubeClaim.Double,   CubeAction.Take, false, true)]
-    [InlineData(CubeClaim.NoDouble, CubeAction.Take, CubeClaim.Double,   CubeAction.Pass, false, false)]
-    [InlineData(CubeClaim.NoDouble, CubeAction.Take, CubeClaim.TooGood,  CubeAction.Take, false, true)]
-    [InlineData(CubeClaim.NoDouble, CubeAction.Take, CubeClaim.TooGood,  CubeAction.Pass, false, false)]
-    // truth = (Double, Take)      — E_ND 0.30 / E_DT 0.60
-    [InlineData(CubeClaim.Double,   CubeAction.Take, CubeClaim.NoDouble, CubeAction.Take, false, true)]
-    [InlineData(CubeClaim.Double,   CubeAction.Take, CubeClaim.NoDouble, CubeAction.Pass, false, false)]
-    [InlineData(CubeClaim.Double,   CubeAction.Take, CubeClaim.Double,   CubeAction.Take, true,  true)]
-    [InlineData(CubeClaim.Double,   CubeAction.Take, CubeClaim.Double,   CubeAction.Pass, true,  false)]
-    [InlineData(CubeClaim.Double,   CubeAction.Take, CubeClaim.TooGood,  CubeAction.Take, false, true)]
-    [InlineData(CubeClaim.Double,   CubeAction.Take, CubeClaim.TooGood,  CubeAction.Pass, false, false)]
-    // truth = (Double, Pass)      — E_ND 0.50 / E_DT 1.20
-    [InlineData(CubeClaim.Double,   CubeAction.Pass, CubeClaim.NoDouble, CubeAction.Take, false, false)]
-    [InlineData(CubeClaim.Double,   CubeAction.Pass, CubeClaim.NoDouble, CubeAction.Pass, false, true)]
-    [InlineData(CubeClaim.Double,   CubeAction.Pass, CubeClaim.Double,   CubeAction.Take, true,  false)]
-    [InlineData(CubeClaim.Double,   CubeAction.Pass, CubeClaim.Double,   CubeAction.Pass, true,  true)]
-    [InlineData(CubeClaim.Double,   CubeAction.Pass, CubeClaim.TooGood,  CubeAction.Take, false, false)]
-    [InlineData(CubeClaim.Double,   CubeAction.Pass, CubeClaim.TooGood,  CubeAction.Pass, false, true)]
-    // truth = (Too good, Pass)    — E_ND 1.30 / E_DT 1.50
-    [InlineData(CubeClaim.TooGood,  CubeAction.Pass, CubeClaim.NoDouble, CubeAction.Take, false, false)]
-    [InlineData(CubeClaim.TooGood,  CubeAction.Pass, CubeClaim.NoDouble, CubeAction.Pass, false, true)]
-    [InlineData(CubeClaim.TooGood,  CubeAction.Pass, CubeClaim.Double,   CubeAction.Take, false, false)]
-    [InlineData(CubeClaim.TooGood,  CubeAction.Pass, CubeClaim.Double,   CubeAction.Pass, false, true)]
-    [InlineData(CubeClaim.TooGood,  CubeAction.Pass, CubeClaim.TooGood,  CubeAction.Take, true,  false)]
-    [InlineData(CubeClaim.TooGood,  CubeAction.Pass, CubeClaim.TooGood,  CubeAction.Pass, true,  true)]
-    // truth = (No double, Pass)   — E_ND 1.00 / E_DT 1.20, the boundary-composed
-    //                               incoherent cell as derived truth
-    [InlineData(CubeClaim.NoDouble, CubeAction.Pass, CubeClaim.NoDouble, CubeAction.Take, true,  false)]
-    [InlineData(CubeClaim.NoDouble, CubeAction.Pass, CubeClaim.NoDouble, CubeAction.Pass, true,  true)]
-    [InlineData(CubeClaim.NoDouble, CubeAction.Pass, CubeClaim.Double,   CubeAction.Take, false, false)]
-    [InlineData(CubeClaim.NoDouble, CubeAction.Pass, CubeClaim.Double,   CubeAction.Pass, false, true)]
-    [InlineData(CubeClaim.NoDouble, CubeAction.Pass, CubeClaim.TooGood,  CubeAction.Take, false, false)]
-    [InlineData(CubeClaim.NoDouble, CubeAction.Pass, CubeClaim.TooGood,  CubeAction.Pass, false, true)]
-    public void PlusCube_ScoresEveryCellOfTheSubmissionVsTruthGrid(
-        CubeClaim truthClaim, CubeAction truthTaker,
-        CubeClaim answerClaim, CubeAction answerTaker,
-        bool doublerCorrect, bool takerCorrect)
-    {
-        var truth = new CubeClaimPair(truthClaim, truthTaker);
-        var answer = new CubeClaimPair(answerClaim, answerTaker);
-        var submission = Submit(truth, answer);
-
-        Assert.Equal(truth, submission.BestDecision);
-        Assert.Equal(doublerCorrect, submission.DoublerCorrect);
-        Assert.Equal(takerCorrect, submission.TakerCorrect);
-
-        var s = QuizScore.Empty.Plus(submission);
-
-        Assert.Equal(1, s.DoubleDecisions.Submitted);
-        Assert.Equal(doublerCorrect ? 1 : 0, s.DoubleDecisions.Correct);
-        Assert.Equal(1, s.TakeDecisions.Submitted);
-        Assert.Equal(takerCorrect ? 1 : 0, s.TakeDecisions.Correct);
-        Assert.Equal(ScoreSegment.Empty, s.PlayDecisions);
-    }
-
-    [Theory]
-    [MemberData(nameof(AllTruths))]
-    public void PlusCube_TheDiagonalIsFullyCorrectAtZeroLoss(CubeClaim claim, CubeAction taker)
-    {
-        // Answering a position with its own derived truth pair: both halves
-        // right, both equity losses zero. True of the boundary-composed
-        // incoherent cell too — it is the truth there, so it scores as one.
-        // (Too good, Take) has no diagonal cell: nothing derives it as truth.
-        var truth = new CubeClaimPair(claim, taker);
-        var s = QuizScore.Empty.Plus(Submit(truth, truth));
-
-        Assert.Equal(new ScoreSegment(Submitted: 1, Correct: 1, TotalEquityLoss: 0.0), s.DoubleDecisions);
-        Assert.Equal(new ScoreSegment(Submitted: 1, Correct: 1, TotalEquityLoss: 0.0), s.TakeDecisions);
-    }
-
-    // ---------------------------------------------------------------------
-    //  Right action, wrong reason — incorrect at +0.000
-    // ---------------------------------------------------------------------
-
-    /// <summary>
-    /// The two no-double claims share a board action, so swapping one for the
-    /// other leaves the doubler's equity untouched. The claim comparison
-    /// still scores it wrong: incorrect at +0.000, the ruled "right action,
-    /// wrong reason" verdict, with no partial-credit tier in between.
-    /// </summary>
-    [Theory]
-    // truth claim,                 truth taker,      answered claim
-    [InlineData(CubeClaim.NoDouble, CubeAction.Take, CubeClaim.TooGood)]
-    [InlineData(CubeClaim.TooGood,  CubeAction.Pass, CubeClaim.NoDouble)]
-    [InlineData(CubeClaim.NoDouble, CubeAction.Pass, CubeClaim.TooGood)]
-    public void PlusCube_WrongClaimOverTheRightAction_IsIncorrectAtZeroEquityLoss(
-        CubeClaim truthClaim, CubeAction truthTaker, CubeClaim answeredClaim)
-    {
-        var truth = new CubeClaimPair(truthClaim, truthTaker);
-        var submission = Submit(truth, new CubeClaimPair(answeredClaim, truthTaker));
-
-        Assert.Equal(
-            answeredClaim.ToCubeAction(),
-            TruthFixture(truth).BestDoublerAction);          // same board action ...
-        Assert.False(submission.DoublerCorrect);             // ... different claim
-        Assert.Equal(0.0, submission.DoublerEquityLoss);
-
-        var s = QuizScore.Empty.Plus(submission);
-
-        Assert.Equal(new ScoreSegment(Submitted: 1, Correct: 0, TotalEquityLoss: 0.0), s.DoubleDecisions);
-        Assert.Equal(new ScoreSegment(Submitted: 1, Correct: 1, TotalEquityLoss: 0.0), s.TakeDecisions);
-    }
-
-    [Fact]
-    public void PlusCube_RetiredTooGoodTakeAnswer_ScoresAsAnyOtherWrongClaim()
-    {
-        // The type keeps (Too good, Take) representable; the scoring must not
-        // special-case it. Submitted against the very position XG calls "Too
-        // good to double/Take" — No double / Take by the 2026-09-02 ruling —
-        // it is a wrong claim over the right board action: incorrect at
-        // +0.000 on the doubler half, right take on the taker half, the same
-        // segments any other wrong claim over the right action folds to.
-        var submission = SubmittedCubeAction.From(
-            problemKey: null, CubeClaimPair.TooGoodTake, PlayingOnBeatsBeingTaken);
-
-        Assert.Equal(CubeClaimPair.NoDoubleTake, submission.BestDecision);
-        Assert.False(submission.DoublerCorrect);
-        Assert.True(submission.TakerCorrect);
-        Assert.Equal(0.0, submission.DoublerEquityLoss);
-
-        var s = QuizScore.Empty.Plus(submission);
-
-        Assert.Equal(new ScoreSegment(Submitted: 1, Correct: 0, TotalEquityLoss: 0.0), s.DoubleDecisions);
-        Assert.Equal(new ScoreSegment(Submitted: 1, Correct: 1, TotalEquityLoss: 0.0), s.TakeDecisions);
-    }
-
-    [Fact]
-    public void PlusCube_WrongClaimOverTheWrongAction_StillCostsEquity()
-    {
-        // The +0.000 above is a property of the shared board action, not of
-        // wrong claims generally: doubling a (No double, Take) position costs
-        // the E_ND - min(E_DT, 1) gap.
-        var submission = Submit(CubeClaimPair.NoDoubleTake, CubeClaimPair.DoubleTake);
-
-        Assert.False(submission.DoublerCorrect);
-        Assert.Equal(0.10, submission.DoublerEquityLoss, precision: 9);
-
-        var s = QuizScore.Empty.Plus(submission);
-
-        Assert.Equal(0, s.DoubleDecisions.Correct);
-        Assert.Equal(0.10, s.DoubleDecisions.TotalEquityLoss, precision: 9);
-    }
-
-    // ---------------------------------------------------------------------
-    //  The taker half is independent of the claim
-    // ---------------------------------------------------------------------
-
-    [Theory]
-    [InlineData(CubeAction.Take)]
-    [InlineData(CubeAction.Pass)]
-    public void PlusCube_TakerHalfIsUnaffectedByTheClaim(CubeAction answeredTaker)
-    {
-        // One truth, one taker answer, all three claims: the take segment is
-        // identical every time — only the double segment moves.
-        var truth = CubeClaimPair.DoublePass;
-        ScoreSegment[] takeSegments =
-        [
-            .. new[] { CubeClaim.NoDouble, CubeClaim.Double, CubeClaim.TooGood }
-                .Select(claim => QuizScore.Empty
-                    .Plus(Submit(truth, new CubeClaimPair(claim, answeredTaker)))
-                    .TakeDecisions)
-        ];
-
-        Assert.Equal(3, takeSegments.Length);
-        Assert.All(takeSegments, seg => Assert.Equal(takeSegments[0], seg));
-        Assert.Equal(answeredTaker == truth.Taker ? 1 : 0, takeSegments[0].Correct);
-        Assert.Equal(answeredTaker == truth.Taker ? 0.0 : 0.20, takeSegments[0].TotalEquityLoss, precision: 9);
-    }
-
-    // ---------------------------------------------------------------------
-    //  The incoherent cell — (No double, Pass)
-    // ---------------------------------------------------------------------
-
-    [Fact]
-    public void PlusCube_IncoherentAnswer_IsSubmittableAndSimplyWrong()
-    {
-        // "Not good enough to double, yet they'd pass": representable and
-        // submittable by ruling (SPEC-scoring §3 — the axes are not
-        // cross-disabled), and scored by the same claim-vs-claim rule as any
-        // other answer. Against a (Double, Take) truth both halves differ.
-        var answer = CubeClaimPair.NoDoublePass;
-        Assert.True(answer.IsIncoherent);
-
-        var submission = Submit(CubeClaimPair.DoubleTake, answer);
-        var s = QuizScore.Empty.Plus(submission);
-
-        Assert.False(submission.DoublerCorrect);
-        Assert.False(submission.TakerCorrect);
-        Assert.Equal(1, s.DoubleDecisions.Submitted);
-        Assert.Equal(0, s.DoubleDecisions.Correct);
-        Assert.Equal(1, s.TakeDecisions.Submitted);
-        Assert.Equal(0, s.TakeDecisions.Correct);
-    }
-
-    [Fact]
-    public void PlusCube_IncoherentAnswer_AgainstTheBoundaryComposedTruth_IsFullyCorrect()
-    {
-        // The one place (No double, Pass) is right: E_ND == 1 with E_DT >= 1,
-        // where the ruled tie-breaks (No Double; Pass) compose it as the
-        // derived truth (SPEC-scoring §3, amended 2026-09-01). The doubler
-        // half is equity-tied there, so the claim comparison — not the
-        // equity — is what makes this cell the correct answer and the other
-        // two claims wrong.
-        var boundary = TruthFixture(CubeClaimPair.NoDoublePass);
-        Assert.Equal(CubeClaimPair.NoDoublePass, boundary.BestClaimPair);
-
-        var s = QuizScore.Empty.Plus(Submit(CubeClaimPair.NoDoublePass, CubeClaimPair.NoDoublePass));
-
-        Assert.Equal(new ScoreSegment(Submitted: 1, Correct: 1, TotalEquityLoss: 0.0), s.DoubleDecisions);
-        Assert.Equal(new ScoreSegment(Submitted: 1, Correct: 1, TotalEquityLoss: 0.0), s.TakeDecisions);
-    }
-
-    [Theory]
-    [MemberData(nameof(AllAnswers))]
-    public void PlusCube_AtTheDoublerTie_EveryClaimCostsZeroButOnlyOneIsCorrect(
-        CubeClaim claim, CubeAction taker)
-    {
-        // E_ND == 1 == min(E_DT, 1): all three claims are equity-identical on
-        // the doubler half, so "score-neutral" there is an equity statement
-        // only — the verdict still discriminates, which is the whole point of
-        // the claim layer. The taker half is NOT tied at this fixture
-        // (E_DT 1.20), so it keeps costing 0.20 for a Take.
-        var submission = Submit(CubeClaimPair.NoDoublePass, new CubeClaimPair(claim, taker));
-        var s = QuizScore.Empty.Plus(submission);
-
-        Assert.Equal(0.0, s.DoubleDecisions.TotalEquityLoss);
-        Assert.Equal(claim == CubeClaim.NoDouble ? 1 : 0, s.DoubleDecisions.Correct);
-        Assert.Equal(taker == CubeAction.Pass ? 0.0 : 0.20, s.TakeDecisions.TotalEquityLoss, precision: 9);
-    }
-
-    [Theory]
-    [MemberData(nameof(AllAnswers))]
-    public void PlusCube_AtTheFullyTiedBoundary_EveryAnswerCostsZeroOnBothHalves(
-        CubeClaim claim, CubeAction taker)
-    {
-        // E_ND == 1 AND E_DT == 1: both halves tie, so the spec's
-        // measure-zero "every answer there costs +0.000" holds literally
-        // across all six cells. Only (No double, Pass) is scored correct even
-        // so.
-        var decision = CubeDecision(1.00, 1.00);
-        Assert.Equal(CubeClaimPair.NoDoublePass, decision.BestClaimPair);
-
-        var submission = SubmittedCubeAction.From(
-            problemKey: null, new CubeClaimPair(claim, taker), decision);
-        var s = QuizScore.Empty.Plus(submission);
-
-        Assert.Equal(0.0, s.DoubleDecisions.TotalEquityLoss);
-        Assert.Equal(0.0, s.TakeDecisions.TotalEquityLoss);
-        Assert.Equal(claim == CubeClaim.NoDouble ? 1 : 0, s.DoubleDecisions.Correct);
-        Assert.Equal(taker == CubeAction.Pass ? 1 : 0, s.TakeDecisions.Correct);
-    }
-
-    // ---------------------------------------------------------------------
-    //  SubmittedCubeAction.From — the producer read
-    // ---------------------------------------------------------------------
-
-    [Fact]
-    public void From_TakesTruthAndBothLossesFromTheProducer()
-    {
-        var decision = CubeDecision(1.30, 1.50);   // (Too good, Pass)
-        var answer = new CubeClaimPair(CubeClaim.Double, CubeAction.Take);
-
-        var submission = SubmittedCubeAction.From(problemKey: null, answer, decision);
-
-        Assert.Equal(answer, submission.UserDecision);
-        Assert.Equal(decision.BestClaimPair, submission.BestDecision);
-        Assert.Equal(decision.DoublerActionError(CubeAction.Double), submission.DoublerEquityLoss);
-        Assert.Equal(decision.TakerActionError(CubeAction.Take), submission.TakerEquityLoss);
-    }
-
-    [Fact]
-    public void From_CollapsesTheClaimToItsBoardActionForTheEquityRead()
-    {
-        // A TooGood claim's doubler equity is NoDouble's — the single-sourced
-        // collapse (CubeClaimExtensions.ToCubeAction), never re-spelled here.
-        var decision = CubeDecision(0.20, 0.10);   // (No double, Take)
-
-        var tooGood = SubmittedCubeAction.From(
-            problemKey: null, new CubeClaimPair(CubeClaim.TooGood, CubeAction.Take), decision);
-
-        Assert.Equal(decision.DoublerActionError(CubeAction.NoDouble), tooGood.DoublerEquityLoss);
-        Assert.Equal(0.0, tooGood.DoublerEquityLoss);
-        Assert.False(tooGood.DoublerCorrect);
-    }
-
-    [Fact]
-    public void From_NullDecision_Throws()
-    {
-        Assert.Throws<ArgumentNullException>(() =>
-            SubmittedCubeAction.From(problemKey: null, CubeClaimPair.DoubleTake, null!));
+        Assert.Throws<ArgumentNullException>(() => QuizScore.Empty.Plus((SubmittedCubeAnswer)null!));
     }
 }

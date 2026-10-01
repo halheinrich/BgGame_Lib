@@ -145,11 +145,13 @@ public class PlaySubmissionTests
     }
 
     [Fact]
-    public void Score_ATinyNonzeroError_IsIncorrect()
+    public void Score_ATinyNonzeroError_IsCorrect_AndKeptExact()
     {
-        // Correct is an error of exactly 0 (SPEC-scoring §2a); the threshold
-        // question of halheinrich/backgammon#202 is pending and changes
-        // SubmittedPlay.IsCorrect alone when it lands.
+        // Correct is an error that displays as 0.0000 (SPEC-scoring §2a;
+        // halheinrich/backgammon#202, folded into halheinrich/backgammon#326),
+        // so a nonzero error below the display's precision scores correct.
+        // The error itself is kept as the ranking derives it. The boundary is
+        // pinned in CorrectnessTests.
         var decision = TestRecords.CheckerPlay(decision: TestRecords.CheckerPlayData(plays:
         [
             TestRecords.Candidate(play: EightFiveSixFive, equity: 0.1),
@@ -159,7 +161,8 @@ public class PlaySubmissionTests
         var submitted = Scored(PlaySubmission.Score(ThirteenTenSixFive, decision, PlayRanking.Equity));
 
         Assert.True(submitted.EquityLoss > 0.0);
-        Assert.False(submitted.IsCorrect);
+        Assert.Equal(decision.Decision.RankedBy(PlayRanking.Equity).ForCandidate(1).Error, submitted.EquityLoss);
+        Assert.True(submitted.IsCorrect);
     }
 
     [Fact]
@@ -197,8 +200,8 @@ public class PlaySubmissionTests
     public void Score_EveryCandidate_AgreesWithTheRankingAndCannotDisagreeWithItself(PlayRanking ranking)
     {
         // For every candidate: a scored one carries the ranking's error, and
-        // is correct exactly when that error is 0; a not-scored one has no
-        // error under the ranking.
+        // is correct exactly when that error counts as zero; a not-scored one
+        // has no error under the ranking.
         var decision = TwoDepths;
         var ranked = decision.Decision.RankedBy(ranking);
 
@@ -211,7 +214,7 @@ public class PlaySubmissionTests
                 var submitted = Scored(submission);
                 Assert.Equal(i, submitted.MatchedCandidateIndex);
                 Assert.Equal(error, submitted.EquityLoss);
-                Assert.Equal(error == 0.0, submitted.IsCorrect);
+                Assert.Equal(EquityLoss.CountsAsZero(error), submitted.IsCorrect);
             }
             else
             {

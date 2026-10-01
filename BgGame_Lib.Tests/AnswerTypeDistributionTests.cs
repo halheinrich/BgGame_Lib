@@ -5,39 +5,37 @@ using BgDataTypes_Lib.TestSupport;
 
 public class AnswerTypeDistributionTests
 {
-    // A cube decision's best claim pair is derived from its two equities, not
-    // stated directly (the producer's one derivation site — SPEC-scoring §3,
-    // amended 2026-09-02: Too Good requires the pass):
-    //
-    //   BestDoublerAction = Double  iff min(E_DT, 1) > E_ND
-    //   BestTakerAction   = Take    iff E_DT < 1
-    //   BestDoublerClaim  = TooGood iff best action is NoDouble and E_ND > 1
-    //                                   and best taker action is Pass
-    //
-    // The values below sit off the tie boundaries so each pair is unambiguous
-    // — except Boundary, which sits ON the E_ND == 1 tie deliberately: the
-    // ruled tie-breaks compose the incoherent (NoDouble, Pass) pair there,
-    // and its classification is a ruled mapping this suite pins. Fixture_*
-    // pins that the fixtures really do produce the intended pairs, so a
-    // bucketing failure can never be mistaken for a mis-built fixture.
+    // A cube decision's truth is the producer's, derived from its two
+    // equities (CubeDecisionData.BestAnswer, SPEC-scoring §3 as amended on
+    // halheinrich/backgammon#326), never stated directly. The values below sit
+    // off the boundaries so each truth is unambiguous — except Tie, which sits
+    // ON the no-double-equals-the-cash tie of halheinrich/backgammon#293
+    // deliberately, where the truth is the fourth answer though more than one
+    // answer costs nothing. Fixtures_* pins that the fixtures really do
+    // derive the intended truths, so a bucketing failure can never be
+    // mistaken for a mis-built fixture.
 
-    private static CubeDecision Cube(double noDoubleEquity, double doubleTakeEquity) =>
-        TestRecords.Cube(decision: TestRecords.CubeData(
-            noDoubleEquity: noDoubleEquity, doubleTakeEquity: doubleTakeEquity));
+    private static CubeDecision Cube(double noDoubleEquity, double doubleTakeEquity, PositionData? position = null) =>
+        TestSubmissions.CubeRecord(noDoubleEquity, doubleTakeEquity, position);
 
     private static CheckerPlayDecision Play => TestRecords.CheckerPlay();
-    private static CubeDecision NoDoubleTake => Cube(0.20, 0.10);
+    private static CubeDecision NoDouble => Cube(0.20, 0.10);
     private static CubeDecision DoubleTake => Cube(0.30, 0.60);
     private static CubeDecision DoublePass => Cube(0.50, 1.20);
-    private static CubeDecision TooGoodPass => Cube(1.30, 1.50);
-    private static CubeDecision Boundary => Cube(1.00, 1.20);
+    private static CubeDecision NoDoublePass => Cube(1.30, 1.50);
+    private static CubeDecision Tie => Cube(1.00, 1.20);
 
     /// <summary>
-    /// Playing on beats being taken (E_ND above the cash) yet the opponent
-    /// would take: XG's "Too good to double/Take", the position the
-    /// 2026-09-02 amendment ruled on. Its derived truth is No double / Take —
-    /// the <c>TooGoodTake</c> fixture of the five-bucket era, kept under the
-    /// name of what it derives now.
+    /// The fourth answer's truth where gammons are not possible, so it reads
+    /// No double / Pass rather than Too good: the bucket is the answer's
+    /// meaning, whichever label it reads.
+    /// </summary>
+    private static CubeDecision NoDoublePassWithoutGammons => Cube(1.00, 1.20, TestSubmissions.NoGammons);
+
+    /// <summary>
+    /// Playing on beats being taken (N above the cash) yet the opponent would
+    /// take: XG's "Too good to double/Take", which the 2026-09-02 amendment
+    /// ruled No double / Take.
     /// </summary>
     private static CubeDecision PlayingOnBeatsBeingTaken => Cube(1.10, 0.90);
 
@@ -47,17 +45,14 @@ public class AnswerTypeDistributionTests
     /// </summary>
     private static void AssertBuckets(
         AnswerTypeDistribution d,
-        int checkerPlays, int noDoubleTake, int doubleTake, int doublePass,
-        int tooGoodPass)
+        int checkerPlays, int noDouble, int doubleTake, int doublePass, int noDoublePass)
     {
         Assert.Equal(checkerPlays, d.CheckerPlays);
-        Assert.Equal(noDoubleTake, d.NoDoubleTake);
+        Assert.Equal(noDouble, d.NoDouble);
         Assert.Equal(doubleTake, d.DoubleTake);
         Assert.Equal(doublePass, d.DoublePass);
-        Assert.Equal(tooGoodPass, d.TooGoodPass);
-        Assert.Equal(
-            checkerPlays + noDoubleTake + doubleTake + doublePass + tooGoodPass,
-            d.Total);
+        Assert.Equal(noDoublePass, d.NoDoublePass);
+        Assert.Equal(checkerPlays + noDouble + doubleTake + doublePass + noDoublePass, d.Total);
     }
 
     private static AnswerTypeDistribution Fold(params BgDecisionData[] pool) =>
@@ -68,35 +63,38 @@ public class AnswerTypeDistributionTests
     // ---------------------------------------------------------------------
 
     [Fact]
-    public void Fixtures_ProduceTheFourIntendedVerdictPairs()
+    public void Fixtures_DeriveTheFourTruths()
     {
-        Assert.Equal(CubeClaimPair.NoDoubleTake, NoDoubleTake.Decision.BestClaimPair);
-        Assert.Equal(CubeClaimPair.DoubleTake, DoubleTake.Decision.BestClaimPair);
-        Assert.Equal(CubeClaimPair.DoublePass, DoublePass.Decision.BestClaimPair);
-        Assert.Equal(CubeClaimPair.TooGoodPass, TooGoodPass.Decision.BestClaimPair);
+        Assert.Equal(CubeAnswer.NoDouble, NoDouble.Decision.BestAnswer);
+        Assert.Equal(CubeAnswer.DoubleTake, DoubleTake.Decision.BestAnswer);
+        Assert.Equal(CubeAnswer.DoublePass, DoublePass.Decision.BestAnswer);
+        Assert.Equal(CubeAnswer.NoDoublePass, NoDoublePass.Decision.BestAnswer);
     }
 
     [Fact]
-    public void PlayingOnBeatsBeingTakenFixture_DerivesNoDoubleTake_NotTooGoodTake()
+    public void TieFixture_DerivesTheFourthAnswer_WhileMoreThanOneAnswerCostsNothing()
     {
-        // The amendment's own case (SPEC-scoring §3, 2026-09-02): a no-double
-        // equity above the cash does not make a position too good when the
-        // opponent would take. The producer derives No double / Take, and
-        // the retired pair is never derived — pinned here so the landing
-        // test below cannot pass by accident of a mis-built fixture.
-        Assert.Equal(CubeClaimPair.NoDoubleTake, PlayingOnBeatsBeingTaken.Decision.BestClaimPair);
-        Assert.NotEqual(CubeClaimPair.TooGoodTake, PlayingOnBeatsBeingTaken.Decision.BestClaimPair);
+        // At N exactly 1 with a pass, No double, Double / Pass and the fourth
+        // answer all cost 0 (SPEC-scoring §3); the truth, the single
+        // representative, is the fourth answer.
+        Assert.Equal(CubeAnswer.NoDoublePass, Tie.Decision.BestAnswer);
+        Assert.Equal(0.0, Tie.CostOf(CubeAnswer.NoDouble).Total);
+        Assert.Equal(0.0, Tie.CostOf(CubeAnswer.DoublePass).Total);
+        Assert.Equal(0.0, Tie.CostOf(CubeAnswer.NoDoublePass).Total);
     }
 
     [Fact]
-    public void BoundaryFixture_ComposesTheIncoherentPair()
+    public void LabelFixtures_ReadTheFourthAnswerUnderBothItsLabels()
     {
-        // E_ND == 1 exactly with E_DT >= 1: both halves tie and the ruled
-        // tie-breaks compose (NoDouble, Pass) — the one reachable route to
-        // the sixth cell as derived truth (SPEC-scoring §3, amended
-        // 2026-09-01 at leg 1's landing).
-        Assert.Equal(CubeClaimPair.NoDoublePass, Boundary.Decision.BestClaimPair);
-        Assert.True(Boundary.Decision.BestClaimPair.IsIncoherent);
+        Assert.Equal(CubeClaim.TooGood, NoDoublePass.ClaimOf(NoDoublePass.Decision.BestAnswer));
+        Assert.Equal(CubeAnswer.NoDoublePass, NoDoublePassWithoutGammons.Decision.BestAnswer);
+        Assert.Equal(CubeClaim.NoDouble, NoDoublePassWithoutGammons.ClaimOf(CubeAnswer.NoDoublePass));
+    }
+
+    [Fact]
+    public void PlayingOnBeatsBeingTakenFixture_DerivesNoDouble()
+    {
+        Assert.Equal(CubeAnswer.NoDouble, PlayingOnBeatsBeingTaken.Decision.BestAnswer);
     }
 
     // ---------------------------------------------------------------------
@@ -119,7 +117,7 @@ public class AnswerTypeDistributionTests
     }
 
     // ---------------------------------------------------------------------
-    //  Classification — one decision of each kind
+    //  Classification — one decision of each kind, by its truth
     // ---------------------------------------------------------------------
 
     [Fact]
@@ -129,56 +127,55 @@ public class AnswerTypeDistributionTests
     }
 
     [Fact]
-    public void Add_NoDoubleTakeCube_LandsInNoDoubleTake()
+    public void Add_NoDoubleTruth_LandsInNoDouble()
     {
-        AssertBuckets(Fold(NoDoubleTake), 0, 1, 0, 0, 0);
+        AssertBuckets(Fold(NoDouble), 0, 1, 0, 0, 0);
     }
 
     [Fact]
-    public void Add_DoubleTakeCube_LandsInDoubleTake()
+    public void Add_DoubleTakeTruth_LandsInDoubleTake()
     {
         AssertBuckets(Fold(DoubleTake), 0, 0, 1, 0, 0);
     }
 
     [Fact]
-    public void Add_DoublePassCube_LandsInDoublePass()
+    public void Add_DoublePassTruth_LandsInDoublePass()
     {
         AssertBuckets(Fold(DoublePass), 0, 0, 0, 1, 0);
     }
 
     [Fact]
-    public void Add_TooGoodPassCube_LandsInTooGoodPass()
+    public void Add_TheFourthAnswersTruth_LandsInNoDoublePass_UnderEitherLabel()
     {
-        AssertBuckets(Fold(TooGoodPass), 0, 0, 0, 0, 1);
+        // The bucket is named by the answer's meaning, "don't double, they'd
+        // pass": Too good where gammons are possible, No double / Pass where
+        // they are not, one bucket.
+        AssertBuckets(Fold(NoDoublePass), 0, 0, 0, 0, 1);
+        AssertBuckets(Fold(NoDoublePassWithoutGammons), 0, 0, 0, 0, 1);
     }
 
     [Fact]
-    public void Add_PlayingOnBeatsBeingTakenCube_LandsInNoDoubleTake()
+    public void Add_TheTie_LandsInTheFourthAnswer_Once()
     {
-        // The retired bucket's whole former population: between the
-        // halheinrich/backgammon#86 leg and the 2026-09-02 amendment this
-        // position filed under TooGoodTake; it is No double / Take by ruling
-        // now (halheinrich/backgammon#187). AssertBuckets pins every other
-        // bucket at 0, so any other housing would fail here by name.
+        // The halheinrich/backgammon#293 tie is classified by its truth, the
+        // fourth answer ("(No Double, Pass) is just too good"), and counts
+        // once, though three answers are correct there.
+        AssertBuckets(Fold(Tie), 0, 0, 0, 0, 1);
+    }
+
+    [Fact]
+    public void Add_PlayingOnBeatsBeingTaken_LandsInNoDouble()
+    {
+        // By the 2026-09-02 ruling the fourth answer requires the pass, so a
+        // position the opponent would take is No double whatever the
+        // no-double equity.
         AssertBuckets(Fold(PlayingOnBeatsBeingTaken), 0, 1, 0, 0, 0);
     }
 
     [Fact]
-    public void Add_BoundaryIncoherentPair_LandsInTooGoodPass()
+    public void AllFourTruths_AreDistinguished()
     {
-        // "(No Double, Pass) is just too good" (SPEC-scoring §3, ruled
-        // 2026-09-01): the boundary-composed incoherent best pair houses in
-        // the Too Good bucket, pass side — the too-good posture's degenerate
-        // point, not a sixth bucket, and never a dropped or throwing cell.
-        AssertBuckets(Fold(Boundary), 0, 0, 0, 0, 1);
-    }
-
-    [Fact]
-    public void AllFourCubeVerdicts_AreDistinguished()
-    {
-        AssertBuckets(
-            Fold(NoDoubleTake, DoubleTake, DoublePass, TooGoodPass),
-            0, 1, 1, 1, 1);
+        AssertBuckets(Fold(NoDouble, DoubleTake, DoublePass, NoDoublePass), 0, 1, 1, 1, 1);
     }
 
     // ---------------------------------------------------------------------
@@ -186,11 +183,12 @@ public class AnswerTypeDistributionTests
     // ---------------------------------------------------------------------
 
     [Fact]
-    public void CubeDecision_CountsOnce_NotOncePerHalf()
+    public void ACubeDecision_CountsOnce_HoweverItsAnswersAreScored()
     {
-        // Deliberately unlike QuizScore / ProblemStats, where a cube position
-        // folds as two scored decisions. Pool membership counts rows.
+        // Deliberately unlike QuizScore and ProblemStats, where a cube answer
+        // is up to three decisions or two. Pool membership counts rows.
         Assert.Equal(1, Fold(DoubleTake).Total);
+        Assert.Equal(1, Fold(Tie).Total);
     }
 
     [Fact]
@@ -198,14 +196,14 @@ public class AnswerTypeDistributionTests
     {
         BgDecisionData[] pool =
         [
-            Play, NoDoubleTake, DoubleTake, DoublePass, TooGoodPass, PlayingOnBeatsBeingTaken,
-            Play, DoublePass, DoublePass, Boundary,
+            Play, NoDouble, DoubleTake, DoublePass, NoDoublePass, PlayingOnBeatsBeingTaken,
+            Play, DoublePass, DoublePass, Tie, NoDoublePassWithoutGammons,
         ];
 
         var d = Fold(pool);
 
         Assert.Equal(pool.Length, d.Total);
-        AssertBuckets(d, 2, 2, 1, 3, 2);
+        AssertBuckets(d, 2, 2, 1, 3, 3);
     }
 
     [Fact]
@@ -213,7 +211,7 @@ public class AnswerTypeDistributionTests
     {
         var start = Fold(Play);
 
-        var next = start.Add(TooGoodPass);
+        var next = start.Add(NoDoublePass);
 
         AssertBuckets(start, 1, 0, 0, 0, 0);
         AssertBuckets(next, 1, 0, 0, 0, 1);
@@ -251,10 +249,10 @@ public class AnswerTypeDistributionTests
     public void OperatorPlus_MatchesSequentialAdds()
     {
         var sequential = Fold(
-            Play, Play, NoDoubleTake, DoubleTake, DoublePass, TooGoodPass, PlayingOnBeatsBeingTaken);
+            Play, Play, NoDouble, DoubleTake, DoublePass, NoDoublePass, PlayingOnBeatsBeingTaken);
 
-        var a = Fold(Play, NoDoubleTake, DoubleTake);
-        var b = Fold(Play, DoublePass, TooGoodPass, PlayingOnBeatsBeingTaken);
+        var a = Fold(Play, NoDouble, DoubleTake);
+        var b = Fold(Play, DoublePass, NoDoublePass, PlayingOnBeatsBeingTaken);
 
         Assert.Equal(sequential, a + b);
     }

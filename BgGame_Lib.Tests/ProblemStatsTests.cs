@@ -18,9 +18,10 @@ public class ProblemStatsTests
     private static readonly DateTimeOffset T1 = new(2026, 7, 18, 12, 0, 0, TimeSpan.Zero);
     private static readonly DateTimeOffset T2 = new(2026, 7, 19, 12, 0, 0, TimeSpan.Zero);
 
-    // Scored as production scores it; correct exactly when the error is 0. A
-    // play's key is its record's, so each helper builds the problem whose key
-    // it folds under: Play's spells Key, OtherPlay's OtherKey.
+    // Scored as production scores it; correct exactly when the error counts as
+    // zero. A submission's key is its record's, so each helper builds the
+    // problem whose key it folds under: Play's spells Key, OtherPlay's
+    // OtherKey, Cube's CubeKey, OtherCube's another cube key.
     private static SubmittedPlay Play(double equityLoss) =>
         TestSubmissions.Play(equityLoss);
 
@@ -33,19 +34,19 @@ public class ProblemStatsTests
                 session: TestRecords.MatchSession(onRollNeeds: 5, opponentNeeds: 3)),
             dice: [6, 5]);
 
-    // Per-half correctness is derived from the answer/truth pair rather than
-    // stated, so this helper composes pairs that realize the requested
-    // verdicts: the truth is always (Double, Take) and each half of the
-    // answer either matches it or is bent away from it. What this suite
-    // asserts — how a cube submission accumulates — is unchanged by that.
-    private static SubmittedCubeAction Cube(
-        ProblemKey? key, double doublerLoss, bool doublerCorrect, double takerLoss, bool takerCorrect) =>
-        new(key,
-            new CubeClaimPair(
-                doublerCorrect ? CubeClaim.Double : CubeClaim.NoDouble,
-                takerCorrect ? CubeAction.Take : CubeAction.Pass),
-            CubeClaimPair.DoubleTake,
-            DoublerEquityLoss: doublerLoss, TakerEquityLoss: takerLoss);
+    /// <summary>
+    /// <paramref name="answer"/> scored at the standard start, 7-away/7-away,
+    /// the cube centred on 1 — the problem <see cref="CubeKey"/> spells —
+    /// where gammons are possible, at a decision with the given equities.
+    /// </summary>
+    private static SubmittedCubeAnswer Cube(CubeAnswer answer, double noDoubleEquity, double doubleTakeEquity) =>
+        TestSubmissions.Cube(answer, noDoubleEquity, doubleTakeEquity, TestRecords.Position());
+
+    /// <summary><paramref name="answer"/> at another cube problem: the standard start at 5-away/3-away.</summary>
+    private static SubmittedCubeAnswer OtherCube(CubeAnswer answer) =>
+        TestSubmissions.Cube(
+            answer, 0.30, 0.60,
+            TestRecords.Position(session: TestRecords.MatchSession(onRollNeeds: 5, opponentNeeds: 3)));
 
     [Fact]
     public void FromPlay_Correct_OneSubmittedOneCorrectNoLoss()
@@ -69,64 +70,78 @@ public class ProblemStatsTests
         Assert.Equal(1, s.Wrong);
     }
 
+    // ---------------------------------------------------------------------
+    //  A cube answer adds two decisions (SPEC-scoring §3, 2026-10-01; v3 kept)
+    // ---------------------------------------------------------------------
+
     [Fact]
-    public void FromCube_BothHalvesCorrect_CountsTwoCorrectDecisions()
+    public void Fixtures_EachCubeAnswerCarriesTheKeyItsProblemSpells()
     {
-        var s = ProblemStats.From(
-            Cube(CubeKey, doublerLoss: 0.0, doublerCorrect: true, takerLoss: 0.0, takerCorrect: true), T1);
+        // So a key assertion below can never pass on a mis-built fixture.
+        Assert.Equal(CubeKey, Cube(CubeAnswer.DoubleTake, 0.30, 0.60).ProblemKey);
+        Assert.NotEqual(CubeKey, OtherCube(CubeAnswer.DoubleTake).ProblemKey);
+    }
+
+    /// <summary>
+    /// Every answer at a Double / Take truth (N +0.30, T +0.60), gammons
+    /// possible, adds two decisions: the doubling half and the take half, each
+    /// correct when its part counts as zero, and the whole cost as the loss.
+    /// The parts: No double (0.30, 0); Double / Take (0, 0); Double / Pass
+    /// (0, 0.40); Too good (0.40, 0.40).
+    /// </summary>
+    [Theory]
+    [InlineData(CubeAnswer.NoDouble, 1, 0.30)]
+    [InlineData(CubeAnswer.DoubleTake, 2, 0.0)]
+    [InlineData(CubeAnswer.DoublePass, 1, 0.40)]
+    [InlineData(CubeAnswer.NoDoublePass, 0, 0.80)]
+    public void FromCube_EveryAnswer_AddsTwoDecisions_EachHalfJudgedOnItsPart(
+        CubeAnswer answer, int correct, double loss)
+    {
+        var cube = Cube(answer, 0.30, 0.60);
+
+        var s = ProblemStats.From(cube, T1);
 
         Assert.Equal(CubeKey, s.Key);
-        Assert.Equal(new ScoreSegment(Submitted: 2, Correct: 2, TotalEquityLoss: 0.0), s.Tally);
+        Assert.Equal(2, s.Tally.Submitted);
+        Assert.Equal(correct, s.Tally.Correct);
+        Assert.Equal((cube.IsDoublingPartCorrect ? 1 : 0) + (cube.IsTakePartCorrect ? 1 : 0), s.Tally.Correct);
+        Assert.Equal(cube.Cost.Total, s.Tally.TotalEquityLoss);
+        Assert.Equal(loss, s.Tally.TotalEquityLoss, precision: 12);
+        Assert.Equal(T1, s.LastQuizzed);
     }
 
     [Theory]
-    [InlineData(0.05, false, 0.00, true)]   // doubler half wrong
-    [InlineData(0.00, true, 0.08, false)]   // taker half wrong
-    public void FromCube_OneHalfWrong_CountsOneOfTwo_LossSumsBothHalves(
-        double doublerLoss, bool doublerCorrect, double takerLoss, bool takerCorrect)
+    [InlineData(0.30, 0.60)]   // Double / Take is right: the implied take is right
+    [InlineData(0.50, 1.20)]   // Double / Pass is right: the implied take would be wrong
+    public void FromCube_NoDouble_StillAddsTwo_ItsTakeHalfACorrectZero(double noDoubleEquity, double doubleTakeEquity)
     {
-        var s = ProblemStats.From(
-            Cube(CubeKey, doublerLoss, doublerCorrect, takerLoss, takerCorrect), T1);
+        // No double's implied take is never charged, so its take part is 0
+        // and its take half a correct zero, whatever the take would have
+        // cost — unlike the session's Take row, which leaves it out.
+        var noDouble = Cube(CubeAnswer.NoDouble, noDoubleEquity, doubleTakeEquity);
 
-        Assert.Equal(2, s.Tally.Submitted);
-        Assert.Equal(1, s.Tally.Correct);
-        Assert.Equal(1, s.Wrong);
-        Assert.Equal(doublerLoss + takerLoss, s.Tally.TotalEquityLoss, precision: 9);
+        var s = ProblemStats.From(noDouble, T1);
+
+        Assert.Equal(0.0, noDouble.Cost.TakePart);
+        Assert.True(noDouble.IsTakePartCorrect);
+        Assert.False(noDouble.IsDoublingPartCorrect);
+        Assert.Equal(new ScoreSegment(2, 1, noDouble.Cost.DoublingPart), s.Tally);
+        Assert.Equal(ScoreSegment.Empty, QuizScore.Empty.Plus(noDouble).TakeDecisions);
     }
 
     [Fact]
-    public void FromCube_BothHalvesWrong_CountsZeroOfTwo_LossSumsBothHalves()
+    public void PlusCube_OntoAnExistingRecord_KeepsEverythingItHeld_AndAddsTwoHalves()
     {
-        var s = ProblemStats.From(
-            Cube(CubeKey, doublerLoss: 0.05, doublerCorrect: false, takerLoss: 0.08, takerCorrect: false), T1);
+        // A record holding history folded under earlier rules: the fold adds
+        // two decisions to it and touches nothing it held.
+        var existing = new ProblemStats(CubeKey, new ScoreSegment(6, 3, 0.75), T1);
+        var doublePass = Cube(CubeAnswer.DoublePass, 0.30, 0.60);
 
-        Assert.Equal(2, s.Tally.Submitted);
-        Assert.Equal(0, s.Tally.Correct);
-        Assert.Equal(2, s.Wrong);
-        Assert.Equal(0.13, s.Tally.TotalEquityLoss, precision: 9);
-    }
+        var s = existing.Plus(doublePass, T2);
 
-    [Fact]
-    public void FromCube_WrongClaimOverTheRightAction_CountsOneOfTwoAtZeroDoublerLoss()
-    {
-        // The lifetime tally reads the same claim-vs-claim derivation the
-        // session score does (SPEC-scoring §3; halheinrich/backgammon#86): a
-        // no-double answer on a too-good position is one wrong half, and it
-        // costs +0.000 because the board action behind both claims is the
-        // same. Built through SubmittedCubeAction.From so the truth pair and
-        // the loss come from the producer, not from this test.
-        var tooGoodPass = TestRecords.CubeData(noDoubleEquity: 1.30, doubleTakeEquity: 1.50);
-        var submission = SubmittedCubeAction.From(
-            CubeKey, CubeClaimPair.NoDoublePass, tooGoodPass);
-
-        Assert.Equal(CubeClaimPair.TooGoodPass, submission.BestDecision);
-
-        var s = ProblemStats.From(submission, T1);
-
-        Assert.Equal(2, s.Tally.Submitted);
-        Assert.Equal(1, s.Tally.Correct);       // taker half only
-        Assert.Equal(1, s.Wrong);
-        Assert.Equal(0.0, s.Tally.TotalEquityLoss);
+        Assert.Equal(new ScoreSegment(8, 4, 0.75 + doublePass.Cost.Total), s.Tally);
+        Assert.Equal(T2, s.LastQuizzed);
+        Assert.Equal(new ScoreSegment(6, 3, 0.75), existing.Tally);
     }
 
     [Fact]
@@ -180,27 +195,22 @@ public class ProblemStatsTests
         // (Sightings' divide-by-two for cubes) exact.
         var s = ProblemStats.From(Play(equityLoss: 0.0), T1);
 
-        Assert.Throws<ArgumentException>(() => s.Plus(
-            Cube(CubeKey, doublerLoss: 0.0, doublerCorrect: true, takerLoss: 0.0, takerCorrect: true), T2));
+        Assert.Throws<ArgumentException>(() => s.Plus(Cube(CubeAnswer.DoubleTake, 0.30, 0.60), T2));
     }
 
     [Fact]
-    public void FromAndPlus_KeylessCubeSubmissions_Throw()
+    public void PlusCube_IntoAnotherProblemsRecord_Throws()
     {
-        // A cube submission's key is still its caller's
-        // (halheinrich/backgammon#285). A keyless one is filtered one level up
-        // (ProblemStatsDocument.Plus returns the document unchanged); at this
-        // level it is a caller bug. A play has no keyless case: its key is
-        // its record's.
-        var s = ProblemStats.From(
-            Cube(CubeKey, doublerLoss: 0.0, doublerCorrect: true, takerLoss: 0.0, takerCorrect: true), T1);
+        // Every cube answer carries its own record's key now
+        // (halheinrich/backgammon#285), but a caller can still hand it to the
+        // wrong record: the identity check refuses that, and the record is
+        // left as it was.
+        var s = ProblemStats.From(Cube(CubeAnswer.DoubleTake, 0.30, 0.60), T1);
 
-        Assert.Throws<ArgumentException>(
-            () => ProblemStats.From(
-                Cube(null, doublerLoss: 0.0, doublerCorrect: true, takerLoss: 0.0, takerCorrect: true), T1));
-        Assert.Throws<ArgumentException>(
-            () => s.Plus(
-                Cube(null, doublerLoss: 0.0, doublerCorrect: true, takerLoss: 0.0, takerCorrect: true), T2));
+        var thrown = Assert.Throws<ArgumentException>(() => s.Plus(OtherCube(CubeAnswer.DoubleTake), T2));
+
+        Assert.Equal("cube", thrown.ParamName);
+        Assert.Equal(new ScoreSegment(2, 2, 0.0), s.Tally);
     }
 
     [Fact]
@@ -209,9 +219,9 @@ public class ProblemStatsTests
         var s = ProblemStats.From(Play(equityLoss: 0.0), T1);
 
         Assert.Throws<ArgumentNullException>(() => ProblemStats.From((SubmittedPlay)null!, T1));
-        Assert.Throws<ArgumentNullException>(() => ProblemStats.From((SubmittedCubeAction)null!, T1));
+        Assert.Throws<ArgumentNullException>(() => ProblemStats.From((SubmittedCubeAnswer)null!, T1));
         Assert.Throws<ArgumentNullException>(() => s.Plus((SubmittedPlay)null!, T2));
-        Assert.Throws<ArgumentNullException>(() => s.Plus((SubmittedCubeAction)null!, T2));
+        Assert.Throws<ArgumentNullException>(() => s.Plus((SubmittedCubeAnswer)null!, T2));
     }
 
     // ---------------------------------------------------------------------

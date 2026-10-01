@@ -140,7 +140,9 @@ public class ProblemStatsDocumentSerializationTests
     public void UnderTheEquityRanking_AFoldChangesTheTotalsExactlyAsBefore()
     {
         // Before the ranking, a play's loss was the equity-best candidate's
-        // equity minus its own, and it was correct at exactly 0. Every
+        // equity minus its own, and it was correct at exactly 0. (The zero
+        // rule of halheinrich/backgammon#202 agrees on the opening's errors,
+        // each 0 or well above the display's precision.) Every
         // candidate of the opening 3-1, scored under the equity ranking and
         // folded into the pinned document, changes its problem's tally by
         // exactly that and touches nothing else; the file stays v3. The key
@@ -172,6 +174,40 @@ public class ProblemStatsDocumentSerializationTests
             Assert.Equal(JsonSerializer.Serialize(expected), JsonSerializer.Serialize(after));
             Assert.StartsWith("""{"schemaVersion":3,""", JsonSerializer.Serialize(after));
         }
+    }
+
+    [Fact]
+    public void AnExistingV3CubeRecord_ReadBack_ThenACubeAnswerFolded_KeepsItsOldTally_AddsTwoHalves_StaysV3()
+    {
+        // The 2026-10-01 amendment keeps v3 (SPEC-scoring §3;
+        // SPEC-stats-identity.md §3): a cube record written before it, read
+        // back from the file, keeps its submitted, correct and loss values —
+        // folded under the earlier scoring, never re-scored or restarted — and
+        // a new cube answer adds exactly its two halves. The cube record here
+        // is the pinned document's, 2 submitted, 1 correct, 0.08 lost; No
+        // double at a Double / Take truth adds a wrong doubling half (0.30)
+        // and a correct-zero take half. Every other record is untouched, and
+        // the file stays v3.
+        var decision = TestSubmissions.CubeRecord(0.30, 0.60, TestRecords.Position());
+        var noDouble = SubmittedCubeAnswer.Score(CubeAnswer.NoDouble, decision);
+        Assert.Equal(CubeKey, noDouble.ProblemKey);
+
+        var before = JsonSerializer.Deserialize<ProblemStatsDocument>(PinnedWireForm)!;
+        Assert.Equal(new ProblemStats(CubeKey, new ScoreSegment(2, 1, 0.08), T2), before.Problems[CubeKey]);
+
+        var after = before.Plus(noDouble, new FixedClock(T1));
+
+        Assert.Equal(
+            new ProblemStats(CubeKey, new ScoreSegment(2 + 2, 1 + 1, 0.08 + noDouble.Cost.Total), T1),
+            after.Problems[CubeKey]);
+        Assert.Equal(0.38, after.Problems[CubeKey].Tally.TotalEquityLoss, precision: 12);
+        AssertSameRecords(
+            ProblemStatsDocument.FromStats(before.Problems.Values.Where(r => r.Key != CubeKey)),
+            ProblemStatsDocument.FromStats(after.Problems.Values.Where(r => r.Key != CubeKey)));
+
+        var written = JsonSerializer.Serialize(after);
+        Assert.StartsWith("""{"schemaVersion":3,""", written);
+        AssertSameRecords(after, JsonSerializer.Deserialize<ProblemStatsDocument>(written)!);
     }
 
     /// <summary>A <see cref="TimeProvider"/> fixed at one instant.</summary>

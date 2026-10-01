@@ -6,17 +6,19 @@ namespace BgGame_Lib;
 /// them. Immutable; <see cref="Add"/> and <c>operator +</c> each return a new
 /// <see cref="ScoreSegment"/>.
 ///
-/// This is the single accumulation primitive behind <see cref="QuizScore"/>:
-/// each of that record's segments (play / double / take) is a
-/// <see cref="ScoreSegment"/>, and its derived total is their sum via
-/// <c>operator +</c>.
+/// This is the single accumulation primitive behind <see cref="QuizScore"/>
+/// (each of its rows, Play, Double and Take, and its Total is a
+/// <see cref="ScoreSegment"/>) and behind <see cref="ProblemStats"/>'s
+/// lifetime tally.
 /// </summary>
 /// <param name="Submitted">Number of decisions folded into this segment.</param>
 /// <param name="Correct">
 /// Number of those decisions scored correct, by each submission's own verdict:
-/// <see cref="SubmittedPlay.IsCorrect"/> for a play, a cube half's
-/// <see cref="SubmittedCubeAction.DoublerCorrect"/> or
-/// <see cref="SubmittedCubeAction.TakerCorrect"/>.
+/// <see cref="SubmittedPlay.IsCorrect"/> for a play; for a cube answer, the
+/// verdict of the part or the whole that the segment counts
+/// (<see cref="SubmittedCubeAnswer.IsDoublingPartCorrect"/>,
+/// <see cref="SubmittedCubeAnswer.IsTakePartCorrect"/>,
+/// <see cref="SubmittedCubeAnswer.IsCorrect"/>).
 /// </param>
 /// <param name="TotalEquityLoss">Sum of equity loss across the folded decisions.</param>
 public sealed record ScoreSegment(int Submitted, int Correct, double TotalEquityLoss)

@@ -1,6 +1,7 @@
 namespace BgGame_Lib.Tests;
 
 using BgDataTypes_Lib;
+using BgDataTypes_Lib.TestSupport;
 
 public class ProblemStatsDocumentTests
 {
@@ -24,24 +25,32 @@ public class ProblemStatsDocumentTests
         public override DateTimeOffset GetUtcNow() => Now;
     }
 
-    // Scored as production scores it; correct exactly when the error is 0.
-    // Its key is its record's: the opening 3-1's problem, which spells KeyA.
+    // Scored as production scores them; correct exactly when the loss counts
+    // as zero. Each key is its record's: the play's is the opening 3-1's
+    // problem, which spells KeyA; the cube answer's is the standard start at
+    // 5-away/3-away with the cube on 2 on our side, which spells KeyB.
     private static SubmittedPlay Play(double equityLoss) =>
         TestSubmissions.Play(equityLoss);
 
-    // Per-half correctness is derived from the answer/truth pair rather than
-    // stated, so this helper composes pairs that realize the requested
-    // verdicts: the truth is always (Double, Take) and each half of the
-    // answer either matches it or is bent away from it. What this suite
-    // asserts — how a cube submission accumulates — is unchanged by that.
-    private static SubmittedCubeAction Cube(
-        ProblemKey? key, double doublerLoss, bool doublerCorrect, double takerLoss, bool takerCorrect) =>
-        new(key,
-            new CubeClaimPair(
-                doublerCorrect ? CubeClaim.Double : CubeClaim.NoDouble,
-                takerCorrect ? CubeAction.Take : CubeAction.Pass),
-            CubeClaimPair.DoubleTake,
-            DoublerEquityLoss: doublerLoss, TakerEquityLoss: takerLoss);
+    /// <summary>
+    /// <paramref name="answer"/> at KeyB's problem, at a Double / Take truth
+    /// (N +0.30, T +0.60). Its parts: No double (0.30, 0); Double / Take
+    /// (0, 0); Double / Pass (0, 0.40); Too good (0.40, 0.40).
+    /// </summary>
+    private static SubmittedCubeAnswer Cube(CubeAnswer answer) =>
+        TestSubmissions.Cube(
+            answer, 0.30, 0.60,
+            TestRecords.Position(
+                cubeSize: 2,
+                cubeOwner: CubeOwner.OnRoll,
+                session: TestRecords.MatchSession(onRollNeeds: 5, opponentNeeds: 3)));
+
+    [Fact]
+    public void Fixtures_TheCubeAnswerCarriesTheKeyItsProblemSpells()
+    {
+        Assert.Equal(KeyA, Play(0.0).ProblemKey);
+        Assert.Equal(KeyB, Cube(CubeAnswer.DoubleTake).ProblemKey);
+    }
 
     [Fact]
     public void Empty_HasNoProblems()
@@ -88,7 +97,7 @@ public class ProblemStatsDocumentTests
         var clock = new TestClock(T1);
         var doc = ProblemStatsDocument.Empty
             .Plus(Play(equityLoss: 0.03), clock)
-            .Plus(Cube(KeyB, doublerLoss: 0.0, doublerCorrect: true, takerLoss: 0.0, takerCorrect: true), clock);
+            .Plus(Cube(CubeAnswer.DoubleTake), clock);
 
         Assert.Equal(2, doc.Count);
         Assert.Equal(0, doc.Problems[KeyA].Tally.Correct);
@@ -96,17 +105,55 @@ public class ProblemStatsDocumentTests
     }
 
     [Fact]
-    public void PlusCube_FoldsHalvesAsTwoDecisionsInOneRecord()
+    public void PlusCube_FoldsTheAnswerAsTwoHalvesInOneRecord_UnderItsRecordsKey()
     {
-        var doc = ProblemStatsDocument.Empty.Plus(
-            Cube(KeyB, doublerLoss: 0.04, doublerCorrect: false, takerLoss: 0.06, takerCorrect: true),
-            new TestClock(T1));
+        // Double / Pass at a Double / Take truth: the doubling half right at
+        // 0, the take half wrong at 0.40 — one of two, in one record.
+        var doc = ProblemStatsDocument.Empty.Plus(Cube(CubeAnswer.DoublePass), new TestClock(T1));
 
         Assert.Equal(1, doc.Count);               // still one record per problem
         var stats = doc.Problems[KeyB];
-        Assert.Equal(2, stats.Tally.Submitted);   // doubler half + taker half
+        Assert.Equal(2, stats.Tally.Submitted);   // doubling half + take half
         Assert.Equal(1, stats.Tally.Correct);     // half-right reads 1-of-2
-        Assert.Equal(0.10, stats.Tally.TotalEquityLoss, precision: 9);
+        Assert.Equal(0.40, stats.Tally.TotalEquityLoss, precision: 12);
+        Assert.Equal(T1, stats.LastQuizzed);
+    }
+
+    [Fact]
+    public void PlusCube_EveryAnswerIsRecorded_NoneIsSkipped()
+    {
+        // Every cube answer carries its record's key
+        // (halheinrich/backgammon#285), so none is keyless and the document
+        // never returns itself unchanged for one.
+        var clock = new TestClock(T1);
+
+        foreach (var answer in Enum.GetValues<CubeAnswer>())
+        {
+            var doc = ProblemStatsDocument.Empty;
+            var after = doc.Plus(Cube(answer), clock);
+
+            Assert.NotSame(doc, after);
+            Assert.Equal(2, after.Problems[KeyB].Tally.Submitted);
+        }
+    }
+
+    [Fact]
+    public void PlusCube_OntoAnExistingRecord_AddsTwoHalves_LeavingTheOthersAlone()
+    {
+        var clock = new TestClock(T2);
+        var existing = ProblemStatsDocument.FromStats(
+        [
+            new ProblemStats(KeyA, new ScoreSegment(3, 2, 0.125), T1),
+            new ProblemStats(KeyB, new ScoreSegment(6, 3, 0.75), T1),
+        ]);
+
+        var doc = existing.Plus(Cube(CubeAnswer.NoDouble), clock);
+
+        Assert.Equal(new ProblemStats(KeyA, new ScoreSegment(3, 2, 0.125), T1), doc.Problems[KeyA]);
+        Assert.Equal(8, doc.Problems[KeyB].Tally.Submitted);
+        Assert.Equal(4, doc.Problems[KeyB].Tally.Correct);   // No double: the take half a correct zero
+        Assert.Equal(0.75 + 0.30, doc.Problems[KeyB].Tally.TotalEquityLoss, precision: 12);
+        Assert.Equal(T2, doc.Problems[KeyB].LastQuizzed);
     }
 
     [Fact]
@@ -123,33 +170,15 @@ public class ProblemStatsDocumentTests
     }
 
     [Fact]
-    public void Plus_KeylessCube_IsNotRecorded()
-    {
-        // A cube submission's key is still its caller's
-        // (halheinrich/backgammon#285): one supplied as null scores the
-        // session but never the lifetime record, and this document-level skip
-        // is the single filter. A play has no keyless case.
-        var clock = new TestClock(T1);
-        var doc = ProblemStatsDocument.Empty;
-
-        var after = doc.Plus(
-            Cube(null, doublerLoss: 0.0, doublerCorrect: true, takerLoss: 0.0, takerCorrect: true), clock);
-
-        Assert.Same(doc, after);
-        Assert.Equal(0, after.Count);
-    }
-
-    [Fact]
     public void Plus_NullArguments_Throw()
     {
         var doc = ProblemStatsDocument.Empty;
         var clock = new TestClock(T1);
 
         Assert.Throws<ArgumentNullException>(() => doc.Plus((SubmittedPlay)null!, clock));
-        Assert.Throws<ArgumentNullException>(() => doc.Plus((SubmittedCubeAction)null!, clock));
+        Assert.Throws<ArgumentNullException>(() => doc.Plus((SubmittedCubeAnswer)null!, clock));
         Assert.Throws<ArgumentNullException>(() => doc.Plus(Play(0.0), null!));
-        Assert.Throws<ArgumentNullException>(() => doc.Plus(
-            Cube(KeyB, 0.0, doublerCorrect: true, 0.0, takerCorrect: true), null!));
+        Assert.Throws<ArgumentNullException>(() => doc.Plus(Cube(CubeAnswer.DoubleTake), null!));
     }
 
     [Fact]

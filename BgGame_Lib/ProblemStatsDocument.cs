@@ -28,16 +28,10 @@ using BgDataTypes_Lib;
 /// </para>
 ///
 /// <para>
-/// <b>A keyless cube submission is not recorded.</b> A checker play always
-/// carries its record's key, which <see cref="PlaySubmission.Score"/>
-/// derives. A cube submission's key is still supplied by its caller
-/// (<see cref="SubmittedCubeAction.ProblemKey"/>;
-/// halheinrich/backgammon#285), and one supplied as <see langword="null"/>
-/// is not recorded: <c>Plus</c> returns the document unchanged. Degrade,
-/// never block — the quiz session proceeds and scores normally; only the
-/// lifetime record abstains. This document-level skip is the <i>single</i>
-/// such filter; <see cref="ProblemStats"/> itself rejects keyless folds as
-/// corruption.
+/// <b>Every submission is recorded under its record's key.</b> A checker
+/// play's key is derived by <see cref="PlaySubmission.Score"/> and a cube
+/// answer's by <see cref="SubmittedCubeAnswer.Score"/>, each from the record
+/// it scores, so no submission is keyless and none is skipped.
 /// </para>
 ///
 /// <para>
@@ -76,15 +70,23 @@ public sealed class ProblemStatsDocument
     /// halheinrich/backgammon#187). The interim version 4 of the
     /// halheinrich/backgammon#86 leg wrapped each per-problem record in an
     /// answer-kind token and retired v3 on the premise that v3's cube
-    /// tallies, accrued under action-vs-action doubler scoring, were not
-    /// comparable with claim-vs-claim tallies. The amended Too Good
-    /// predicate (Too Good requires the pass) makes the two regimes coincide
-    /// on every reachable position, so the premise no longer holds; and the
-    /// kind wrapper was a second source of a fact the key's own grammar
-    /// already carries (SPEC-scoring.md §4, amended 2026-09-02). The flat
-    /// v3 record is therefore current again, byte-for-byte the format
-    /// v1.9.1 ships, and v4 — which never reached production — folds into
-    /// it rather than retiring.
+    /// tallies, accrued under the earlier doubler scoring, were not
+    /// comparable with the tallies that leg's scoring would accrue. The
+    /// 2026-09-02 amendment reinstated v3 on the reading that the two
+    /// regimes coincide; that reading was corrected on 2026-09-30
+    /// (halheinrich/backgammon#326: they differ for No double on a Too good
+    /// position and Too good on a No double / Take one), and by Hal's ruling
+    /// those cases are not migrated. The kind wrapper was in any case a
+    /// second source of a fact the key's own grammar already carries
+    /// (SPEC-scoring.md §4, amended 2026-09-02). The flat v3 record is
+    /// therefore current, byte-for-byte the format v1.9.1 ships, and v4 —
+    /// which never reached production — folds into it rather than retiring.
+    /// <para>
+    /// The cube costs of halheinrich/backgammon#326 keep v3: the same record,
+    /// two decisions per cube answer, no version bump. Records written before
+    /// keep their old costs; nothing is re-scored (SPEC-stats-identity.md §3,
+    /// kept 2026-10-01).
+    /// </para>
     /// </remarks>
     public const int CurrentSchemaVersion = 3;
 
@@ -200,24 +202,22 @@ public sealed class ProblemStatsDocument
 
     /// <summary>
     /// Return a new document with <paramref name="cube"/> folded into its
-    /// problem's lifetime record — created via
-    /// <see cref="ProblemStats.From(SubmittedCubeAction, DateTimeOffset)"/>
-    /// when the problem has never been quizzed before. The cube position
-    /// folds as <b>two</b> decisions — the doubler half and the taker half,
-    /// each counted separately into the one record, so a half-right cube reads
-    /// 1-of-2 — see
-    /// <see cref="ProblemStats.Plus(SubmittedCubeAction, DateTimeOffset)"/>.
-    /// A submission carrying no <see cref="SubmittedCubeAction.ProblemKey"/>
-    /// is not recorded: the same document is returned (see the type remarks).
+    /// problem's lifetime record — the one its
+    /// <see cref="SubmittedCubeAnswer.ProblemKey"/> names, created via
+    /// <see cref="ProblemStats.From(SubmittedCubeAnswer, DateTimeOffset)"/>
+    /// when the problem has never been quizzed before. The answer folds as
+    /// <b>two</b> decisions, its doubling half and its take half, each counted
+    /// separately into the one record — see
+    /// <see cref="ProblemStats.Plus(SubmittedCubeAnswer, DateTimeOffset)"/>.
+    /// An existing record keeps everything it holds; the fold only adds.
     /// </summary>
     /// <param name="cube">The submission to fold.</param>
     /// <param name="clock">Source of the fold timestamp (its <see cref="TimeProvider.GetUtcNow"/>).</param>
-    public ProblemStatsDocument Plus(SubmittedCubeAction cube, TimeProvider clock)
+    public ProblemStatsDocument Plus(SubmittedCubeAnswer cube, TimeProvider clock)
     {
         ArgumentNullException.ThrowIfNull(cube);
         ArgumentNullException.ThrowIfNull(clock);
-        if (cube.ProblemKey is not { } key)
-            return this;
+        var key = cube.ProblemKey;
         var quizzedAt = clock.GetUtcNow();
         var updated = _problems.TryGetValue(key, out var existing)
             ? existing.Plus(cube, quizzedAt)
