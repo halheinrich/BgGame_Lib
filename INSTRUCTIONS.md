@@ -30,7 +30,7 @@ https://github.com/halheinrich/BgGame_Lib — branch `main`.
   `RankedPlays`), the four cube answers (`CubeAnswer`, with its projections
   and `CommitsToResponse`), a cube answer's truth and cost
   (`CubeDecisionData.BestAnswer`, `CubeDecision.CostOf` → `CubeAnswerCost`),
-  the one display of a loss and its zero rule (`EquityLoss`), `CubeOwner`,
+  the one display of a loss and its zero rule (`EquityDisplay`), `CubeOwner`,
   `CubeAction`, plus the enums' string serialization contract. The test
   project also references its
   `BgDataTypes_Lib.TestSupport` for the record builders (`TestRecords`).
@@ -620,13 +620,13 @@ they are facts about one submission, outside identity.
 §3's second 2026-10-01 amendment; halheinrich/backgammon#202, folded into
 halheinrich/backgammon#326). A checker play, each part of a cube answer and
 each whole cube answer is correct exactly when its loss counts as zero —
-when BgDataTypes_Lib's `EquityLoss.CountsAsZero` says so, which is when the
+when BgDataTypes_Lib's `EquityDisplay.CountsAsZero` says so, which is when the
 loss displays as `0.0000`. The internal `Correctness.IsCorrect(loss)` is the
 library's one statement of that verdict; `SubmittedPlay.IsCorrect` and the
 three `SubmittedCubeAnswer` verdicts all read it, and nothing else compares
 a loss with zero or an answer with a truth. It keeps no precision and no
-threshold of its own — both are `EquityLoss`'s — so what a consumer shows
-through `EquityLoss.Format` and what is scored here cannot disagree. The
+threshold of its own — both are `EquityDisplay`'s — so what a consumer shows
+through `EquityDisplay.FormatLoss` and what is scored here cannot disagree. The
 rule changes verdicts only: every stored error and cost stays exact. A sum
 is judged as a sum, so two parts that each count as zero can make a whole
 that does not. The user-set error tolerance of halheinrich/backgammon#30 is
@@ -1391,7 +1391,7 @@ public sealed class ShuffledProblemSetSource : IProblemSetSource   // decorator:
 
 // Quiz scoring. ProblemKey is the content identity: every submission's is its
 // record's (ProblemKey.From, derived by Score), never null, never a caller's.
-// Every verdict is the zero rule (EquityLoss.CountsAsZero), stated once, on the
+// Every verdict is the zero rule (EquityDisplay.CountsAsZero), stated once, on the
 // internal Correctness (see "Quiz-result records").
 public enum PlaySubmissionKind { Scored = 1, NotScored = 2, OffList = 3 }
 
@@ -1666,10 +1666,10 @@ public sealed record AnswerTypeDistribution(
 - **A verdict is never `loss == 0`, and never "equals the truth".** Every
   verdict in the library — a play's, each part of a cube answer, each whole
   cube answer — is the zero rule, stated once on the internal `Correctness`
-  and owned by BgDataTypes_Lib's `EquityLoss.CountsAsZero`: a loss that
+  and owned by BgDataTypes_Lib's `EquityDisplay.CountsAsZero`: a loss that
   displays as `0.0000` is correct, so a nonzero loss below 0.00005 is
   correct and stays stored as it is (SPEC-scoring §2a and §3;
-  halheinrich/backgammon#202). Show a loss through `EquityLoss.Format`, so
+  halheinrich/backgammon#202). Show a loss through `EquityDisplay.FormatLoss`, so
   what is shown and what is scored agree; do not keep a format string or a
   threshold of your own. A cube answer is never judged by comparing it with
   `BestAnswer`, the producer's one representative: at an equity tie several

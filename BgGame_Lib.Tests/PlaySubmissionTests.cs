@@ -214,7 +214,7 @@ public class PlaySubmissionTests
                 var submitted = Scored(submission);
                 Assert.Equal(i, submitted.MatchedCandidateIndex);
                 Assert.Equal(error, submitted.EquityLoss);
-                Assert.Equal(EquityLoss.CountsAsZero(error), submitted.IsCorrect);
+                Assert.Equal(EquityDisplay.CountsAsZero(error), submitted.IsCorrect);
             }
             else
             {

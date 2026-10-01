@@ -33,7 +33,7 @@ public class CorrectnessTests
     public void TheBoundaryFixtures_ShowAsTheirNamesSay(int step, string shown)
     {
         // So a verdict below can never pass on a mis-built boundary.
-        Assert.Equal(shown, EquityLoss.Format(Near(step)));
+        Assert.Equal(shown, EquityDisplay.FormatLoss(Near(step)));
     }
 
     // -----------------------------------------------------------------------
@@ -50,7 +50,7 @@ public class CorrectnessTests
     [InlineData(1.0267)]
     public void Correctness_IsTheProducersZeroRule(double loss)
     {
-        Assert.Equal(EquityLoss.CountsAsZero(loss), Correctness.IsCorrect(loss));
+        Assert.Equal(EquityDisplay.CountsAsZero(loss), Correctness.IsCorrect(loss));
     }
 
     // -----------------------------------------------------------------------
@@ -127,7 +127,7 @@ public class CorrectnessTests
         Assert.Equal(CubeAnswer.DoublePass, doubleTake.BestAnswer);
         Assert.Equal(0.0, doubleTake.Cost.DoublingPart);
         Assert.Equal(t - 1.0, doubleTake.Cost.TakePart);
-        Assert.Equal(shown, EquityLoss.Format(doubleTake.Cost.TakePart));
+        Assert.Equal(shown, EquityDisplay.FormatLoss(doubleTake.Cost.TakePart));
         Assert.Equal(correct, doubleTake.IsTakePartCorrect);
         Assert.Equal(correct, doubleTake.IsCorrect);
         Assert.True(doubleTake.IsDoublingPartCorrect);
@@ -148,8 +148,8 @@ public class CorrectnessTests
 
         Assert.Equal(TestSubmissions.ShowsAsZero, answer.Cost.DoublingPart);
         Assert.Equal(TestSubmissions.ShowsAsZero, answer.Cost.TakePart);
-        Assert.Equal("0.0000", EquityLoss.Format(answer.Cost.DoublingPart));
-        Assert.Equal("0.0001", EquityLoss.Format(answer.Cost.Total));
+        Assert.Equal("0.0000", EquityDisplay.FormatLoss(answer.Cost.DoublingPart));
+        Assert.Equal("0.0001", EquityDisplay.FormatLoss(answer.Cost.Total));
         Assert.True(answer.IsDoublingPartCorrect);
         Assert.True(answer.IsTakePartCorrect);
         Assert.False(answer.IsCorrect);

@@ -16,9 +16,9 @@ using BgDataTypes_Lib;
 /// 2026-10-01; halheinrich/backgammon#202, folded into
 /// halheinrich/backgammon#326): a loss is correct exactly when it counts as
 /// zero, which is when it displays as <c>0.0000</c>. Both the precision and
-/// the threshold are BgDataTypes_Lib's (<see cref="EquityLoss.CountsAsZero"/>),
+/// the threshold are BgDataTypes_Lib's (<see cref="EquityDisplay.CountsAsZero"/>),
 /// so this class keeps neither: what a consumer shows through
-/// <see cref="EquityLoss.Format"/> and what is scored here cannot disagree.
+/// <see cref="EquityDisplay.FormatLoss"/> and what is scored here cannot disagree.
 /// </para>
 /// <para>
 /// <b>One place, so a tolerance widens one place.</b> The user-set error
@@ -37,12 +37,12 @@ internal static class Correctness
 {
     /// <summary>
     /// Whether <paramref name="loss"/>, a scored equity loss, is correct:
-    /// exactly when it counts as zero (<see cref="EquityLoss.CountsAsZero"/>).
+    /// exactly when it counts as zero (<see cref="EquityDisplay.CountsAsZero"/>).
     /// </summary>
     /// <param name="loss">A finite equity loss: a play's error, a cube answer's cost or one of its parts.</param>
     /// <exception cref="ArgumentOutOfRangeException">
     /// Thrown when <paramref name="loss"/> is NaN or infinite, as
-    /// <see cref="EquityLoss.CountsAsZero"/> refuses it.
+    /// <see cref="EquityDisplay.CountsAsZero"/> refuses it.
     /// </exception>
-    internal static bool IsCorrect(double loss) => EquityLoss.CountsAsZero(loss);
+    internal static bool IsCorrect(double loss) => EquityDisplay.CountsAsZero(loss);
 }

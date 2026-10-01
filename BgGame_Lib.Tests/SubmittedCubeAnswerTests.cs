@@ -105,9 +105,9 @@ public class SubmittedCubeAnswerTests
         _ = truth;
         var submitted = TestSubmissions.Cube(answer, n, t, PositionFor(gammonsPossible));
 
-        Assert.Equal(EquityLoss.CountsAsZero(submitted.Cost.Total), submitted.IsCorrect);
-        Assert.Equal(EquityLoss.CountsAsZero(submitted.Cost.DoublingPart), submitted.IsDoublingPartCorrect);
-        Assert.Equal(EquityLoss.CountsAsZero(submitted.Cost.TakePart), submitted.IsTakePartCorrect);
+        Assert.Equal(EquityDisplay.CountsAsZero(submitted.Cost.Total), submitted.IsCorrect);
+        Assert.Equal(EquityDisplay.CountsAsZero(submitted.Cost.DoublingPart), submitted.IsDoublingPartCorrect);
+        Assert.Equal(EquityDisplay.CountsAsZero(submitted.Cost.TakePart), submitted.IsTakePartCorrect);
     }
 
     [Theory]
