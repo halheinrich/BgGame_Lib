@@ -28,6 +28,22 @@ using BgDataTypes_Lib;
 /// consumes no randomness at all.
 /// </para>
 /// <para>
+/// <b>What a key costs, and where it is paid.</b> The by-error key reads XG's
+/// error through a filter view (<see cref="BgDecisionData.ViewFor"/>), which
+/// reads the ranked plays and computes after-play boards each time one is
+/// built — and the order runs inside a run's prepare, beside the current
+/// run's own parse, on a WebAssembly heap that a large sample already fills
+/// to about half its limit. So <see cref="OverAsync"/> reads each key once,
+/// into an array indexed by position, for the positions the ordering will
+/// arrange and no others; a comparison only reads the array. The pass is
+/// paced by the host's <see cref="CooperativeYielder"/> and honours
+/// cancellation, decision by decision, like the rest of the enumeration
+/// path; the sorts in <see cref="Arrange"/> stay synchronous. The view is
+/// dropped as soon as its error is read: what outlives the pass, per
+/// decision, is the key alone, held by this ordering, which its host drops
+/// with the enumeration's composition.
+/// </para>
+/// <para>
 /// Not thread-safe: <see cref="Arrange"/> may advance the host's
 /// <see cref="Random"/>.
 /// </para>
@@ -48,9 +64,17 @@ internal sealed class ProblemOrdering
     /// <summary>
     /// Prepare <paramref name="order"/> over <paramref name="decisions"/>,
     /// one enumeration's materialized list in source order: the keys the
-    /// order sorts by are read here, once per decision.
+    /// order sorts by are read here — once per keyed position, never inside a
+    /// comparison — yielding on <paramref name="yielder"/>'s time budget and
+    /// honouring <paramref name="cancellationToken"/> as it goes. Orders with
+    /// no key (as read, shuffled) read nothing and complete synchronously.
     /// </summary>
     /// <param name="decisions">The enumeration's decisions, in source order.</param>
+    /// <param name="keyed">
+    /// The positions this ordering will arrange: every set later handed to
+    /// <see cref="Arrange"/> is drawn from them. Keys are read for these alone,
+    /// so a decision no set can reach costs nothing.
+    /// </param>
     /// <param name="order">The order; a defined value (see <see cref="RequireDefined"/>).</param>
     /// <param name="ranking">The ranking the by-error key reads XG's error under.</param>
     /// <param name="records">
@@ -60,22 +84,56 @@ internal sealed class ProblemOrdering
     /// problem has none). Without a mix: <see langword="null"/> — no document.
     /// </param>
     /// <param name="random">The host's generator, which a shuffle advances.</param>
-    internal static ProblemOrdering Over(
+    /// <param name="yielder">The host's enumeration-path pacer, consulted once per keyed decision.</param>
+    /// <param name="cancellationToken">Observed once per keyed decision.</param>
+    /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled during the pass.</exception>
+    internal static async ValueTask<ProblemOrdering> OverAsync(
         IReadOnlyList<BgDecisionData> decisions,
+        IReadOnlyList<int> keyed,
         ProblemOrder order,
         PlayRanking ranking,
         IReadOnlyList<ProblemStats?>? records,
-        Random random)
+        Random random,
+        CooperativeYielder yielder,
+        CancellationToken cancellationToken)
     {
-        Comparison<int>? comparison = order switch
+        switch (order)
         {
-            ProblemOrder.AsRead => static (a, b) => a.CompareTo(b),
-            ProblemOrder.Shuffled => null,
-            ProblemOrder.ByErrorLargestFirst => LargestFirst(ErrorKeys(decisions, ranking, records)),
-            ProblemOrder.ByMoveNumberAscending => AscendingNoneLast(MoveNumbers(decisions)),
-            _ => throw new ArgumentOutOfRangeException(nameof(order), order, "Not a defined problem order."),
-        };
-        return new(random, comparison);
+            case ProblemOrder.AsRead:
+                return new(random, static (a, b) => a.CompareTo(b));
+
+            case ProblemOrder.Shuffled:
+                return new(random, comparison: null);
+
+            case ProblemOrder.ByErrorLargestFirst:
+            {
+                var keys = new double[decisions.Count];
+                for (int k = 0; k < keyed.Count; k++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    int position = keyed[k];
+                    keys[position] = ErrorKey(decisions[position], ranking, records?[position]);
+                    await yielder.YieldIfDueAsync();
+                }
+                return new(random, LargestFirst(keys));
+            }
+
+            case ProblemOrder.ByMoveNumberAscending:
+            {
+                var numbers = new int?[decisions.Count];
+                for (int k = 0; k < keyed.Count; k++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    int position = keyed[k];
+                    numbers[position] = decisions[position].MoveNumber;
+                    await yielder.YieldIfDueAsync();
+                }
+                return new(random, AscendingNoneLast(numbers));
+            }
+
+            default:
+                throw new ArgumentOutOfRangeException(nameof(order), order, "Not a defined problem order.");
+        }
     }
 
     /// <summary>
@@ -102,7 +160,9 @@ internal sealed class ProblemOrdering
 
     /// <summary>
     /// Put <paramref name="positions"/> in the order, in place: positions
-    /// into the list this ordering was built over, in any arrangement.
+    /// into the list this ordering was built over, drawn from the keyed ones
+    /// it was prepared for, in any arrangement. Synchronous — the keys were
+    /// read when the ordering was prepared.
     /// </summary>
     internal void Arrange(List<int> positions)
     {
@@ -134,23 +194,6 @@ internal sealed class ProblemOrdering
             throw new ArgumentOutOfRangeException(nameof(order), order, "Not a defined problem order.");
         if (!Enum.IsDefined(ranking))
             throw new ArgumentOutOfRangeException(nameof(ranking), ranking, "Not a defined play ranking.");
-    }
-
-    private static double[] ErrorKeys(
-        IReadOnlyList<BgDecisionData> decisions, PlayRanking ranking, IReadOnlyList<ProblemStats?>? records)
-    {
-        var keys = new double[decisions.Count];
-        for (int i = 0; i < keys.Length; i++)
-            keys[i] = ErrorKey(decisions[i], ranking, records?[i]);
-        return keys;
-    }
-
-    private static int?[] MoveNumbers(IReadOnlyList<BgDecisionData> decisions)
-    {
-        var numbers = new int?[decisions.Count];
-        for (int i = 0; i < numbers.Length; i++)
-            numbers[i] = decisions[i].MoveNumber;
-        return numbers;
     }
 
     /// <summary>Largest key first; equal keys by position.</summary>

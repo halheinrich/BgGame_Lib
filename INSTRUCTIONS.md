@@ -548,6 +548,33 @@ composition classified against, or none without a mix — and the loss per
 answer it reads is `QuizStatsMeasures.LossPerAnswer`, the same measure the
 average-loss category reads.
 
+**What a key costs, and how its computation is arranged.** The order runs
+inside a Start's or Restart's prepare, while the current run keeps its own
+parse, on a WebAssembly heap measured at about 1.1 GB of its 2 GB limit after
+500 match files (about 200,000 decisions). The by-error key goes through a
+filter view (`ViewFor`), which reads the ranked plays and computes after-play
+boards each time one is built. So:
+
+- `ProblemOrdering.OverAsync(decisions, keyed, …)` reads each key **once per
+  enumeration**, into an array indexed by position, before any sort; a
+  comparison only reads the array. It reads keys for the `keyed` positions
+  alone — every position for the plain decorator, the reachable ones (the
+  union of the rows' pools) for the composer — so a decision no row can
+  draw costs no view. A view is dropped as soon as its error is read.
+- The key pass is **paced and cancellable**: per decision it observes the
+  cancellation token and awaits the host's `CooperativeYielder`, the one
+  yielder that also paces the host's presentation. The sorts in `Arrange`
+  stay synchronous (their cost is unmeasured; no rewrite was asked).
+- **Nothing per decision outlives the ordering but the decision and its
+  key, and nothing outlives the enumeration's composition.** Each host does
+  its materializing and ordering in a method of its own
+  (`OrderedProblemSetSource.OrderAsync`, `MixedProblemSetSource.ComposeAsync`,
+  with `MaterializeAsync` for the composer's `DecisionId` set), so the
+  source-ordered list, positions, records, pools, keys and the stats
+  document are released when it returns; the enumeration then holds the
+  ordered or drawn decisions and nothing else per decision. Nothing is
+  cached between enumerations.
+
 `OrderedProblemSetSource` is the order's **plain application** — a
 **decorator**, not a leaf source. It wraps any inner source with an order
 and the run's ranking (read by the by-error order only, but always a defined
@@ -1052,7 +1079,14 @@ error, as it always was).
   consuming quota); redistribute shortfall proportionally (by percent,
   largest remainder again) across entries that still have supply —
   terminates because the draw goal is capped at the union; then sort the
-  whole selection again in the same order for presentation.
+  whole selection again in the same order for presentation. The
+  classification pass and the order's key pass (keys for the reachable
+  decisions alone) are paced by the enumeration's `CooperativeYielder` and
+  cancellable decision by decision; a composition cancelled part-way assigns
+  no `LastComposition`. All of this runs in `ComposeAsync`, whose state — the
+  materialized list, records, pools, keys and the stats document — is
+  released when it returns; the enumeration keeps the drawn decisions and
+  the telemetry.
 - **The order, twice in one application.** Each pool is put in the order
   before it is drawn from, and the whole selection after. So `Shuffled` is
   the old random mode — uniform draws without replacement within each row, a
@@ -1133,7 +1167,13 @@ the ratified consequence.
 The materializing decorators (ordered / mixed / distinct) drain their inner
 source and then present a large drawn set. `CooperativeYielder` single-sources
 how those presentation loops yield to the scheduler so a Blazor WASM Start
-stays responsive without paying a per-item cost.
+stays responsive without paying a per-item cost. The same per-enumeration
+yielder also paces the per-decision passes that run between draining and
+presenting: the order's key pass (`ProblemOrdering.OverAsync`, in the ordered
+decorator and the composer alike) and the composer's classification pass —
+each observes cancellation and awaits the yielder decision by decision, so
+none of them runs synchronously from the drain to the first problem. Sorts
+and draws stay synchronous.
 
 - **The problem.** An `await Task.Yield()` after *every* presented item pays one
   event-loop round-trip per item — tens of thousands for a large corpus — which
@@ -1989,6 +2029,14 @@ public sealed record AnswerTypeDistribution(
   order's key anywhere but `ProblemOrdering` — the by-error key in
   particular reads the filter facet's error (`PlayerResult.TryGetError`
   under the run's ranking), and a second spelling would drift from it.
+- **An order's key is read once, paced, and dropped with the ordering.**
+  The by-error key builds a filter view (ranked plays, after-play boards)
+  per decision, inside a run's prepare beside the current run's parse. Never
+  compute a key inside a comparison or a sort, never cache keys or views on
+  an instance or across enumerations, never let the per-decision passes run
+  without the enumeration's `CooperativeYielder` and the cancellation token,
+  and keep materializing and ordering in their own methods so the
+  enumeration retains only the decisions it will present.
 - **`Match` aggregation, not ownership.** `GameState.Match` is a reference
   to a `MatchState` that may outlive the `GameState`. Mutations to the
   match (via `AwardGame`) persist into the next game's `GameState`. Do not

@@ -21,7 +21,11 @@ using BgDataTypes_Lib;
 /// streamed, uncounted inner source (e.g. <c>WasmUploadedProblemSetSource</c>,
 /// whose <c>Count</c> is null), this trades that source's streaming for one
 /// full materialization per enumeration — the cost of an order, not a free
-/// wrapper.
+/// wrapper. Each decision's key is then read once, in a pass that yields on
+/// the cooperative time budget and honours cancellation, as the presentation
+/// does; the sort itself is synchronous. Once the decisions are arranged,
+/// the keys and the source-ordered list are released: the enumeration holds
+/// the ordered decisions and nothing else per decision.
 /// </para>
 ///
 /// <para>
@@ -136,6 +140,33 @@ public sealed class OrderedProblemSetSource : IProblemSetSource
             yield break;
         }
 
+        // Cooperative yielding is time-budgeted, not per-item: a per-item
+        // Task.Yield() over a large materialized set pays tens of thousands of
+        // scheduler round-trips on Blazor WASM's single event loop. One
+        // yielder paces the whole path — the key pass and the presentation.
+        // See CooperativeYielder.
+        var yielder = new CooperativeYielder(TimeProvider.System);
+        var ordered = await OrderAsync(yielder, cancellationToken);
+
+        foreach (var item in ordered)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return item;
+            await yielder.YieldIfDueAsync();
+        }
+    }
+
+    /// <summary>
+    /// One enumeration's ordering: drain the inner source, read every
+    /// decision's key once (paced and cancellable — see
+    /// <see cref="ProblemOrdering"/>), and arrange. A method of its own so
+    /// that what it builds — the source-ordered list, the positions, the keys
+    /// — is released when it returns: from then on the enumeration holds the
+    /// ordered decisions and nothing else per decision.
+    /// </summary>
+    private async ValueTask<List<BgDecisionData>> OrderAsync(
+        CooperativeYielder yielder, CancellationToken cancellationToken)
+    {
         var items = new List<BgDecisionData>();
         await foreach (var item in _inner.EnumerateAsync(cancellationToken))
         {
@@ -144,18 +175,9 @@ public sealed class OrderedProblemSetSource : IProblemSetSource
         }
 
         var positions = Enumerable.Range(0, items.Count).ToList();
-        ProblemOrdering.Over(items, _order, _ranking, records: null, _random).Arrange(positions);
-
-        // Cooperative yielding is time-budgeted, not per-item: a per-item
-        // Task.Yield() over a large materialized set pays tens of thousands of
-        // scheduler round-trips on Blazor WASM's single event loop. See
-        // CooperativeYielder.
-        var yielder = new CooperativeYielder(TimeProvider.System);
-        foreach (int position in positions)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            yield return items[position];
-            await yielder.YieldIfDueAsync();
-        }
+        var ordering = await ProblemOrdering.OverAsync(
+            items, positions, _order, _ranking, records: null, _random, yielder, cancellationToken);
+        ordering.Arrange(positions);
+        return positions.ConvertAll(position => items[position]);
     }
 }

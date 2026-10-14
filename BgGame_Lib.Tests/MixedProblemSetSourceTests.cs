@@ -834,6 +834,89 @@ public class MixedProblemSetSourceTests
             () => new MixedProblemSetSource(inner, ProblemOrder.AsRead, (PlayRanking)99, QuizMix.Empty, Stats, Clock, seed: 1)).ParamName);
     }
 
+    // -----------------------------------------------------------------------
+    //  The composition's cost: it runs inside a run's prepare, beside the
+    //  current run's parse, so it is cancellable decision by decision and
+    //  leaves nothing of itself behind once the run is under way.
+    // -----------------------------------------------------------------------
+
+    /// <summary>
+    /// A source that cancels <paramref name="cancellation"/> once it has
+    /// yielded every item — so the cancellation lands after materialization,
+    /// while the composition is running, and before anything is presented.
+    /// </summary>
+    private sealed class CancelsWhenDrained(
+        IReadOnlyList<BgDecisionData> items, CancellationTokenSource cancellation) : IProblemSetSource
+    {
+        public string Name => "Test";
+        public int? Count => items.Count;
+
+        public async IAsyncEnumerable<BgDecisionData> EnumerateAsync(
+            [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            foreach (var item in items)
+            {
+                yield return item;
+                await Task.Yield();
+            }
+            await cancellation.CancelAsync();
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(EveryOrder))]
+    public async Task ActiveMix_CancelledDuringComposition_StopsBeforeComposing(ProblemOrder order)
+    {
+        using var cancellation = new CancellationTokenSource();
+        var source = new MixedProblemSetSource(
+            new CancelsWhenDrained(Varied(), cancellation), order, PlayRanking.Equity,
+            Everything, () => ProblemStatsDocument.Empty, Clock, seed: 1);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => IdsAsync(source, cancellation.Token));
+
+        // The composition observed the cancellation itself: it never finished,
+        // so it reported nothing.
+        Assert.Null(source.LastComposition);
+    }
+
+    [Fact]
+    public async Task ActiveMix_OnceComposed_TheEnumerationKeepsNoStatsDocument()
+    {
+        // The provider hands out a fresh document each call and keeps only a
+        // weak reference to it. Once the first problem is out, the run's
+        // stream must not be what keeps the document alive.
+        WeakReference? read = null;
+        ProblemStatsDocument Provide()
+        {
+            var document = FreshDocument();
+            read = new WeakReference(document);
+            return document;
+        }
+
+        var source = new MixedProblemSetSource(
+            new InMemorySource("Test", Decisions(6)), ProblemOrder.ByErrorLargestFirst, PlayRanking.Equity,
+            new QuizMix([Entry(QuizCategory.NeverSeen, 100)]), Provide, Clock);
+        var stream = source.EnumerateAsync().GetAsyncEnumerator();
+        try
+        {
+            Assert.True(await stream.MoveNextAsync());
+
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+
+            Assert.False(read!.IsAlive);
+        }
+        finally
+        {
+            await stream.DisposeAsync();
+        }
+    }
+
+    /// <summary>A new, non-empty document (an empty one is the shared <see cref="ProblemStatsDocument.Empty"/>).</summary>
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static ProblemStatsDocument FreshDocument() => Doc(SeenWrong(9));
+
     [Fact]
     public async Task EnumerateAsync_HonoursCancellation()
     {

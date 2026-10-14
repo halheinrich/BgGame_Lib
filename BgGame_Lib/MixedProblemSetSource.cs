@@ -51,6 +51,17 @@ using BgDataTypes_Lib;
 /// </para>
 ///
 /// <para>
+/// <b>Composition is paced, and leaves nothing behind.</b> It runs inside a
+/// run's prepare, beside the current run's own parse, so its per-decision
+/// passes — classification, and the order's key pass, which reads each
+/// reachable decision's key once — yield on the cooperative time budget
+/// (<see cref="CooperativeYielder"/>) and honour cancellation, as the
+/// presentation does; the sorts and draws stay synchronous. What it builds
+/// per decision, and the stats document it read, are released once it is
+/// done: an enumeration keeps the drawn decisions and the telemetry.
+/// </para>
+///
+/// <para>
 /// <b>The mix selects; the order presents.</b> Each row's eligible set is
 /// put in the order and the row's quota is filled from its front, an already
 /// drawn decision skipped without consuming quota; then the whole selection
@@ -240,8 +251,10 @@ public sealed class MixedProblemSetSource : IProblemSetSource
     /// <summary>
     /// Telemetry from the most recent enumeration: requested vs. actual,
     /// overall and per entry. Null before the first enumeration and after a
-    /// blank-mix enumeration. Assigned before the first decision is yielded.
-    /// Per-instance state — see the thread-safety note in the type remarks.
+    /// blank-mix enumeration. Assigned before the first decision is yielded,
+    /// once the composition is complete — a composition cancelled part-way
+    /// assigns nothing. Per-instance state — see the thread-safety note in the
+    /// type remarks.
     /// </summary>
     public MixComposition? LastComposition { get; private set; }
 
@@ -257,38 +270,16 @@ public sealed class MixedProblemSetSource : IProblemSetSource
             yield break;
         }
 
-        // An active mix was given a provider at construction.
-        var stats = _statsProvider!()
-            ?? throw new InvalidOperationException(
-                "The stats provider returned null. A MixedProblemSetSource with an active mix " +
-                "requires the current ProblemStatsDocument (an empty document is valid — it " +
-                "means nothing has been quizzed); when there is no stats document at all, pass " +
-                "no provider, which only a blank mix allows.");
-        var now = _clock.GetUtcNow();
-
-        // Materialize (composition needs the whole set), deduping by record
-        // identity (DecisionId) — first occurrence wins; a quiz presents each
-        // record at most once. Deliberately not the content key: this guard is
-        // about the same record streaming through twice, while content dedupe
-        // (ProblemKey) is DistinctPositionProblemSetSource's concern and the
-        // consumer's wiring choice.
-        var items = new List<BgDecisionData>();
-        var seenIds = new HashSet<DecisionId>();
-        await foreach (var item in _inner.EnumerateAsync(cancellationToken))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (seenIds.Add(item.Id))
-                items.Add(item);
-        }
-
-        var drawn = Compose(items, stats, now, out var composition);
-        LastComposition = composition;
-
         // Cooperative yielding is time-budgeted, not per-item (see
-        // CooperativeYielder). The pacing clock is deliberately TimeProvider.System,
+        // CooperativeYielder). One yielder paces the whole path: the
+        // classification and key passes inside the composition, then the
+        // presentation. The pacing clock is deliberately TimeProvider.System,
         // not _clock: _clock is the semantic classification timestamp and reusing
         // it here would couple yield pacing to a fixed test clock.
         var yielder = new CooperativeYielder(TimeProvider.System);
+        var (drawn, composition) = await ComposeAsync(yielder, cancellationToken);
+        LastComposition = composition;
+
         foreach (var item in drawn)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -298,19 +289,68 @@ public sealed class MixedProblemSetSource : IProblemSetSource
     }
 
     /// <summary>
-    /// One composition pass: classify into per-entry pools, put each pool in
-    /// the order, apportion the target by percent, fill each entry's quota
-    /// from the front of its pool with the global dedupe (declared entry
-    /// order — contested overlap goes to the earlier entry), redistribute
-    /// shortfall proportionally across entries with remaining supply, and put
-    /// the selection in the order again for presentation.
+    /// Materialize the inner source (composition needs the whole set),
+    /// deduping by record identity (<see cref="DecisionId"/>) — first
+    /// occurrence wins; a quiz presents each record at most once. Deliberately
+    /// not the content key: this guard is about the same record streaming
+    /// through twice, while content dedupe (<see cref="ProblemKey"/>) is
+    /// <see cref="DistinctPositionProblemSetSource"/>'s concern and the
+    /// consumer's wiring choice. A method of its own so the identity set is
+    /// released before composition begins.
     /// </summary>
-    private List<BgDecisionData> Compose(
-        List<BgDecisionData> items,
-        ProblemStatsDocument stats,
-        DateTimeOffset now,
-        out MixComposition composition)
+    private async ValueTask<List<BgDecisionData>> MaterializeAsync(CancellationToken cancellationToken)
     {
+        var items = new List<BgDecisionData>();
+        var seenIds = new HashSet<DecisionId>();
+        await foreach (var item in _inner.EnumerateAsync(cancellationToken))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (seenIds.Add(item.Id))
+                items.Add(item);
+        }
+        return items;
+    }
+
+    /// <summary>
+    /// One composition pass: resolve the stats document and the timestamp,
+    /// materialize, classify into per-entry pools, put each pool in the
+    /// order, apportion the target by percent, fill each entry's quota from
+    /// the front of its pool with the global dedupe (declared entry order —
+    /// contested overlap goes to the earlier entry), redistribute shortfall
+    /// proportionally across entries with remaining supply, and put the
+    /// selection in the order again for presentation.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Paced and cancellable.</b> The per-decision passes — classification,
+    /// and the order's key pass (<see cref="ProblemOrdering"/>) — yield on
+    /// <paramref name="yielder"/>'s time budget and observe
+    /// <paramref name="cancellationToken"/> decision by decision; the sorts and
+    /// the draws stay synchronous. A composition cancelled part-way assigns no
+    /// telemetry.
+    /// </para>
+    /// <para>
+    /// <b>What it leaves behind.</b> Everything it builds per decision — the
+    /// materialized list, the records, the pools, the keys — and the stats
+    /// document it read are its own locals, released when it returns: the
+    /// enumeration keeps the drawn decisions and the telemetry, and nothing
+    /// else.
+    /// </para>
+    /// </remarks>
+    private async ValueTask<(List<BgDecisionData> Drawn, MixComposition Composition)> ComposeAsync(
+        CooperativeYielder yielder, CancellationToken cancellationToken)
+    {
+        // An active mix was given a provider at construction.
+        var stats = _statsProvider!()
+            ?? throw new InvalidOperationException(
+                "The stats provider returned null. A MixedProblemSetSource with an active mix " +
+                "requires the current ProblemStatsDocument (an empty document is valid — it " +
+                "means nothing has been quizzed); when there is no stats document at all, pass " +
+                "no provider, which only a blank mix allows.");
+        var now = _clock.GetUtcNow();
+
+        var items = await MaterializeAsync(cancellationToken);
+
         var entries = _mix.Entries;
         int n = entries.Count;
 
@@ -333,6 +373,8 @@ public sealed class MixedProblemSetSource : IProblemSetSource
         var records = new ProblemStats?[items.Count];
         for (int idx = 0; idx < items.Count; idx++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+
             // Lifetime record by content identity; none means never quizzed.
             stats.Problems.TryGetValue(ProblemKey.From(items[idx]), out var record);
             records[idx] = record;
@@ -347,6 +389,8 @@ public sealed class MixedProblemSetSource : IProblemSetSource
             }
             if (!matchedAny && residualIndex >= 0)
                 pools[residualIndex].Add(idx);
+
+            await yielder.YieldIfDueAsync();
         }
 
         // The deduped union of the selected pools bounds what any draw can reach.
@@ -362,6 +406,15 @@ public sealed class MixedProblemSetSource : IProblemSetSource
                     unionCount++;
                 }
             }
+        }
+
+        // The reachable positions, in source order: the only ones the order
+        // ever arranges, so the only ones whose key is read.
+        var reachablePositions = new List<int>(unionCount);
+        for (int idx = 0; idx < items.Count; idx++)
+        {
+            if (reachable[idx])
+                reachablePositions.Add(idx);
         }
 
         // The capped/capless split, read once and reported once
@@ -380,8 +433,11 @@ public sealed class MixedProblemSetSource : IProblemSetSource
 
         // Each row's eligible set, put in the order: its quota is filled from
         // the front. Shuffled makes each fill a uniform draw without
-        // replacement; as read leaves the pools in source order.
-        var ordering = ProblemOrdering.Over(items, _order, _ranking, records, _random);
+        // replacement; as read leaves the pools in source order. The keys are
+        // read once here, for the reachable decisions, paced and cancellable;
+        // the sorts are synchronous.
+        var ordering = await ProblemOrdering.OverAsync(
+            items, reachablePositions, _order, _ranking, records, _random, yielder, cancellationToken);
         foreach (var pool in pools)
             ordering.Arrange(pool);
 
@@ -465,13 +521,13 @@ public sealed class MixedProblemSetSource : IProblemSetSource
                 Requested: requested[i],
                 Drawn: drawnPerEntry[i]);
         }
-        composition = new MixComposition(
+        var composition = new MixComposition(
             target,
             HasRequestedLength: requestedLength is not null,
             totalDrawn,
             entryReports);
 
-        return result;
+        return (result, composition);
     }
 
     /// <summary>
