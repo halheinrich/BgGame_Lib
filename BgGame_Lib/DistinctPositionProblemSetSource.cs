@@ -48,7 +48,7 @@ using BgDataTypes_Lib;
 /// first content-occurrence. Determining which later copies collapse — and
 /// the full class inventory — needs the whole item set up front, so each
 /// <see cref="EnumerateAsync"/> call drains the inner source into a list
-/// before yielding anything: the <see cref="ShuffledProblemSetSource"/>
+/// before yielding anything: the <see cref="OrderedProblemSetSource"/>
 /// materialization tradeoff, deliberate here for the same reason.
 /// </para>
 ///
@@ -67,7 +67,7 @@ using BgDataTypes_Lib;
 /// </para>
 ///
 /// <para>
-/// <b>Intended layering.</b> Composes beneath shuffle / mix: the consumer
+/// <b>Intended layering.</b> Composes beneath order / mix: the consumer
 /// wires this decorator closest to the raw source, so every downstream layer
 /// sees an already problem-distinct stream. Nothing in this library depends
 /// on that ordering; it is the consumer's wiring convention.

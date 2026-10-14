@@ -31,7 +31,7 @@ using BgDataTypes_Lib;
 ///
 /// <para>
 /// <b>Composition per enumeration.</b> An active mix materializes the inner
-/// source (the <see cref="ShuffledProblemSetSource"/> tradeoff — composition
+/// source (the <see cref="OrderedProblemSetSource"/> tradeoff — composition
 /// needs the whole set), deduping by <see cref="BgDecisionData.Id"/> (first
 /// occurrence wins: a quiz presents each decision at most once). One stats
 /// document and one timestamp are resolved per pass, so every predicate sees
@@ -60,7 +60,7 @@ using BgDataTypes_Lib;
 /// shuffled for presentation. Off: fully deterministic — pools are drawn in
 /// source order and presented in source order, with no RNG dependence at
 /// all. The seeded constructor fixes the random-mode sequence for
-/// deterministic tests, mirroring <see cref="ShuffledProblemSetSource"/>
+/// deterministic tests, mirroring <see cref="OrderedProblemSetSource"/>
 /// (stable within a .NET runtime version, not audit-grade).
 /// </para>
 ///

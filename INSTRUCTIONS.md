@@ -63,10 +63,11 @@ and `Directory.Packages.props` (Central Package Management).
   and `VerifiableDiceSource` with its commit-and-reveal pair `DiceKey` /
   `DiceCommitment`.
 - **Problem sources** — `IProblemSetSource`, the re-iterable async problem
-  stream, and its decorators: `ShuffledProblemSetSource`,
-  `DistinctPositionProblemSetSource` (with its `DuplicatePositionClass`
-  telemetry) and `MixedProblemSetSource` (with its `MixComposition` /
-  `MixCompositionEntry` telemetry).
+  stream; `ProblemOrder`, the four orders a run presents its problems in,
+  with the internal `ProblemOrdering`, their one application; and the
+  decorators: `OrderedProblemSetSource`, `DistinctPositionProblemSetSource`
+  (with its `DuplicatePositionClass` telemetry) and `MixedProblemSetSource`
+  (with its `MixComposition` / `MixCompositionEntry` telemetry).
 - **Quiz scoring** — `PlaySubmission` (with `PlaySubmissionKind`), the one
   place a submitted play is scored under a ranking; `SubmittedPlay` and
   `SubmittedCubeAnswer`, the scored submissions; the internal `Correctness`,
@@ -497,36 +498,76 @@ Future implementations (uploaded files, deployed problem-set bundles,
 curated libraries) plug in via the same interface without changes to the
 consuming quiz controller.
 
-`ShuffledProblemSetSource` is the one concrete `IProblemSetSource` shipping
-here — a **decorator**, not a leaf source. It wraps any inner source and
-presents that source's decisions in a randomized (Fisher-Yates) order,
-composing over server-disk, uploaded-file, or future bundle sources because
-it speaks only the interface. The consumer wires it in: BgQuiz_Blazor's
-`Program.cs` wraps the picked source only when the user toggles shuffle on.
+### Problem order
 
-- **Materialization.** Shuffling needs the whole item set up front, so each
-  `EnumerateAsync` drains the inner source into a list before yielding
-  anything. For a lazily streamed, uncounted inner source this trades that
-  source's streaming/lazy-count behavior for one full materialization per
-  enumeration — a deliberate cost of shuffling, not a free wrapper.
-- **Name / Count passthrough.** Order is the only thing shuffling changes;
+`ProblemOrder` is the one definition of the four orders a run presents its
+problems in (SPEC-filtering.md §7): `AsRead` (source order — files in the
+sample's order, decisions in game-and-move order within a file; the default
+and the zero value), `Shuffled` (a fresh uniform random order on every
+enumeration), `ByErrorLargestFirst` and `ByMoveNumberAscending`. The consumer
+holds the user's choice and passes it in; this library applies it.
+
+- **Equal keys keep source order.** Every order but `Shuffled` is a stable
+  order over the inner stream.
+- **The by-error key** is the error XG recorded for the move actually played,
+  under the run's `PlayRanking`, exactly as the filter's error facet reads it
+  (`decision.ViewFor(ranking).PlayerResult.TryGetError(out var error)`): a
+  correct decision's is 0, an unstated move's is the analyser's, and a
+  decision with no error counts as 0.0.
+- **By move number** is the number alone, ascending, across games and files;
+  a decision with no move number (a position file's) goes last, in source
+  order; a non-standard start's number is used as recorded.
+- **The names are persisted tokens, and stable.** The enum carries
+  `StrictJsonStringEnumConverter<ProblemOrder>` (BgDataTypes_Lib's: the
+  declared name is the token, ordinals refused) and is declared in
+  `BgGameJsonContext`, so a consumer persists the choice through the context.
+  Each member carries a `[Description]` — the UI label ("As read",
+  "Shuffled", "By error, largest first", "By move number, ascending"), which
+  belongs to the type owner, as `PlayRanking`'s do.
+
+**One application.** The internal `ProblemOrdering` is the only code that
+arranges decisions in an order. Built once per enumeration over its
+materialized, source-ordered list, it reads each decision's key once and puts
+any set of positions into that list in the order: every deterministic order
+breaks ties by position, which is what keeps equal keys in source order and
+makes each sort total (`List<T>.Sort` is not stable on its own); `Shuffled`
+is a Fisher–Yates pass with the host's `Random`, and no other order consumes
+randomness. `ProblemOrdering.ErrorKey` is the by-error key's one definition.
+
+`OrderedProblemSetSource` is the order's **plain application** — a
+**decorator**, not a leaf source. It wraps any inner source with an order
+and the run's ranking (read by the by-error order only, but always a defined
+one), composing over server-disk, uploaded-file, or future bundle sources
+because it speaks only the interface. It replaces `ShuffledProblemSetSource`,
+deleted so that `ProblemOrder.Shuffled` is the one spelling of "shuffled".
+
+- **As read is inert.** `AsRead` streams the inner source through unchanged:
+  no materialization, no randomness, no dedupe.
+- **Every other order materializes.** Sorting or shuffling needs the whole
+  item set up front, so each `EnumerateAsync` drains the inner source into a
+  list before yielding anything. For a lazily streamed, uncounted inner source
+  this trades that source's streaming/lazy-count behavior for one full
+  materialization per enumeration — a deliberate cost of an order, not a free
+  wrapper.
+- **Name / Count passthrough.** An order changes presentation only;
   cardinality is untouched and the decorator knows no more about the inner
   size than the inner does. Both properties pass through unchanged (`Count`
   stays null when the inner source streams).
-- **Re-shuffle per enumeration.** The decorator caches no shuffled list. Each
-  `EnumerateAsync` re-materializes from the inner source's current state
-  (itself required to be re-iterable) and re-shuffles using this instance's
-  shared `Random`, so successive calls — a quiz controller's Restart — draw a
-  *new* permutation rather than replaying the last one. That matches what
-  "restart a shuffled quiz" means to a user, and keeps the decorator stateless
-  beyond the RNG.
+- **Re-applied per enumeration.** The decorator caches nothing. Each
+  `EnumerateAsync` re-applies the order to the inner source's current state
+  (itself required to be re-iterable), so under `Shuffled` successive calls —
+  a quiz controller's Restart — draw a *new* permutation from this instance's
+  shared `Random` rather than replaying the last one. That matches what
+  "restart a shuffled quiz" means to a user, and keeps the decorator
+  stateless beyond the RNG.
 - **Two constructors.** The unseeded ctor seeds `Random` non-deterministically
-  — production use where reproducibility isn't wanted (the path `Program.cs`
-  takes). The seeded ctor fixes the shuffle sequence for deterministic tests
-  and replayable sessions; reproducibility scope mirrors `SeededDiceSource`
-  (stable within a .NET runtime version via the framework's compatibility
-  `Random`, not an audit-grade guarantee). Not thread-safe — `Random` isn't,
-  and the wrapper adds no synchronization.
+  — production use where reproducibility isn't wanted. The seeded ctor fixes
+  the shuffle sequence for deterministic tests and replayable sessions;
+  reproducibility scope mirrors `SeededDiceSource` (stable within a .NET
+  runtime version via the framework's compatibility `Random`, not an
+  audit-grade guarantee). An undefined order or ranking is refused at
+  construction (`ArgumentOutOfRangeException`). Not thread-safe — `Random`
+  isn't, and the wrapper adds no synchronization.
 
 ### Quiz-result records
 
@@ -940,7 +981,7 @@ by reference and report identical configs unequal, so the class hand-rolls
 ### Stats-weighted composing source
 
 `MixedProblemSetSource` is the third `IProblemSetSource` decorator-family
-member (alongside `ShuffledProblemSetSource`): it composes each enumeration's
+member (alongside `OrderedProblemSetSource`): it composes each enumeration's
 quiz from an inner source by classifying decisions against a `QuizMix`'s
 categories and drawing per-entry pools to the percentage composition.
 **Composition, not ordering** — the mix decides *which* decisions form the
@@ -1031,14 +1072,14 @@ the ratified consequence.
 - **Contract plumbing.** `Name` passes through; `Count` is always null (how
   many problems collapse is unknowable before enumeration); each enumeration
   re-drains the inner source and recomputes survivors and classes fresh.
-  Materializes per enumeration (the shuffled tradeoff — first-occurrence
+  Materializes per enumeration (the ordered tradeoff — first-occurrence
   placement plus the class inventory need the whole set). Wires closest to
-  the raw source, beneath shuffle/mix, by consumer convention. Stateful
+  the raw source, beneath order/mix, by consumer convention. Stateful
   telemetry ⇒ not thread-safe (the `MixedProblemSetSource` caveat class).
 
 ### Cooperative yielding on the enumeration hot path
 
-The materializing decorators (shuffled / mixed / distinct) drain their inner
+The materializing decorators (ordered / mixed / distinct) drain their inner
 source and then present a large drawn set. `CooperativeYielder` single-sources
 how those presentation loops yield to the scheduler so a Blazor WASM Start
 stays responsive without paying a per-item cost.
@@ -1121,17 +1162,21 @@ instances combine.
 `BgGameJsonContext` (halheinrich/backgammon#129 leg 3) is the public
 source-generated `JsonSerializerContext` over this library's wire surface:
 trim-safe serializer metadata produced at compile time, byte-identical to the
-reflection path (pinned by `BgGameJsonContextTests`), both bundled converters
-honored. Its `[JsonSerializable]` roots are this library's two wire units, and
-both are document roots — `ProblemStatsDocument` and `QuizMix`.
+reflection path (pinned by `BgGameJsonContextTests`), every bundled converter
+honored. Its `[JsonSerializable]` roots are this library's three wire units:
+two document roots — `ProblemStatsDocument` and `QuizMix` — and one value,
+`ProblemOrder`, the persisted choice of problem order, whose bundled
+`StrictJsonStringEnumConverter<ProblemOrder>` (BgDataTypes_Lib's) writes its
+member name.
 
 **The closure is the roots and nothing else,** by construction rather than by
-luck: both converters write and read their whole trees by hand against a
-`Utf8JsonWriter` / `Utf8JsonReader`, so the serializer is never asked to
-resolve a nested type. `ProblemStats`, `ScoreSegment`, `QuizMixEntry` and
-`QuizCategory` never reach a resolver, and neither does `ProblemKey` — its
-canonical string is written as a raw JSON property name and re-parsed on read.
-That is why this context chains no other, BgDataTypes_Lib's included.
+luck: both document converters write and read their whole trees by hand
+against a `Utf8JsonWriter` / `Utf8JsonReader`, so the serializer is never
+asked to resolve a nested type, and the enum's converter writes one string.
+`ProblemStats`, `ScoreSegment`, `QuizMixEntry` and `QuizCategory` never reach
+a resolver, and neither does `ProblemKey` — its canonical string is written as
+a raw JSON property name and re-parsed on read. That is why this context
+chains no other, BgDataTypes_Lib's included.
 
 **Public, and load-bearing so.** The arc's standing shape is one public
 context per producer repo; here the consumer is the party that needs it.
@@ -1149,7 +1194,8 @@ var options = new JsonSerializerOptions
 `QuizMix` is declared for the opposite reason: no consumer names it, but its
 own `ToJson` / `FromJson` / `TryFromJson` trio does — those three are this
 library's trim-safe entry points and resolve their metadata here instead of by
-runtime reflection.
+runtime reflection. `ProblemOrder` is declared for the consumer that persists the
+user's choice of order, which reads and writes its token through this context.
 
 The arc's two binding rules both land:
 
@@ -1180,7 +1226,7 @@ A completeness test keeps the declarations honest, in the
 halheinrich/backgammon#144 intersection pattern: the wire surface derived from
 the assembly (every type carrying a type-level `[JsonConverter]`) must equal
 the roots derived from the context's generated `JsonTypeInfo<T>` properties. A
-third wire unit lands in the first set the moment it is written; a stale
+new wire unit lands in the first set the moment it is written; a stale
 declaration fails the other way.
 
 ### Why these types live here, not in BgDataTypes_Lib
@@ -1398,14 +1444,25 @@ public interface IProblemSetSource
     IAsyncEnumerable<BgDecisionData> EnumerateAsync(CancellationToken cancellationToken = default);
 }
 
-public sealed class ShuffledProblemSetSource : IProblemSetSource   // decorator: Fisher-Yates over an inner source
+// The four orders (SPEC-filtering.md §7). The names are persisted tokens: stable.
+[JsonConverter(typeof(StrictJsonStringEnumConverter<ProblemOrder>))]
+public enum ProblemOrder
 {
-    public ShuffledProblemSetSource(IProblemSetSource inner);              // production: non-deterministic seed
-    public ShuffledProblemSetSource(IProblemSetSource inner, int seed);   // deterministic tests / replay
+    [Description("As read")] AsRead = 0,                                    // source order; the default
+    [Description("Shuffled")] Shuffled,                                     // fresh uniform order per enumeration
+    [Description("By error, largest first")] ByErrorLargestFirst,           // XG's error under the ranking; none = 0.0
+    [Description("By move number, ascending")] ByMoveNumberAscending,       // the number alone; none last
+}                                                                          // every non-shuffled order: ties keep source order
+
+public sealed class OrderedProblemSetSource : IProblemSetSource   // decorator: the order's plain application
+{
+    public OrderedProblemSetSource(IProblemSetSource inner, ProblemOrder order, PlayRanking ranking);             // production: non-deterministic seed
+    public OrderedProblemSetSource(IProblemSetSource inner, ProblemOrder order, PlayRanking ranking, int seed);   // deterministic tests / replay
+        // ArgumentOutOfRangeException on an undefined order or ranking
     public string Name { get; }    // passthrough from inner
     public int? Count { get; }     // passthrough from inner (null when inner streams)
     public IAsyncEnumerable<BgDecisionData> EnumerateAsync(CancellationToken cancellationToken = default);
-        // drains + re-shuffles the inner source each call → a fresh permutation per enumeration
+        // AsRead streams the inner through; any other order drains it and re-applies the order each call
 }
 
 // Quiz scoring. ProblemKey is the content identity: every submission's is its
@@ -1568,12 +1625,13 @@ public sealed class QuizMix                        // immutable; hand-written va
     public static bool TryFromJson(string? json, out QuizMix mix);  // absent/corrupt → Empty + false
 }
 
-// The source-generated serializer metadata over the two wire units above.
+// The source-generated serializer metadata over the three wire units above.
 // Consumers that serialize a BgGame_Lib type themselves chain it, rather than
 // declaring the type in their own context — see "Source generation & trimming".
 [JsonSourceGenerationOptions(GenerationMode = JsonSourceGenerationMode.Metadata)]
 [JsonSerializable(typeof(ProblemStatsDocument))]
 [JsonSerializable(typeof(QuizMix))]
+[JsonSerializable(typeof(ProblemOrder))]
 public sealed partial class BgGameJsonContext : JsonSerializerContext { }
 
 // Stats-weighted composing source (decorator; see Pitfalls for the contracts).
@@ -1825,7 +1883,7 @@ public sealed record AnswerTypeDistribution(
   null: that throws `InvalidOperationException` (wiring bug), while an empty
   document is the valid everything-never-seen input. `LastComposition` is
   per-instance mutable state and the `Random` is shared — not thread-safe,
-  same caveat class as `ShuffledProblemSetSource`. With `RandomOrder` on,
+  same caveat class as `OrderedProblemSetSource`. With `RandomOrder` on,
   re-enumeration is a fresh draw and shuffle, not a replay.
 - **`DistinctPositionProblemSetSource` dedupes by content and is now
   stateful.** The key is the derived `ProblemKey` — the raw XGID string is
@@ -1847,15 +1905,21 @@ public sealed record AnswerTypeDistribution(
   that wrap a one-shot resource (consumed upload, exhausted network stream)
   must throw on a second call rather than silently yielding an empty
   sequence — an empty sequence would look like "no problems" to the consumer.
-- **`ShuffledProblemSetSource` re-shuffles every enumeration — same items,
-  new order.** It honors the re-iterable contract (each `EnumerateAsync`
-  yields the full set from the start), but the order differs between calls:
-  the decorator caches no shuffled list and advances its shared `Random` each
-  pass, so a Restart is a fresh permutation, not a replay. Do not assume the
-  order is stable across enumerations (e.g. caching indices from one pass to
-  address items in the next). It also materializes the inner source in full
-  per enumeration, forfeiting a streaming inner's laziness — wrap only when
-  shuffling is actually wanted.
+- **`OrderedProblemSetSource` re-applies its order every enumeration.** It
+  honors the re-iterable contract (each `EnumerateAsync` yields the full set
+  from the start), but under `Shuffled` the order differs between calls: the
+  decorator caches nothing and advances its shared `Random` each pass, so a
+  Restart is a fresh permutation, not a replay; and the deterministic orders
+  re-sort whatever the inner yields now. Do not assume the order is stable
+  across enumerations (e.g. caching indices from one pass to address items in
+  the next). Every order but `AsRead` materializes the inner source in full
+  per enumeration, forfeiting a streaming inner's laziness; `AsRead` is
+  inert.
+- **There is one spelling of "shuffled": `ProblemOrder.Shuffled`.** Do not
+  reintroduce a shuffle decorator or flag beside it, and do not compute an
+  order's key anywhere but `ProblemOrdering` — the by-error key in
+  particular reads the filter facet's error (`PlayerResult.TryGetError`
+  under the run's ranking), and a second spelling would drift from it.
 - **`Match` aggregation, not ownership.** `GameState.Match` is a reference
   to a `MatchState` that may outlive the `GameState`. Mutations to the
   match (via `AwardGame`) persist into the next game's `GameState`. Do not

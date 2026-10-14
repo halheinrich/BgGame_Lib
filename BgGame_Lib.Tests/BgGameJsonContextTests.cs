@@ -348,7 +348,7 @@ public class BgGameJsonContextTests
     /// <summary>
     /// The vacuity guard on both derivations: an enumeration that silently
     /// returned nothing would satisfy the equality above. Named explicitly so
-    /// the two known wire units are pinned as such, and so this test — not the
+    /// the three known wire units are pinned as such, and so this test — not the
     /// one above — is what fails if a derivation stops working.
     /// </summary>
     [Fact]
@@ -356,8 +356,10 @@ public class BgGameJsonContextTests
     {
         Assert.Contains(typeof(QuizMix), WireSurface());
         Assert.Contains(typeof(ProblemStatsDocument), WireSurface());
+        Assert.Contains(typeof(ProblemOrder), WireSurface());
         Assert.Contains(typeof(QuizMix), DeclaredRoots());
         Assert.Contains(typeof(ProblemStatsDocument), DeclaredRoots());
+        Assert.Contains(typeof(ProblemOrder), DeclaredRoots());
     }
 
     /// <summary>

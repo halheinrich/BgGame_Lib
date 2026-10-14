@@ -12,12 +12,15 @@ using System.Text.Json.Serialization;
 /// bundled <c>[JsonConverter]</c>s are honored unchanged.
 ///
 /// <para>
-/// <b>What is declared, and why.</b> This library has exactly two wire
-/// units, and both are document roots: <see cref="ProblemStatsDocument"/>
-/// (the persistent per-problem stats file behind BgQuiz's stats store) and
-/// <see cref="QuizMix"/> (the persisted quiz-composition config). Neither
-/// carries composite parts for the generator to walk, and that is a property
-/// of their converters rather than an accident: both
+/// <b>What is declared, and why.</b> This library has exactly three wire
+/// units. Two are document roots: <see cref="ProblemStatsDocument"/> (the
+/// persistent per-problem stats file behind BgQuiz's stats store) and
+/// <see cref="QuizMix"/> (the persisted quiz-composition config). The third
+/// is a value: <see cref="ProblemOrder"/>, the user's persisted choice of
+/// problem order, whose token is its member name
+/// (<see cref="BgDataTypes_Lib.StrictJsonStringEnumConverter{TEnum}"/>).
+/// None carries composite parts for the generator to walk, and that is a
+/// property of their converters rather than an accident: both
 /// <see cref="ProblemStatsDocumentJsonConverter"/> and
 /// <see cref="QuizMixJsonConverter"/> write and read their whole trees by
 /// hand against a <see cref="System.Text.Json.Utf8JsonWriter"/> /
@@ -26,12 +29,12 @@ using System.Text.Json.Serialization;
 /// <see cref="ScoreSegment"/>, not <see cref="QuizMixEntry"/>, not
 /// <see cref="QuizCategory"/>, and not
 /// <see cref="BgDataTypes_Lib.ProblemKey"/>, whose canonical string is
-/// written as a raw property name and re-parsed on read. The closure is the
-/// two roots and nothing else, which is why this context chains no other:
-/// see the "resolves the full closure" pair in
-/// <c>BgGameJsonContextTests</c>, which derives that closure from the
-/// serializer's own metadata graph and fails the moment a member starts
-/// routing through the serializer instead.
+/// written as a raw property name and re-parsed on read — and the enum's
+/// converter writes a single string. The closure is the three roots and
+/// nothing else, which is why this context chains no other: see the
+/// "resolves the full closure" pair in <c>BgGameJsonContextTests</c>, which
+/// derives that closure from the serializer's own metadata graph and fails
+/// the moment a member starts routing through the serializer instead.
 /// </para>
 ///
 /// <para>
@@ -57,7 +60,9 @@ using System.Text.Json.Serialization;
 /// consumer names it: its own <see cref="QuizMix.ToJson"/> /
 /// <see cref="QuizMix.FromJson"/> / <see cref="QuizMix.TryFromJson"/> trio
 /// is what needs the metadata, and those are this library's own trim-safe
-/// entry points.
+/// entry points. <see cref="ProblemOrder"/> is declared for the consumer that
+/// persists the choice, which reads and writes its token through this
+/// context.
 /// </para>
 ///
 /// <para>
@@ -74,8 +79,8 @@ using System.Text.Json.Serialization;
 /// </para>
 ///
 /// <para>
-/// <b>No options-level converter registrations exist to express.</b> Both of
-/// this library's converters are bundled by type-level
+/// <b>No options-level converter registrations exist to express.</b> Every
+/// converter this library's wire units use is bundled by type-level
 /// <c>[JsonConverter]</c>, so a caller's plain
 /// <see cref="System.Text.Json.JsonSerializerOptions"/> already finds them
 /// and this context's own options carry nothing beyond the generation mode.
@@ -87,6 +92,7 @@ using System.Text.Json.Serialization;
 [JsonSourceGenerationOptions(GenerationMode = JsonSourceGenerationMode.Metadata)]
 [JsonSerializable(typeof(ProblemStatsDocument))]
 [JsonSerializable(typeof(QuizMix))]
+[JsonSerializable(typeof(ProblemOrder))]
 public sealed partial class BgGameJsonContext : JsonSerializerContext
 {
 }
