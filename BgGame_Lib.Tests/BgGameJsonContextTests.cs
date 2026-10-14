@@ -56,8 +56,8 @@ public class BgGameJsonContextTests
     private static readonly DateTimeOffset T1 = new(2026, 7, 18, 19, 4, 11, TimeSpan.Zero);
     private static readonly DateTimeOffset T2 = new(2026, 7, 19, 8, 30, 0, TimeSpan.FromHours(-7));
 
-    /// <summary>Every <see cref="QuizCategoryKind"/>, both parameter shapes, a
-    /// length, and the non-default random toggle.</summary>
+    /// <summary>Every <see cref="QuizCategoryKind"/>, both parameter shapes, and a
+    /// length.</summary>
     private static QuizMix AllKindsMix() => new(
     [
         new QuizMixEntry(QuizCategory.NeverSeen, 10),
@@ -67,9 +67,9 @@ public class BgGameJsonContextTests
         new QuizMixEntry(QuizCategory.AvgEquityLossOver(0.05), 20),
         new QuizMixEntry(QuizCategory.WrongRateOver(0.25), 20),
         new QuizMixEntry(QuizCategory.EverythingElse, 20),
-    ], quizLength: 25, randomOrder: false);
+    ], quizLength: 25);
 
-    /// <summary>The capless mix: entries, no length, default toggle — so the
+    /// <summary>The capless mix: entries, no length — so the
     /// <c>quizLength</c> null branch of the writer is covered too.</summary>
     private static QuizMix CaplessMix() =>
         new([new QuizMixEntry(QuizCategory.NeverSeen, 100)]);
@@ -196,11 +196,11 @@ public class BgGameJsonContextTests
             [
                 new QuizMixEntry(QuizCategory.SeenFewerThan(3), 40),
                 new QuizMixEntry(QuizCategory.EverythingElse, 60),
-            ], quizLength: 25, randomOrder: false),
+            ], quizLength: 25),
             TypeInfo<QuizMix>(ContextOnlyOptions));
 
         Assert.Equal(
-            """{"schemaVersion":1,"randomOrder":false,"quizLength":25,"entries":[{"category":{"kind":"SeenFewerThan","value":3},"percent":40},{"category":{"kind":"EverythingElse"},"percent":60}]}""",
+            """{"schemaVersion":2,"quizLength":25,"entries":[{"category":{"kind":"SeenFewerThan","value":3},"percent":40},{"category":{"kind":"EverythingElse"},"percent":60}]}""",
             json);
     }
 

@@ -8,18 +8,20 @@ using BgDataTypes_Lib;
 
 /// <summary>
 /// The stats-weighted quiz composition config: an ordered set of
-/// <see cref="QuizMixEntry"/> lines (category + percentage), an optional quiz
-/// length, and the random toggle. Immutable;
-/// <see cref="MixedProblemSetSource"/> reads it to decide <i>which</i>
-/// decisions form a quiz.
+/// <see cref="QuizMixEntry"/> lines (category + percentage) and an optional
+/// quiz length. Immutable; <see cref="MixedProblemSetSource"/> reads it to
+/// decide <i>which</i> decisions form a quiz, and nothing else — the mix
+/// selects, and the run's <see cref="ProblemOrder"/> presents
+/// (SPEC-filtering.md §5). Its random-order toggle was retired on 2026-10-14
+/// with schema version 1.
 ///
 /// <para>
-/// <b>Blank mix = passthrough.</b> <see cref="Empty"/> (no entries) makes the
-/// composition layer fully inert: every inner decision, source order,
-/// today's behavior. A quiz length without entries is rejected — blank means
-/// inert, and "cap at N without weighting" is expressed losslessly as a
-/// single <see cref="QuizCategory.EverythingElse"/> entry at 100 percent plus
-/// a length, so no second blank-ish state exists.
+/// <b>Blank mix = no composition.</b> <see cref="Empty"/> (no entries)
+/// composes nothing: every inner decision, presented in the run's order. A
+/// quiz length without entries is rejected — blank means no composition, and
+/// "cap at N without weighting" is expressed losslessly as a single
+/// <see cref="QuizCategory.EverythingElse"/> entry at 100 percent plus a
+/// length, so no second blank-ish state exists.
 /// </para>
 ///
 /// <para>
@@ -43,7 +45,10 @@ using BgDataTypes_Lib;
 /// <see cref="QuizMixJsonConverter"/> (type-level <c>[JsonConverter]</c> —
 /// consumers register nothing) with schema version
 /// <see cref="CurrentSchemaVersion"/>; fixed property names, fail-loud reads,
-/// a version bump as the format's only evolution mechanism. Consumers that
+/// a version bump as the format's only evolution mechanism. A version-1
+/// document still reads, under its own contract, with its toggle dropped —
+/// so two version-1 documents differing only in the toggle read as equal
+/// mixes. Consumers that
 /// persist a mix (e.g. browser localStorage) round-trip through
 /// <see cref="ToJson"/> / <see cref="FromJson"/>, with
 /// <see cref="TryFromJson"/> as the absent-or-corrupt-restores-to-default
@@ -60,8 +65,8 @@ using BgDataTypes_Lib;
 /// <para>
 /// <b>Value equality over the full member surface.</b> Two mixes are equal
 /// when <see cref="Entries"/> match as an ordered sequence and
-/// <see cref="QuizLength"/> and <see cref="RandomOrder"/> match — so "does
-/// this draft differ from the committed mix?" is a single <c>==</c>. Order
+/// <see cref="QuizLength"/> matches — so "does this draft differ from the
+/// committed mix?" is a single <c>==</c>. Order
 /// participates because entry order is contractual (see above): the same
 /// entries reordered are a different mix. A class with hand-written equality
 /// rather than a record: the type wraps a list, and the record-generated form
@@ -74,34 +79,28 @@ using BgDataTypes_Lib;
 public sealed class QuizMix : IEquatable<QuizMix>, IJsonDocument<QuizMix>
 {
     /// <summary>
-    /// The schema version this library reads and writes. Reads reject any
+    /// The schema version this library writes. Reads accept it and version 1
+    /// (read under its own contract, its toggle dropped) and reject every
     /// other version (fail-loud); see <see cref="QuizMixJsonConverter"/>.
     /// </summary>
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     /// <summary>
-    /// The blank mix: no entries, no length — the composition layer is fully
-    /// inert (passthrough).
+    /// The blank mix: no entries, no length — it composes nothing.
     /// </summary>
     public static QuizMix Empty { get; } = new([]);
 
     /// <summary>
-    /// Create a mix from its entry lines, optional quiz length, and random
-    /// toggle.
+    /// Create a mix from its entry lines and optional quiz length.
     /// </summary>
     /// <param name="entries">
     /// The entry lines, in draw order (order is contractual — see the type
-    /// remarks). Empty means passthrough.
+    /// remarks). Empty means no composition.
     /// </param>
     /// <param name="quizLength">
     /// Requested quiz length, or <see langword="null"/> to size the quiz to
     /// every decision the selected categories reach (the deduped union of
     /// their pools).
-    /// </param>
-    /// <param name="randomOrder">
-    /// <see langword="true"/> (the default): randomized draws and shuffled
-    /// presentation. <see langword="false"/>: fully deterministic — source
-    /// order drives both draws and presentation.
     /// </param>
     /// <exception cref="ArgumentNullException">
     /// Thrown when <paramref name="entries"/> is <see langword="null"/>.
@@ -110,12 +109,12 @@ public sealed class QuizMix : IEquatable<QuizMix>, IJsonDocument<QuizMix>
     /// Thrown when <paramref name="entries"/> contains a <see langword="null"/>
     /// element or a duplicate category, when non-empty entries do not sum to
     /// exactly 100, or when <paramref name="quizLength"/> is given with no
-    /// entries (blank means inert — see the type remarks).
+    /// entries (blank means no composition — see the type remarks).
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException">
     /// Thrown when <paramref name="quizLength"/> is less than 1.
     /// </exception>
-    public QuizMix(IEnumerable<QuizMixEntry> entries, int? quizLength = null, bool randomOrder = true)
+    public QuizMix(IEnumerable<QuizMixEntry> entries, int? quizLength = null)
     {
         ArgumentNullException.ThrowIfNull(entries);
         var list = entries.ToImmutableArray();
@@ -142,13 +141,12 @@ public sealed class QuizMix : IEquatable<QuizMix>, IJsonDocument<QuizMix>
 
         if (list.IsEmpty && quizLength is not null)
             throw new ArgumentException(
-                "A quiz length without entries has no composition to apply — a blank mix is " +
-                "fully inert. Use a single EverythingElse entry at 100 percent to cap the " +
+                "A quiz length without entries has no composition to apply — a blank mix " +
+                "composes nothing. Use a single EverythingElse entry at 100 percent to cap the " +
                 "length without weighting.", nameof(quizLength));
 
         Entries = list;
         QuizLength = quizLength;
-        RandomOrder = randomOrder;
     }
 
     /// <summary>
@@ -164,23 +162,16 @@ public sealed class QuizMix : IEquatable<QuizMix>, IJsonDocument<QuizMix>
     public int? QuizLength { get; }
 
     /// <summary>
-    /// <see langword="true"/>: randomized draws and shuffled presentation.
-    /// <see langword="false"/>: fully deterministic — source order drives
-    /// both draws and presentation.
-    /// </summary>
-    public bool RandomOrder { get; }
-
-    /// <summary>
-    /// Whether this mix is blank (no entries) and therefore makes the
-    /// composition layer fully inert.
+    /// Whether this mix is blank (no entries) and therefore composes
+    /// nothing: every inner decision passes to the run's order.
     /// </summary>
     public bool IsPassthrough => Entries.Count == 0;
 
     /// <summary>
     /// Value equality over the full member surface: <see cref="Entries"/> as
     /// an ordered sequence (order is contractual — the same entries reordered
-    /// are a different mix), plus <see cref="QuizLength"/> and
-    /// <see cref="RandomOrder"/>. See the type remarks.
+    /// are a different mix), plus <see cref="QuizLength"/>. See the type
+    /// remarks.
     /// </summary>
     /// <param name="other">The mix to compare with, or <see langword="null"/>.</param>
     /// <returns>
@@ -194,7 +185,6 @@ public sealed class QuizMix : IEquatable<QuizMix>, IJsonDocument<QuizMix>
             return true;
         return other is not null
             && QuizLength == other.QuizLength
-            && RandomOrder == other.RandomOrder
             && Entries.SequenceEqual(other.Entries);
     }
 
@@ -203,8 +193,8 @@ public sealed class QuizMix : IEquatable<QuizMix>, IJsonDocument<QuizMix>
 
     /// <summary>
     /// Hash code consistent with <see cref="Equals(QuizMix?)"/>: folds the
-    /// entry sequence in order, then <see cref="QuizLength"/> and
-    /// <see cref="RandomOrder"/>. Safe to hash — the type is immutable.
+    /// entry sequence in order, then <see cref="QuizLength"/>. Safe to hash —
+    /// the type is immutable.
     /// </summary>
     /// <returns>The content-based hash code.</returns>
     public override int GetHashCode()
@@ -213,7 +203,6 @@ public sealed class QuizMix : IEquatable<QuizMix>, IJsonDocument<QuizMix>
         foreach (var entry in Entries)
             hash.Add(entry);
         hash.Add(QuizLength);
-        hash.Add(RandomOrder);
         return hash.ToHashCode();
     }
 
@@ -263,7 +252,8 @@ public sealed class QuizMix : IEquatable<QuizMix>, IJsonDocument<QuizMix>
     /// <para>
     /// What is this type's own is the wire contract being enforced:
     /// <see cref="QuizMixJsonConverter"/> pins the property names and the
-    /// schema version, and rejects any other version, so a read that survives
+    /// schema versions it reads (the current one, and version 1 under its own
+    /// contract), and rejects any other version, so a read that survives
     /// this call yields a mix that also satisfies the set-level rules.
     /// </para>
     /// </summary>
@@ -288,8 +278,8 @@ public sealed class QuizMix : IEquatable<QuizMix>, IJsonDocument<QuizMix>
     /// absorb-exactly-those-three rule lives in
     /// <see cref="CanonicalJson.TryParse{T}"/>, which this forwards to; what
     /// this type supplies is the inert default the contract asks each
-    /// implementer to name — <see cref="Empty"/>, the blank mix, which leaves
-    /// composition fully passthrough.
+    /// implementer to name — <see cref="Empty"/>, the blank mix, which
+    /// composes nothing.
     /// </summary>
     /// <param name="json">
     /// The candidate JSON, or null. Typically read straight from a

@@ -505,15 +505,23 @@ problems in (SPEC-filtering.md §7): `AsRead` (source order — files in the
 sample's order, decisions in game-and-move order within a file; the default
 and the zero value), `Shuffled` (a fresh uniform random order on every
 enumeration), `ByErrorLargestFirst` and `ByMoveNumberAscending`. The consumer
-holds the user's choice and passes it in; this library applies it.
+holds the user's choice and passes it in; this library applies it, exactly
+once, and decides which application it gets: `MixedProblemSetSource` takes
+the order with the mix and applies it by the mixed key when the mix is
+active, and as the plain decorator below when it is blank (see "Stats-weighted
+composing source"). A consumer never arbitrates between the two.
 
 - **Equal keys keep source order.** Every order but `Shuffled` is a stable
   order over the inner stream.
-- **The by-error key** is the error XG recorded for the move actually played,
-  under the run's `PlayRanking`, exactly as the filter's error facet reads it
+- **The by-error key is one definition, in two contexts.** Without a mix:
+  the error XG recorded for the move actually played, under the run's
+  `PlayRanking`, exactly as the filter's error facet reads it
   (`decision.ViewFor(ranking).PlayerResult.TryGetError(out var error)`): a
-  correct decision's is 0, an unstated move's is the analyser's, and a
-  decision with no error counts as 0.0.
+  correct decision's is 0, an unstated move's is the analyser's. With an
+  active mix: the player's lifetime loss per answer where the decision's
+  record holds submissions — looked up by `ProblemKey` in the stats document
+  the composition classified against — and XG's error otherwise. A decision
+  with no error from either source counts as 0.0.
 - **By move number** is the number alone, ascending, across games and files;
   a decision with no move number (a position file's) goes last, in source
   order; a non-standard start's number is used as recorded.
@@ -532,7 +540,13 @@ any set of positions into that list in the order: every deterministic order
 breaks ties by position, which is what keeps equal keys in source order and
 makes each sort total (`List<T>.Sort` is not stable on its own); `Shuffled`
 is a Fisher–Yates pass with the host's `Random`, and no other order consumes
-randomness. `ProblemOrdering.ErrorKey` is the by-error key's one definition.
+randomness. Its two hosts share it: the plain decorator arranges a whole
+enumeration; the composer arranges each row's eligible set and then the
+selection. `ProblemOrdering.ErrorKey(decision, ranking, record)` is the
+by-error key's one definition: the record is the context — the one the
+composition classified against, or none without a mix — and the loss per
+answer it reads is `QuizStatsMeasures.LossPerAnswer`, the same measure the
+average-loss category reads.
 
 `OrderedProblemSetSource` is the order's **plain application** — a
 **decorator**, not a leaf source. It wraps any inner source with an order
@@ -933,13 +947,16 @@ composes quizzes from them (BgQuiz Phase 2+ selection).
 ### Stats-weighted quiz mix config
 
 `QuizMix` / `QuizMixEntry` are the composition config the composing decorator
-reads: an **ordered** list of (category, percent) lines, an optional quiz
-length, and the random toggle (default true). Immutable; both are value-equal:
-`QuizMixEntry` is a record, and `QuizMix` is a class with **hand-written value
-equality over the full member surface** — `Entries` as an ordered sequence
-plus `QuizLength` and `RandomOrder` (a record would compare the wrapped list
-by reference and report identical configs unequal, so the class hand-rolls
-`IEquatable<QuizMix>`, `==`/`!=`, and a consistent hash).
+reads: an **ordered** list of (category, percent) lines and an optional quiz
+length. **The mix selects; the order presents** (SPEC-filtering.md §5,
+2026-10-14): a mix decides which decisions form a quiz and nothing else — the
+run's `ProblemOrder` presents them. Its random-order toggle was retired with
+schema version 1. Immutable; both are value-equal: `QuizMixEntry` is a record,
+and `QuizMix` is a class with **hand-written value equality over the full
+member surface** — `Entries` as an ordered sequence plus `QuizLength` (a
+record would compare the wrapped list by reference and report identical
+configs unequal, so the class hand-rolls `IEquatable<QuizMix>`, `==`/`!=`, and
+a consistent hash).
 
 - **Validation split.** The per-entry rule (percent 1–100) lives in
   `QuizMixEntry`'s own constructor — the earliest construction point, so an
@@ -948,22 +965,31 @@ by reference and report identical configs unequal, so the class hand-rolls
   categories (same kind *and* parameter — the same kind with different
   parameters is two distinct categories and allowed); length null or ≥ 1;
   length-without-entries rejected. All fail fast.
-- **Blank = passthrough, and nothing else is blank-ish.** `QuizMix.Empty`
-  (no entries, no length) makes the composition layer fully inert. A length
-  without entries is rejected rather than treated as an implicit
-  100%-everything mix — "cap at N without weighting" is expressed losslessly
-  as a single `EverythingElse` entry at 100 plus a length.
+- **Blank = no composition, and nothing else is blank-ish.** `QuizMix.Empty`
+  (no entries, no length) composes nothing: every inner decision goes to the
+  run's order (`IsPassthrough`). A length without entries is rejected rather
+  than treated as an implicit 100%-everything mix — "cap at N without
+  weighting" is expressed losslessly as a single `EverythingElse` entry at 100
+  plus a length.
 - **Entry order is contractual.** Under overlapping categories the composer
   draws entries in declared order, so contested decisions go to the earlier
   entry. The wire format preserves order; consumers rendering or persisting
   entry lists must too.
-- **Wire format.** Versioned JSON via the bundled internal
+- **Wire format.** Versioned JSON via the bundled public
   `QuizMixJsonConverter` (type-level `[JsonConverter]`, hand-written fixed
-  property names, `schemaVersion` currently 1) — the
+  property names, `schemaVersion` currently 2) — the
   `ProblemStatsDocumentJsonConverter` posture: all properties always written
-  (`quizLength` as JSON `null` when unset) and always required; reads
-  fail-loud on any other schema version (distinguished "newer" message),
-  unknown or missing properties at any level, invalid kinds (exact
+  (`quizLength` as JSON `null` when unset) and always required. **Version 1
+  still reads, under its own contract:** its `randomOrder` is required and
+  boolean, and dropped on read, so two version-1 documents differing only in
+  it read as equal mixes; a read is written back as version 2. Under version 2
+  `randomOrder` is an unknown property like any other. A stored mix whose
+  toggle was on — the old default — therefore runs in whatever order the run
+  has, as read until the user picks another: the document cannot tell a
+  chosen "on" from the default, and retiring the value is SPEC-filtering.md
+  §5's deliberate compatibility choice. Reads fail loud on any other schema
+  version (distinguished "newer" message above 2), unknown or missing
+  properties at any level, invalid kinds (exact
   declaration-name match — numeric strings and case variants rejected),
   kind/value pairing violations (value forbidden on parameterless kinds,
   required on parameterized ones, integral for integer kinds), and any
@@ -980,19 +1006,29 @@ by reference and report identical configs unequal, so the class hand-rolls
 
 ### Stats-weighted composing source
 
-`MixedProblemSetSource` is the third `IProblemSetSource` decorator-family
-member (alongside `OrderedProblemSetSource`): it composes each enumeration's
-quiz from an inner source by classifying decisions against a `QuizMix`'s
-categories and drawing per-entry pools to the percentage composition.
-**Composition, not ordering** — the mix decides *which* decisions form the
-quiz. Constructor: (inner, stats-provider, mix, clock) plus a seeded overload
-for deterministic tests (the shuffled-source pattern).
+`MixedProblemSetSource` is the run's source builder, an `IProblemSetSource`
+decorator over the consumer's stack: **the mix selects, the order presents**
+(SPEC-filtering.md §5, §7). It takes the order, the ranking, the mix and the
+stats provider — or none, when there is no stats document — and applies the
+order **exactly once**, deciding itself which application it gets: by the
+plain key when the mix is blank, by the mixed key when it is active. That
+arbitration is the library's, never the consumer's: a consumer wires this one
+decorator for every run and never asks whether the mix is blank. Constructor:
+`(inner, order, ranking, mix, statsProvider?, clock)` plus a seeded overload
+for deterministic tests (`OrderedProblemSetSource`'s reproducibility scope).
+An undefined order or ranking is refused (`ArgumentOutOfRangeException`), and
+so is an active mix with no provider (`ArgumentNullException` — a consumer
+error, as it always was).
 
-- **Passthrough.** A blank mix makes the layer fully inert: the inner source
-  streams through unchanged (no materialization, no RNG consumption, no
-  dedupe), `Count` passes through, `LastComposition` is null. With an active
-  mix, `Count` is null — a composition's size depends on the stats document
-  and clock at enumeration time — and `Name` still passes through.
+- **Blank mix: the order alone.** Nothing is composed: the stream is the
+  order's plain application, `OrderedProblemSetSource` over the inner source,
+  sharing this instance's `Random` (so the seeded form reproduces it too) —
+  every decision, no dedupe, the by-error key XG's error, and as read fully
+  inert (no materialization, no randomness). The stats provider is never
+  called. `Count` passes through and `LastComposition` is null. With an
+  active mix, `Count` is null — a composition's size depends on the stats
+  document and clock at enumeration time — and `Name` passes through either
+  way.
 - **Per-enumeration pipeline.** Resolve the stats document (provider seam)
   and one `GetUtcNow()` timestamp (every predicate sees the same "now");
   materialize the inner source, deduping by `DecisionId` (first occurrence
@@ -1007,24 +1043,36 @@ for deterministic tests (the shuffled-source pattern).
   unmatched decisions are simply not drawn); target =
   `QuizLength ?? union of selected pools` (deduped); apportion the target by
   percent via largest remainder (floor, leftover to largest fractional
-  remainders, ties to the earlier entry); draw in declared entry order with
-  the global once-per-quiz dedupe; redistribute shortfall proportionally (by
-  percent, largest remainder again) across entries that still have supply —
-  terminates because the draw goal is capped at the union.
-- **The random toggle.** `RandomOrder` on: uniform draws without replacement,
-  then a Fisher-Yates shuffle of the drawn set for presentation. Off: fully
-  deterministic — pools draw in source order, presentation is source order,
-  and the RNG is never consumed (even an unseeded instance is exactly
-  reproducible).
+  remainders, ties to the earlier entry); put each entry's pool in the order
+  and fill its quota from the front, in declared entry order with the global
+  once-per-quiz dedupe (an already drawn decision is skipped without
+  consuming quota); redistribute shortfall proportionally (by percent,
+  largest remainder again) across entries that still have supply —
+  terminates because the draw goal is capped at the union; then sort the
+  whole selection again in the same order for presentation.
+- **The order, twice in one application.** Each pool is put in the order
+  before it is drawn from, and the whole selection after. So `Shuffled` is
+  the old random mode — uniform draws without replacement within each row, a
+  shuffled presentation — and `AsRead` the old deterministic mode exactly:
+  pools draw in source order, presentation is source order, and the RNG is
+  never consumed (even an unseeded instance is exactly reproducible). The
+  by-error key is the **mixed key**: the player's lifetime loss per answer
+  (`QuizStatsMeasures.LossPerAnswer`) where the decision's record holds
+  submissions — the very record the classification looked up, from the one
+  document resolved for the pass — and XG's error otherwise; 0.0 with
+  neither. The deterministic orders sort the selection globally, so it is
+  never presented row by row. The order's key lives in `ProblemOrdering`, one
+  definition shared with the plain decorator (see "Problem order").
 - **Provider seam (Restart semantics).** The stats input is a
-  current-document getter, resolved fresh per enumeration: the document is
-  immutable and replaced fold-by-fold, so a quiz controller's Restart
-  re-composes against the lifetime record as it stands, including decisions
-  answered this session. A null return is a consumer wiring bug and throws
-  `InvalidOperationException` — the no-stats case is "don't wire the
-  decorator", and silently composing as all-never-seen would mask the bug as
-  a weird quiz. An *empty document* is the legitimate everything-never-seen
-  input and needs no special-casing.
+  current-document getter, resolved fresh per composing enumeration: the
+  document is immutable and replaced fold-by-fold, so a quiz controller's
+  Restart re-composes against the lifetime record as it stands, including
+  decisions answered this session. With no stats document there is no
+  provider to give (`null`), which a blank mix accepts and an active mix
+  refuses at construction. A provider that returns null is a consumer wiring
+  bug and throws `InvalidOperationException` — silently composing as
+  all-never-seen would mask the bug as a weird quiz. An *empty document* is
+  the legitimate everything-never-seen input and needs no special-casing.
 - **Telemetry.** `LastComposition` (a `MixComposition`) carries the most
   recent enumeration's requested-vs-actual: overall `TargetCount` /
   `HasRequestedLength` / `DrawnCount` plus per-entry (category, percent, pool
@@ -1610,16 +1658,15 @@ public sealed record QuizMixEntry
 
 [JsonConverter(typeof(QuizMixJsonConverter))]   // bundled (public converter); consumers register nothing
 public sealed class QuizMix                        // immutable; hand-written value equality — Entries
-    : IEquatable<QuizMix>, IJsonDocument<QuizMix>  // as an ordered sequence + both scalars (see Pitfalls)
+    : IEquatable<QuizMix>, IJsonDocument<QuizMix>  // as an ordered sequence + QuizLength (see Pitfalls)
 {                                                  // IJsonDocument (BgDataTypes_Lib): the three below
-    public const int CurrentSchemaVersion = 1;
-    public static QuizMix Empty { get; }        // blank: composition layer fully inert
-    public QuizMix(IEnumerable<QuizMixEntry> entries, int? quizLength = null, bool randomOrder = true);
+    public const int CurrentSchemaVersion = 2;  // written; version 1 still reads, its toggle dropped
+    public static QuizMix Empty { get; }        // blank: composes nothing
+    public QuizMix(IEnumerable<QuizMixEntry> entries, int? quizLength = null);
         // fail fast: sum == 100, no duplicate categories, length ≥ 1, no length without entries
     public IReadOnlyList<QuizMixEntry> Entries { get; }   // declared order — contractual (see Pitfalls)
     public int? QuizLength { get; }             // null = size to the deduped union of selected pools
-    public bool RandomOrder { get; }            // default true; false = fully deterministic
-    public bool IsPassthrough { get; }          // Entries.Count == 0
+    public bool IsPassthrough { get; }          // Entries.Count == 0: no composition; the order still applies
     public string ToJson();                                         // canonical form
     public static QuizMix FromJson(string json);                    // fail loud; → CanonicalJson.Parse
     public static bool TryFromJson(string? json, out QuizMix mix);  // absent/corrupt → Empty + false
@@ -1634,17 +1681,23 @@ public sealed class QuizMix                        // immutable; hand-written va
 [JsonSerializable(typeof(ProblemOrder))]
 public sealed partial class BgGameJsonContext : JsonSerializerContext { }
 
-// Stats-weighted composing source (decorator; see Pitfalls for the contracts).
+// The run's source: the mix selects, the order presents (decorator; see Pitfalls for the contracts).
+// Applies the order exactly once — the plain key for a blank mix, the mixed key for an active one.
 // Classification looks lifetime records up by each item's derived ProblemKey.
 public sealed class MixedProblemSetSource : IProblemSetSource
 {
     public MixedProblemSetSource(IProblemSetSource inner,
-        Func<ProblemStatsDocument> statsProvider,    // current document, resolved fresh per enumeration;
-        QuizMix mix, TimeProvider clock);            //   must never return null
-    public MixedProblemSetSource(..., int seed);     // deterministic random-mode draws/shuffle for tests
+        ProblemOrder order, PlayRanking ranking,     // ArgumentOutOfRangeException when undefined
+        QuizMix mix,
+        Func<ProblemStatsDocument>? statsProvider,   // current document, resolved fresh per composing enumeration,
+                                                     //   never returning null; null = no stats document, which
+                                                     //   only a blank mix allows (ArgumentNullException otherwise)
+        TimeProvider clock);
+    public MixedProblemSetSource(..., int seed);     // deterministic draws/shuffles for tests
     public string Name { get; }                      // passthrough
     public int? Count { get; }                       // inner.Count when mix.IsPassthrough; else null
-    public MixComposition? LastComposition { get; }  // most recent enumeration; assigned before first yield
+    public MixComposition? LastComposition { get; }  // most recent enumeration; null for a blank mix;
+                                                     //   assigned before first yield
     public IAsyncEnumerable<BgDecisionData> EnumerateAsync(CancellationToken cancellationToken = default);
 }
 
@@ -1859,31 +1912,44 @@ public sealed record AnswerTypeDistribution(
   a mix's entries changes the quiz it composes; preserve order when rendering
   or persisting (the JSON form does). Equality honours the same contract:
   `QuizMix` has hand-written value equality over `Entries` as an **ordered
-  sequence** plus `QuizLength` and `RandomOrder`, so the same entries
-  reordered are a *different* mix — one `==` answers "does the draft differ
-  from the committed mix?". Unlike `ProblemStatsDocument` (which stays
+  sequence** plus `QuizLength`, so the same entries reordered are a
+  *different* mix — one `==` answers "does the draft differ from the
+  committed mix?". Unlike `ProblemStatsDocument` (which stays
   reference-equal), the class hand-rolls the comparison because the
   record-generated form would compare the wrapped list by reference. Reads
   are strict per the same converter posture — a corrupt or foreign mix throws
   `JsonException` rather than loading quietly different; `TryFromJson` is the
   restore-to-default path and yields `Empty`, never a partially-read mix.
+- **A mix has no order, and must not grow one back.** The random toggle was
+  retired on 2026-10-14 (SPEC-filtering.md §5): the mix selects, the run's
+  `ProblemOrder` presents. Version-1 documents still read, toggle dropped, so
+  two that differed only in it are now equal; `randomOrder` under version 2
+  is refused as an unknown property. Do not reintroduce an order-shaped
+  member on the mix, and do not wrap an ordered or shuffled source *under*
+  the composer — it applies the order itself, and a second application would
+  break as read's exact determinism.
 - **`MixedProblemSetSource` contracts differ between blank and active
-  mixes.** Blank (passthrough): streams the inner source unchanged — no
-  dedupe (duplicate ids stream through), `Count` passthrough,
-  `LastComposition` null. Active: materializes per enumeration (the shuffled
+  mixes — the order applies to both.** Blank: the order's plain application
+  over the inner source — no dedupe (duplicate ids stream through), `Count`
+  passthrough, `LastComposition` null, the stats provider never called (and
+  none needed), and as read inert; the composer's blank path must never
+  swallow the order. Active: materializes per enumeration (the ordered
   tradeoff), dedupes by `DecisionId` (first occurrence wins — record
   identity, deliberately not the content key), classifies **by each item's
   derived `ProblemKey`** (a content-equal copy under a different id
-  classifies by the problem's record), `Count` is null (read
-  `LastComposition.DrawnCount` after
-  enumeration starts instead), and decisions matched by no selected entry
-  are unreachable unless an `EverythingElse` entry is in the mix. The stats
-  provider is resolved fresh per enumeration — Restart composes against the
-  *current* document, including this session's folds — and must never return
-  null: that throws `InvalidOperationException` (wiring bug), while an empty
-  document is the valid everything-never-seen input. `LastComposition` is
+  classifies by the problem's record), puts each row in the order before
+  filling it and the selection after, `Count` is null (read
+  `LastComposition.DrawnCount` after enumeration starts instead), and
+  decisions matched by no selected entry are unreachable unless an
+  `EverythingElse` entry is in the mix. The stats provider is resolved fresh
+  per composing enumeration — Restart composes against the *current*
+  document, including this session's folds — and must never return null:
+  that throws `InvalidOperationException` (wiring bug), while an empty
+  document is the valid everything-never-seen input, and no provider at all
+  is valid only for a blank mix. The consumer wires this decorator for every
+  run and never decides by `IsPassthrough` itself. `LastComposition` is
   per-instance mutable state and the `Random` is shared — not thread-safe,
-  same caveat class as `OrderedProblemSetSource`. With `RandomOrder` on,
+  same caveat class as `OrderedProblemSetSource`. Under `Shuffled`,
   re-enumeration is a fresh draw and shuffle, not a replay.
 - **`DistinctPositionProblemSetSource` dedupes by content and is now
   stateful.** The key is the derived `ProblemKey` — the raw XGID string is

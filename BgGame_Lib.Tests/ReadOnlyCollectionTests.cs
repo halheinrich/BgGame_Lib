@@ -166,7 +166,7 @@ public class ReadOnlyCollectionTests
         var mix = new QuizMix([new QuizMixEntry(QuizCategory.NeverSeen, 100)]);
         var source = new MixedProblemSetSource(
             new FixedSource([TestRecords.CheckerPlay()]),
-            () => ProblemStatsDocument.Empty, mix, TimeProvider.System, seed: 1);
+            ProblemOrder.Shuffled, PlayRanking.Equity, mix, () => ProblemStatsDocument.Empty, TimeProvider.System, seed: 1);
 
         await foreach (var _ in source.EnumerateAsync()) { }
 

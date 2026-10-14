@@ -4,29 +4,32 @@ using System.Runtime.CompilerServices;
 using BgDataTypes_Lib;
 
 /// <summary>
-/// <see cref="IProblemSetSource"/> decorator that composes a quiz from an
-/// inner source by lifetime performance: each enumeration classifies the
-/// inner decisions against a <see cref="QuizMix"/>'s categories (using the
-/// consumer's current <see cref="ProblemStatsDocument"/>) and draws
-/// per-entry pools to the percentage composition. Composition, not ordering:
-/// the mix decides <i>which</i> decisions form the quiz.
+/// <see cref="IProblemSetSource"/> decorator that builds a run's problem
+/// stream from an inner source: a <see cref="QuizMix"/> selects which
+/// decisions form the quiz, by lifetime performance, and a
+/// <see cref="ProblemOrder"/> presents them (SPEC-filtering.md §5, "The mix
+/// selects; the order presents", and §7). The order is applied exactly once,
+/// and which application it gets is decided here, never by the consumer: by
+/// the plain key when the mix is blank, by the mixed key when it is active.
 ///
 /// <para>
-/// <b>Classification is by content identity.</b> Each decision's lifetime
-/// record is looked up by its derived <see cref="ProblemKey"/>
+/// <b>Blank mix: the order alone.</b> When the mix
+/// <see cref="QuizMix.IsPassthrough"/>, nothing is composed: the stream is
+/// the order's plain application (<see cref="OrderedProblemSetSource"/>) over
+/// the inner source — every decision, no dedupe, the by-error key XG's error;
+/// as read is fully inert. The stats provider is never called (none is
+/// needed), <see cref="Count"/> passes through, and
+/// <see cref="LastComposition"/> is null.
+/// </para>
+///
+/// <para>
+/// <b>Active mix: classification is by content identity.</b> Each decision's
+/// lifetime record is looked up by its derived <see cref="ProblemKey"/>
 /// (<see cref="ProblemKey.From"/>, which every record has;
 /// SPEC-stats-identity.md §4; halheinrich/backgammon#95), so the classifier
 /// judges the <i>problem's</i> full record wherever the drawn copy came from
 /// — a copy under a different <c>DecisionId</c> than the one once quizzed
 /// still classifies as GotWrong / seen.
-/// </para>
-///
-/// <para>
-/// <b>Blank mix = passthrough.</b> When the mix
-/// <see cref="QuizMix.IsPassthrough"/>, the layer is fully inert: the inner
-/// source streams through unchanged (no materialization, no RNG consumption,
-/// no dedupe), <see cref="Count"/> passes through, and
-/// <see cref="LastComposition"/> is null.
 /// </para>
 ///
 /// <para>
@@ -48,6 +51,20 @@ using BgDataTypes_Lib;
 /// </para>
 ///
 /// <para>
+/// <b>The mix selects; the order presents.</b> Each row's eligible set is
+/// put in the order and the row's quota is filled from its front, an already
+/// drawn decision skipped without consuming quota; then the whole selection
+/// is sorted again in the same order. So <see cref="ProblemOrder.Shuffled"/>
+/// draws each row uniformly without replacement and shuffles the
+/// presentation, and <see cref="ProblemOrder.AsRead"/> draws and presents in
+/// source order with no randomness consumed at all. The by-error key here is
+/// the player's lifetime loss per answer where the decision's record — the
+/// one the composition classified against — holds submissions, and XG's
+/// error otherwise; a decision with neither counts as 0.0
+/// (<see cref="ProblemOrder"/> states every order's key).
+/// </para>
+///
+/// <para>
 /// <b>Entry order is contractual.</b> Entries draw in the mix's declared
 /// order, so when categories overlap, contested decisions go to the earlier
 /// entry — reordering entries changes the composition. Consumers rendering
@@ -55,28 +72,26 @@ using BgDataTypes_Lib;
 /// </para>
 ///
 /// <para>
-/// <b>The random toggle.</b> <see cref="QuizMix.RandomOrder"/> on (the
-/// default): draws are uniform without replacement and the drawn set is
-/// shuffled for presentation. Off: fully deterministic — pools are drawn in
-/// source order and presented in source order, with no RNG dependence at
-/// all. The seeded constructor fixes the random-mode sequence for
-/// deterministic tests, mirroring <see cref="OrderedProblemSetSource"/>
-/// (stable within a .NET runtime version, not audit-grade).
+/// <b>Seeded form.</b> The seeded constructor fixes every draw and shuffle
+/// this instance makes — the blank mix's plain order included — mirroring
+/// <see cref="OrderedProblemSetSource"/> (stable within a .NET runtime
+/// version, not audit-grade). Only <see cref="ProblemOrder.Shuffled"/>
+/// consumes the generator.
 /// </para>
 ///
 /// <para>
 /// <b>Stats provider seam and Restart.</b> The decorator takes a
-/// current-document getter, resolved fresh at each enumeration: the stats
-/// document is immutable and replaced fold-by-fold, so a quiz controller's
-/// Restart re-composes against the lifetime record as it stands — including
-/// decisions answered this session. The provider must never return null;
-/// the no-stats case is "don't wire this decorator at all", so a null return
-/// is a consumer wiring bug and throws <see cref="InvalidOperationException"/>
+/// current-document getter, resolved fresh at each composing enumeration: the
+/// stats document is immutable and replaced fold-by-fold, so a quiz
+/// controller's Restart re-composes against the lifetime record as it stands
+/// — including decisions answered this session. With no stats document there
+/// is no provider to give, and a blank mix needs none; an active mix without
+/// one is a consumer error, refused at construction. A provider that returns
+/// null is a wiring bug too and throws <see cref="InvalidOperationException"/>
 /// rather than silently composing as if nothing had ever been quizzed. (An
 /// <i>empty document</i> is the legitimate everything-never-seen input.)
-/// Re-iterability follows: each call composes and (in random mode) shuffles
-/// afresh; do not assume one enumeration's contents or order carry to the
-/// next.
+/// Re-iterability follows: each call composes and orders afresh; do not
+/// assume one enumeration's contents or order carry to the next.
 /// </para>
 ///
 /// <para>
@@ -93,78 +108,120 @@ using BgDataTypes_Lib;
 public sealed class MixedProblemSetSource : IProblemSetSource
 {
     private readonly IProblemSetSource _inner;
-    private readonly Func<ProblemStatsDocument> _statsProvider;
+    private readonly ProblemOrder _order;
+    private readonly PlayRanking _ranking;
     private readonly QuizMix _mix;
+    private readonly Func<ProblemStatsDocument>? _statsProvider;
     private readonly TimeProvider _clock;
     private readonly Random _random;
 
+    /// <summary>The order's plain application, for a blank mix; <see langword="null"/> when the mix is active.</summary>
+    private readonly OrderedProblemSetSource? _plain;
+
     private MixedProblemSetSource(
         IProblemSetSource inner,
-        Func<ProblemStatsDocument> statsProvider,
+        ProblemOrder order,
+        PlayRanking ranking,
         QuizMix mix,
+        Func<ProblemStatsDocument>? statsProvider,
         TimeProvider clock,
         Random random)
     {
         ArgumentNullException.ThrowIfNull(inner);
-        ArgumentNullException.ThrowIfNull(statsProvider);
         ArgumentNullException.ThrowIfNull(mix);
         ArgumentNullException.ThrowIfNull(clock);
+        ProblemOrdering.RequireDefined(order, ranking);
+        if (statsProvider is null && !mix.IsPassthrough)
+            throw new ArgumentNullException(
+                nameof(statsProvider),
+                "An active mix composes against the current stats document, so it needs a stats " +
+                "provider; with no stats document a mix cannot apply. A blank mix needs none.");
         _inner = inner;
-        _statsProvider = statsProvider;
+        _order = order;
+        _ranking = ranking;
         _mix = mix;
+        _statsProvider = statsProvider;
         _clock = clock;
         _random = random;
+        _plain = mix.IsPassthrough ? new OrderedProblemSetSource(inner, order, ranking, random) : null;
     }
 
     /// <summary>
-    /// Construct a composing view over <paramref name="inner"/> seeded from a
-    /// non-deterministic source — for production use where reproducibility
-    /// isn't required.
+    /// Construct a run's source over <paramref name="inner"/> whose shuffles
+    /// and draws are seeded from a non-deterministic source — for production
+    /// use where reproducibility isn't required.
     /// </summary>
-    /// <param name="inner">The source whose decisions are composed.</param>
+    /// <param name="inner">The source whose decisions are composed and ordered.</param>
+    /// <param name="order">The order the run presents its problems in.</param>
+    /// <param name="ranking">
+    /// The run's ranking: the by-error order reads XG's error under it where
+    /// no lifetime record supplies the key. Always a defined ranking.
+    /// </param>
+    /// <param name="mix">The composition config; a blank mix composes nothing.</param>
     /// <param name="statsProvider">
     /// Getter for the consumer's <b>current</b> stats document, resolved
-    /// fresh at each enumeration (see the type remarks on Restart). Must
-    /// never return <see langword="null"/>.
+    /// fresh at each composing enumeration (see the type remarks on Restart),
+    /// and never returning <see langword="null"/>; or <see langword="null"/>
+    /// when there is no stats document, which only a blank mix allows.
     /// </param>
-    /// <param name="mix">The composition config.</param>
     /// <param name="clock">
     /// Source of the per-enumeration classification timestamp (its
     /// <see cref="TimeProvider.GetUtcNow"/>) — the clock seam for
     /// <see cref="QuizCategory.NotSeenInDays"/>.
     /// </param>
-    /// <exception cref="ArgumentNullException">Any argument is null.</exception>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="inner"/>, <paramref name="mix"/> or
+    /// <paramref name="clock"/> is null, or <paramref name="statsProvider"/>
+    /// is null while <paramref name="mix"/> is active.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="order"/> or <paramref name="ranking"/> is not a defined member.
+    /// </exception>
     public MixedProblemSetSource(
         IProblemSetSource inner,
-        Func<ProblemStatsDocument> statsProvider,
+        ProblemOrder order,
+        PlayRanking ranking,
         QuizMix mix,
+        Func<ProblemStatsDocument>? statsProvider,
         TimeProvider clock)
-        : this(inner, statsProvider, mix, clock, new Random())
+        : this(inner, order, ranking, mix, statsProvider, clock, new Random())
     {
     }
 
     /// <summary>
-    /// Construct a composing view whose random-mode draw/shuffle sequence is
-    /// determined by <paramref name="seed"/> — for deterministic tests and
-    /// replayable sessions. (With <see cref="QuizMix.RandomOrder"/> off the
-    /// seed is irrelevant: composition is fully deterministic either way.)
+    /// Construct a run's source whose draws and shuffles are determined by
+    /// <paramref name="seed"/> — for deterministic tests and replayable
+    /// sessions. (Under <see cref="ProblemOrder.Shuffled"/> only; every other
+    /// order is deterministic either way.)
     /// </summary>
-    /// <param name="inner">The source whose decisions are composed.</param>
+    /// <param name="inner">The source whose decisions are composed and ordered.</param>
+    /// <param name="order">The order the run presents its problems in.</param>
+    /// <param name="ranking">The run's ranking; the by-error order's fallback reads XG's error under it.</param>
+    /// <param name="mix">The composition config; a blank mix composes nothing.</param>
     /// <param name="statsProvider">
-    /// Getter for the consumer's <b>current</b> stats document, resolved
-    /// fresh at each enumeration. Must never return <see langword="null"/>.
+    /// Getter for the consumer's <b>current</b> stats document, never
+    /// returning <see langword="null"/>; or <see langword="null"/> when there
+    /// is no stats document, which only a blank mix allows.
     /// </param>
-    /// <param name="mix">The composition config.</param>
     /// <param name="clock">Source of the per-enumeration classification timestamp.</param>
-    /// <param name="seed">Fixes the draw/shuffle sequence.</param>
-    /// <exception cref="ArgumentNullException">Any reference argument is null.</exception>
+    /// <param name="seed">Fixes the draw and shuffle sequence.</param>
+    /// <exception cref="ArgumentNullException">
+    /// <paramref name="inner"/>, <paramref name="mix"/> or
+    /// <paramref name="clock"/> is null, or <paramref name="statsProvider"/>
+    /// is null while <paramref name="mix"/> is active.
+    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException">
+    /// <paramref name="order"/> or <paramref name="ranking"/> is not a defined member.
+    /// </exception>
     public MixedProblemSetSource(
         IProblemSetSource inner,
-        Func<ProblemStatsDocument> statsProvider,
+        ProblemOrder order,
+        PlayRanking ranking,
         QuizMix mix,
+        Func<ProblemStatsDocument>? statsProvider,
         TimeProvider clock,
         int seed)
-        : this(inner, statsProvider, mix, clock, new Random(seed))
+        : this(inner, order, ranking, mix, statsProvider, clock, new Random(seed))
     {
     }
 
@@ -178,14 +235,13 @@ public sealed class MixedProblemSetSource : IProblemSetSource
     /// front. Read <see cref="MixComposition.DrawnCount"/> off
     /// <see cref="LastComposition"/> instead.
     /// </summary>
-    public int? Count => _mix.IsPassthrough ? _inner.Count : null;
+    public int? Count => _plain?.Count;
 
     /// <summary>
     /// Telemetry from the most recent enumeration: requested vs. actual,
     /// overall and per entry. Null before the first enumeration and after a
-    /// passthrough (blank-mix) enumeration. Assigned before the first
-    /// decision is yielded. Per-instance state — see the thread-safety note
-    /// in the type remarks.
+    /// blank-mix enumeration. Assigned before the first decision is yielded.
+    /// Per-instance state — see the thread-safety note in the type remarks.
     /// </summary>
     public MixComposition? LastComposition { get; private set; }
 
@@ -193,23 +249,21 @@ public sealed class MixedProblemSetSource : IProblemSetSource
     public async IAsyncEnumerable<BgDecisionData> EnumerateAsync(
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        if (_mix.IsPassthrough)
+        if (_plain is not null)
         {
             LastComposition = null;
-            await foreach (var item in _inner.EnumerateAsync(cancellationToken))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
+            await foreach (var item in _plain.EnumerateAsync(cancellationToken))
                 yield return item;
-            }
             yield break;
         }
 
-        var stats = _statsProvider()
+        // An active mix was given a provider at construction.
+        var stats = _statsProvider!()
             ?? throw new InvalidOperationException(
-                "The stats provider returned null. A MixedProblemSetSource requires the " +
-                "current ProblemStatsDocument (an empty document is valid — it means " +
-                "nothing has been quizzed); when there is no stats document at all, do not " +
-                "wire the composing decorator.");
+                "The stats provider returned null. A MixedProblemSetSource with an active mix " +
+                "requires the current ProblemStatsDocument (an empty document is valid — it " +
+                "means nothing has been quizzed); when there is no stats document at all, pass " +
+                "no provider, which only a blank mix allows.");
         var now = _clock.GetUtcNow();
 
         // Materialize (composition needs the whole set), deduping by record
@@ -244,11 +298,12 @@ public sealed class MixedProblemSetSource : IProblemSetSource
     }
 
     /// <summary>
-    /// One composition pass: classify into per-entry pools, apportion the
-    /// target by percent, draw with the global dedupe (declared entry order —
-    /// contested overlap goes to the earlier entry), redistribute shortfall
-    /// proportionally across entries with remaining supply, and order the
-    /// result for presentation.
+    /// One composition pass: classify into per-entry pools, put each pool in
+    /// the order, apportion the target by percent, fill each entry's quota
+    /// from the front of its pool with the global dedupe (declared entry
+    /// order — contested overlap goes to the earlier entry), redistribute
+    /// shortfall proportionally across entries with remaining supply, and put
+    /// the selection in the order again for presentation.
     /// </summary>
     private List<BgDecisionData> Compose(
         List<BgDecisionData> items,
@@ -260,7 +315,9 @@ public sealed class MixedProblemSetSource : IProblemSetSource
         int n = entries.Count;
 
         // Classify into pools (source order). The residual pool collects
-        // decisions matched by no non-residual entry.
+        // decisions matched by no non-residual entry. Each decision's record
+        // is kept: the by-error order reads the same records the
+        // classification judged.
         var pools = new List<int>[n];
         var predicates = new IQuizCategoryPredicate?[n];
         int residualIndex = -1;
@@ -273,10 +330,12 @@ public sealed class MixedProblemSetSource : IProblemSetSource
                 predicates[i] = entries[i].Category.BuildPredicate();
         }
 
+        var records = new ProblemStats?[items.Count];
         for (int idx = 0; idx < items.Count; idx++)
         {
             // Lifetime record by content identity; none means never quizzed.
             stats.Problems.TryGetValue(ProblemKey.From(items[idx]), out var record);
+            records[idx] = record;
             bool matchedAny = false;
             for (int i = 0; i < n; i++)
             {
@@ -319,59 +378,38 @@ public sealed class MixedProblemSetSource : IProblemSetSource
             percents[i] = entries[i].Percent;
         var requested = Apportion(target, percents);
 
-        // Draw state. Random mode consumes candidates from a mutable pool
-        // copy via swap-remove; deterministic mode advances a cursor through
-        // the source-ordered pool. Either way an already-drawn decision is
-        // skipped without consuming quota.
+        // Each row's eligible set, put in the order: its quota is filled from
+        // the front. Shuffled makes each fill a uniform draw without
+        // replacement; as read leaves the pools in source order.
+        var ordering = ProblemOrdering.Over(items, _order, _ranking, records, _random);
+        foreach (var pool in pools)
+            ordering.Arrange(pool);
+
+        // Draw state: a cursor per entry through its ordered pool. An already
+        // drawn decision is skipped without consuming quota.
         var drawnFlags = new bool[items.Count];
         var drawnPerEntry = new int[n];
         int totalDrawn = 0;
-        var randomRemaining = _mix.RandomOrder
-            ? Array.ConvertAll(pools, p => new List<int>(p))
-            : null;
         var cursors = new int[n];
 
         void DrawFrom(int i, int quota)
         {
-            if (randomRemaining is not null)
+            var pool = pools[i];
+            while (quota > 0 && cursors[i] < pool.Count)
             {
-                var remaining = randomRemaining[i];
-                while (quota > 0 && remaining.Count > 0)
+                int idx = pool[cursors[i]++];
+                if (!drawnFlags[idx])
                 {
-                    int j = _random.Next(remaining.Count);
-                    int idx = remaining[j];
-                    remaining[j] = remaining[^1];
-                    remaining.RemoveAt(remaining.Count - 1);
-                    if (!drawnFlags[idx])
-                    {
-                        drawnFlags[idx] = true;
-                        drawnPerEntry[i]++;
-                        totalDrawn++;
-                        quota--;
-                    }
-                }
-            }
-            else
-            {
-                var pool = pools[i];
-                while (quota > 0 && cursors[i] < pool.Count)
-                {
-                    int idx = pool[cursors[i]++];
-                    if (!drawnFlags[idx])
-                    {
-                        drawnFlags[idx] = true;
-                        drawnPerEntry[i]++;
-                        totalDrawn++;
-                        quota--;
-                    }
+                    drawnFlags[idx] = true;
+                    drawnPerEntry[i]++;
+                    totalDrawn++;
+                    quota--;
                 }
             }
         }
 
         bool HasSupply(int i)
         {
-            if (randomRemaining is not null)
-                return randomRemaining[i].Exists(idx => !drawnFlags[idx]);
             var pool = pools[i];
             for (int c = cursors[i]; c < pool.Count; c++)
             {
@@ -408,21 +446,15 @@ public sealed class MixedProblemSetSource : IProblemSetSource
                 DrawFrom(eligible[k], extra[k]);
         }
 
-        // Presentation: collect in source order, then shuffle in random mode.
-        var result = new List<BgDecisionData>(totalDrawn);
+        // Presentation: the whole selection, put in the order again.
+        var selection = new List<int>(totalDrawn);
         for (int idx = 0; idx < items.Count; idx++)
         {
             if (drawnFlags[idx])
-                result.Add(items[idx]);
+                selection.Add(idx);
         }
-        if (_mix.RandomOrder)
-        {
-            for (int i = result.Count - 1; i > 0; i--)
-            {
-                int j = _random.Next(i + 1);
-                (result[i], result[j]) = (result[j], result[i]);
-            }
-        }
+        ordering.Arrange(selection);
+        var result = selection.ConvertAll(idx => items[idx]);
 
         var entryReports = new MixCompositionEntry[n];
         for (int i = 0; i < n; i++)

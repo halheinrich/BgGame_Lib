@@ -240,8 +240,9 @@ public class QuizCategoryTests
         Assert.False(Matches(QuizCategory.AvgEquityLossOver(0.0), Play, Stats(0, 0, 0.0, Now)));
 
     // -----------------------------------------------------------------------
-    //  The loss per answer — one producer-owned measure (SPEC-scoring.md,
-    //  amended 2026-10-14)
+    //  The loss per answer — one producer-owned measure, which the
+    //  average-loss category and the by-error order's mixed key read
+    //  (SPEC-scoring.md, amended 2026-10-14)
     // -----------------------------------------------------------------------
 
     [Fact]

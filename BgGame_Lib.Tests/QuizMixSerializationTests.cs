@@ -16,7 +16,7 @@ public class QuizMixSerializationTests
         Entry(QuizCategory.AvgEquityLossOver(0.05), 20),
         Entry(QuizCategory.WrongRateOver(0.25), 20),
         Entry(QuizCategory.EverythingElse, 20),
-    ], quizLength: 25, randomOrder: false);
+    ], quizLength: 25);
 
     // -----------------------------------------------------------------------
     //  Round trips
@@ -31,7 +31,6 @@ public class QuizMixSerializationTests
 
         Assert.Equal(mix.Entries, restored.Entries);   // declared order preserved
         Assert.Equal(mix.QuizLength, restored.QuizLength);
-        Assert.Equal(mix.RandomOrder, restored.RandomOrder);
     }
 
     [Fact]
@@ -42,7 +41,6 @@ public class QuizMixSerializationTests
         var restored = QuizMix.FromJson(mix.ToJson());
 
         Assert.Null(restored.QuizLength);
-        Assert.True(restored.RandomOrder);
     }
 
     [Fact]
@@ -65,7 +63,7 @@ public class QuizMixSerializationTests
         ], quizLength: 25);
 
         Assert.Equal(
-            """{"schemaVersion":1,"randomOrder":true,"quizLength":25,"entries":[""" +
+            """{"schemaVersion":2,"quizLength":25,"entries":[""" +
             """{"category":{"kind":"NeverSeen"},"percent":50},""" +
             """{"category":{"kind":"SeenFewerThan","value":3},"percent":20},""" +
             """{"category":{"kind":"EverythingElse"},"percent":30}]}""",
@@ -79,7 +77,7 @@ public class QuizMixSerializationTests
 
         var json = JsonSerializer.Serialize(AllKindsMix(), options);
 
-        Assert.Contains("\"schemaVersion\":1", json);
+        Assert.Contains("\"schemaVersion\":2", json);
         Assert.Contains("\"kind\":\"SeenFewerThan\"", json);
     }
 
@@ -89,12 +87,15 @@ public class QuizMixSerializationTests
 
     private static string Valid() =>
         // A minimal valid document; tests splice mutations in via replacement.
+        // Version 1, the retired toggle's version, which still reads under its
+        // own contract — so the fail-loud pins below hold it to that contract.
+        // The current version's own pins follow them.
         """{"schemaVersion":1,"randomOrder":true,"quizLength":null,"entries":[{"category":{"kind":"NeverSeen"},"percent":100}]}""";
 
     [Fact]
     public void Read_RejectsNewerSchemaVersion_WithDistinguishedMessage()
     {
-        var json = Valid().Replace("\"schemaVersion\":1", "\"schemaVersion\":2");
+        var json = Valid().Replace("\"schemaVersion\":1", "\"schemaVersion\":3");
 
         var ex = Assert.Throws<JsonException>(() => QuizMix.FromJson(json));
 
@@ -284,6 +285,106 @@ public class QuizMixSerializationTests
     [Fact]
     public void FromJson_RejectsNullString() =>
         Assert.Throws<ArgumentNullException>(() => QuizMix.FromJson(null!));
+
+    // -----------------------------------------------------------------------
+    //  Version 2 — the current version, without the retired toggle
+    //  (SPEC-filtering.md §5, 2026-10-14) — and version 1 under its own
+    //  contract
+    // -----------------------------------------------------------------------
+
+    private const string Entries100 = """[{"category":{"kind":"NeverSeen"},"percent":100}]""";
+
+    private static QuizMix NeverSeen100 => new([Entry(QuizCategory.NeverSeen, 100)]);
+
+    [Fact]
+    public void CurrentSchemaVersion_IsTwo() =>
+        Assert.Equal(2, QuizMix.CurrentSchemaVersion);
+
+    [Fact]
+    public void Version2_Reads()
+    {
+        var mix = QuizMix.FromJson($$"""{"schemaVersion":2,"quizLength":7,"entries":{{Entries100}}}""");
+
+        Assert.Equal(new QuizMix([Entry(QuizCategory.NeverSeen, 100)], quizLength: 7), mix);
+    }
+
+    [Theory]
+    [InlineData($$"""{"schemaVersion":2,"randomOrder":true,"quizLength":null,"entries":{{Entries100}}}""")]
+    [InlineData($$"""{"schemaVersion":2,"randomOrder":false,"quizLength":null,"entries":{{Entries100}}}""")]
+    [InlineData($$"""{"randomOrder":true,"schemaVersion":2,"quizLength":null,"entries":{{Entries100}}}""")]
+    [InlineData($$"""{"schemaVersion":2,"randomOrder":42,"quizLength":null,"entries":{{Entries100}}}""")]
+    public void Version2_RefusesTheRetiredToggle_AsAnUnknownProperty(string json)
+    {
+        var ex = Assert.Throws<JsonException>(() => QuizMix.FromJson(json));
+
+        Assert.Contains("Unknown QuizMix property 'randomOrder'", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData($$"""{"quizLength":null,"entries":{{Entries100}}}""")]          // no schemaVersion
+    [InlineData($$"""{"schemaVersion":2,"entries":{{Entries100}}}""")]          // no quizLength
+    [InlineData("""{"schemaVersion":2,"quizLength":null}""")]                   // no entries
+    public void Version2_RejectsAMissingRequiredProperty(string json) =>
+        Assert.Throws<JsonException>(() => QuizMix.FromJson(json));
+
+    [Theory]
+    [InlineData(3)]
+    [InlineData(99)]
+    public void AVersionAboveTwo_IsRefusedAsNewer(int version)
+    {
+        var ex = Assert.Throws<JsonException>(() => QuizMix.FromJson(
+            $$"""{"schemaVersion":{{version}},"quizLength":null,"entries":{{Entries100}}}"""));
+
+        Assert.Contains("newer", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData($$"""{"schemaVersion":1,"randomOrder":true,"quizLength":null,"entries":{{Entries100}}}""")]
+    [InlineData($$"""{"schemaVersion":1,"randomOrder":false,"quizLength":null,"entries":{{Entries100}}}""")]
+    [InlineData($$"""{"randomOrder":false,"schemaVersion":1,"quizLength":null,"entries":{{Entries100}}}""")]
+    public void Version1_Reads_ItsToggleDropped(string json) =>
+        Assert.Equal(NeverSeen100, QuizMix.FromJson(json));
+
+    [Fact]
+    public void TwoVersion1Documents_DifferingOnlyInTheToggle_ReadAsEqualMixes()
+    {
+        var on = QuizMix.FromJson($$"""{"schemaVersion":1,"randomOrder":true,"quizLength":5,"entries":{{Entries100}}}""");
+        var off = QuizMix.FromJson($$"""{"schemaVersion":1,"randomOrder":false,"quizLength":5,"entries":{{Entries100}}}""");
+
+        Assert.Equal(on, off);
+        Assert.Equal(on.GetHashCode(), off.GetHashCode());
+    }
+
+    [Fact]
+    public void AVersion1Read_IsWrittenBackAsVersion2()
+    {
+        var mix = QuizMix.FromJson($$"""{"schemaVersion":1,"randomOrder":true,"quizLength":null,"entries":{{Entries100}}}""");
+
+        Assert.Equal($$"""{"schemaVersion":2,"quizLength":null,"entries":{{Entries100}}}""", mix.ToJson());
+    }
+
+    [Fact]
+    public void Version1_RequiresTheToggle()
+    {
+        var ex = Assert.Throws<JsonException>(() => QuizMix.FromJson(
+            $$"""{"schemaVersion":1,"quizLength":null,"entries":{{Entries100}}}"""));
+
+        Assert.Contains("Missing required property 'randomOrder'", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("1")]
+    [InlineData("\"true\"")]
+    [InlineData("null")]
+    [InlineData("{}")]
+    [InlineData("[]")]
+    public void Version1_RequiresTheToggleToBeBoolean(string value)
+    {
+        var ex = Assert.Throws<JsonException>(() => QuizMix.FromJson(
+            $$"""{"schemaVersion":1,"randomOrder":{{value}},"quizLength":null,"entries":{{Entries100}}}"""));
+
+        Assert.Contains("Expected boolean for 'randomOrder'", ex.Message, StringComparison.Ordinal);
+    }
 
     // -----------------------------------------------------------------------
     //  TryFromJson — the tolerant restore path

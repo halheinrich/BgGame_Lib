@@ -117,10 +117,11 @@ public sealed record QuizCategory
     /// exceeds <paramref name="loss"/>: the record's total loss divided by its
     /// sightings, so a cube answer's two halves are summed into the one answer
     /// they make, and one threshold compares across decision kinds
-    /// (SPEC-scoring.md, amended 2026-10-14). A saved threshold keeps its
-    /// value, so a cube
-    /// problem now needs its loss per answer — not its per-half average —
-    /// above it. Never-seen decisions do not match.
+    /// (SPEC-scoring.md, amended 2026-10-14). It is the same measure the
+    /// by-error <see cref="ProblemOrder"/> reads under an active mix. A saved
+    /// threshold keeps its value, so a cube problem now needs its loss per
+    /// answer — not its per-half average — above it. Never-seen decisions do
+    /// not match.
     /// </summary>
     /// <param name="loss">Exclusive lower bound on the average equity loss per answer; finite and non-negative.</param>
     /// <exception cref="ArgumentOutOfRangeException">

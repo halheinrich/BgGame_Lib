@@ -6,7 +6,11 @@ using BgDataTypes_Lib;
 /// The one application of a <see cref="ProblemOrder"/>: puts a set of
 /// decisions — named by their positions in one enumeration's materialized
 /// list — in the order. Built once per enumeration over that list, so each
-/// decision's key is read once however many sets it is then put in.
+/// decision's key is read once however many sets it is then put in. Its two
+/// hosts share it: <see cref="OrderedProblemSetSource"/> puts a whole
+/// enumeration in the order; <see cref="MixedProblemSetSource"/> puts each
+/// row's eligible set in it before filling the row's quota from the front,
+/// then the whole selection again.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -49,18 +53,25 @@ internal sealed class ProblemOrdering
     /// <param name="decisions">The enumeration's decisions, in source order.</param>
     /// <param name="order">The order; a defined value (see <see cref="RequireDefined"/>).</param>
     /// <param name="ranking">The ranking the by-error key reads XG's error under.</param>
+    /// <param name="records">
+    /// The by-error key's context. With an active mix: each decision's
+    /// lifetime record, by position, as the composition looked it up in the
+    /// stats document it classified against (<see langword="null"/> where the
+    /// problem has none). Without a mix: <see langword="null"/> — no document.
+    /// </param>
     /// <param name="random">The host's generator, which a shuffle advances.</param>
     internal static ProblemOrdering Over(
         IReadOnlyList<BgDecisionData> decisions,
         ProblemOrder order,
         PlayRanking ranking,
+        IReadOnlyList<ProblemStats?>? records,
         Random random)
     {
         Comparison<int>? comparison = order switch
         {
             ProblemOrder.AsRead => static (a, b) => a.CompareTo(b),
             ProblemOrder.Shuffled => null,
-            ProblemOrder.ByErrorLargestFirst => LargestFirst(ErrorKeys(decisions, ranking)),
+            ProblemOrder.ByErrorLargestFirst => LargestFirst(ErrorKeys(decisions, ranking, records)),
             ProblemOrder.ByMoveNumberAscending => AscendingNoneLast(MoveNumbers(decisions)),
             _ => throw new ArgumentOutOfRangeException(nameof(order), order, "Not a defined problem order."),
         };
@@ -68,14 +79,26 @@ internal sealed class ProblemOrdering
     }
 
     /// <summary>
-    /// The by-error key: the error XG recorded for the move actually played,
-    /// under <paramref name="ranking"/>, exactly as the filter's error facet
-    /// reads it; 0.0 for a decision with no error. A correct decision's error
-    /// is 0, and an unstated move's is the analyser's
-    /// (<see cref="PlayerResult.TryGetError"/>).
+    /// The by-error key — one definition, in two contexts (SPEC-filtering.md
+    /// §7). Where <paramref name="record"/> holds submissions, the player's
+    /// lifetime loss per answer (<see cref="QuizStatsMeasures.LossPerAnswer"/>;
+    /// a real record with no loss reads 0.0). Otherwise the error XG recorded
+    /// for the move actually played, under <paramref name="ranking"/>, exactly
+    /// as the filter's error facet reads it
+    /// (<see cref="PlayerResult.TryGetError"/>): a correct decision's is 0, and
+    /// an unstated move's is the analyser's. A decision with no error from
+    /// either source counts as 0.0.
     /// </summary>
-    internal static double ErrorKey(BgDecisionData decision, PlayRanking ranking) =>
-        decision.ViewFor(ranking).PlayerResult.TryGetError(out double error) ? error : 0.0;
+    /// <param name="decision">The decision.</param>
+    /// <param name="ranking">The run's ranking.</param>
+    /// <param name="record">
+    /// The problem's lifetime record, read from the stats document an active
+    /// mix's composition classified against; <see langword="null"/> when it
+    /// has none, and always without a mix, where no document is consulted.
+    /// </param>
+    internal static double ErrorKey(BgDecisionData decision, PlayRanking ranking, ProblemStats? record) =>
+        QuizStatsMeasures.LossPerAnswer(decision, record)
+        ?? (decision.ViewFor(ranking).PlayerResult.TryGetError(out double error) ? error : 0.0);
 
     /// <summary>
     /// Put <paramref name="positions"/> in the order, in place: positions
@@ -113,11 +136,12 @@ internal sealed class ProblemOrdering
             throw new ArgumentOutOfRangeException(nameof(ranking), ranking, "Not a defined play ranking.");
     }
 
-    private static double[] ErrorKeys(IReadOnlyList<BgDecisionData> decisions, PlayRanking ranking)
+    private static double[] ErrorKeys(
+        IReadOnlyList<BgDecisionData> decisions, PlayRanking ranking, IReadOnlyList<ProblemStats?>? records)
     {
         var keys = new double[decisions.Count];
         for (int i = 0; i < keys.Length; i++)
-            keys[i] = ErrorKey(decisions[i], ranking);
+            keys[i] = ErrorKey(decisions[i], ranking, records?[i]);
         return keys;
     }
 

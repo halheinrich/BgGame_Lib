@@ -45,7 +45,6 @@ public class QuizMixTests
         Assert.True(QuizMix.Empty.IsPassthrough);
         Assert.Empty(QuizMix.Empty.Entries);
         Assert.Null(QuizMix.Empty.QuizLength);
-        Assert.True(QuizMix.Empty.RandomOrder);
     }
 
     [Fact]
@@ -58,21 +57,19 @@ public class QuizMixTests
             Entry(QuizCategory.EverythingElse, 20),
         };
 
-        var mix = new QuizMix(entries, quizLength: 25, randomOrder: false);
+        var mix = new QuizMix(entries, quizLength: 25);
 
         Assert.Equal(entries, mix.Entries);
         Assert.Equal(25, mix.QuizLength);
-        Assert.False(mix.RandomOrder);
         Assert.False(mix.IsPassthrough);
     }
 
     [Fact]
-    public void Constructor_DefaultsToNullLengthAndRandomOrder()
+    public void Constructor_DefaultsToNullLength()
     {
         var mix = new QuizMix([Entry(QuizCategory.NeverSeen, 100)]);
 
         Assert.Null(mix.QuizLength);
-        Assert.True(mix.RandomOrder);
     }
 
     [Fact]
@@ -140,14 +137,13 @@ public class QuizMixTests
     //  QuizMix — value equality over the full member surface
     // -----------------------------------------------------------------------
 
-    private static QuizMix Mix(int? quizLength = 25, bool randomOrder = false) => new(
+    private static QuizMix Mix(int? quizLength = 25) => new(
         [
             Entry(QuizCategory.NeverSeen, 50),
             Entry(QuizCategory.GotWrong, 30),
             Entry(QuizCategory.EverythingElse, 20),
         ],
-        quizLength,
-        randomOrder);
+        quizLength);
 
     [Fact]
     public void Equality_EqualContentIsEqual()
@@ -204,10 +200,6 @@ public class QuizMixTests
         Assert.NotEqual(Mix(quizLength: 25), Mix(quizLength: null));
         Assert.NotEqual(Mix(quizLength: 25), Mix(quizLength: 26));
     }
-
-    [Fact]
-    public void Equality_RandomOrderAloneBreaksEquality() =>
-        Assert.NotEqual(Mix(randomOrder: false), Mix(randomOrder: true));
 
     [Fact]
     public void Equality_OperatorsHandleNull()

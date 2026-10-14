@@ -351,10 +351,29 @@ public class OrderedProblemSetSourceTests
     }
 
     [Fact]
+    public void ErrorKey_WithARecordHoldingSubmissions_IsItsLossPerAnswer_ElseXgsError()
+    {
+        // The key's mixed context, which the composer supplies: the record it
+        // classified against. A real record with no loss is 0.0, not XG's error.
+        var decision = Play("a.xg", userPlayIndex: 2);   // XG 0.1813
+        var key = ProblemKey.From(decision);
+        double xg = TestRecords.Row(decision).Error!.Value;
+
+        Assert.Equal(0.125, ProblemOrdering.ErrorKey(
+            decision, PlayRanking.Equity, new ProblemStats(key, new ScoreSegment(4, 1, 0.5), default)));
+        Assert.Equal(0.0, ProblemOrdering.ErrorKey(
+            decision, PlayRanking.Equity, new ProblemStats(key, new ScoreSegment(2, 2, 0.0), default)));
+        Assert.Equal(xg, ProblemOrdering.ErrorKey(
+            decision, PlayRanking.Equity, new ProblemStats(key, ScoreSegment.Empty, default)));
+        Assert.Equal(xg, ProblemOrdering.ErrorKey(decision, PlayRanking.Equity, record: null));
+    }
+
+    [Fact]
     public void ErrorKey_IsTheFilterFacetsError_OrZero()
     {
-        // The key and the filter's error facet agree, decision by decision and
-        // ranking by ranking (DecisionRow reads the same PlayerResult).
+        // With no record — the plain context — the key and the filter's error
+        // facet agree, decision by decision and ranking by ranking (DecisionRow
+        // reads the same PlayerResult).
         BgDecisionData[] decisions =
         [
             Play("a.xg", userPlayIndex: 0),
@@ -370,7 +389,7 @@ public class OrderedProblemSetSourceTests
             {
                 Assert.Equal(
                     TestRecords.Row(decision, ranking).Error ?? 0.0,
-                    ProblemOrdering.ErrorKey(decision, ranking));
+                    ProblemOrdering.ErrorKey(decision, ranking, record: null));
             }
         }
     }

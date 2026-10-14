@@ -21,8 +21,7 @@ using System.Text.Json.Serialization;
 ///
 /// <code>
 /// {
-///   "schemaVersion": 1,
-///   "randomOrder": true,
+///   "schemaVersion": 2,
 ///   "quizLength": 25,
 ///   "entries": [
 ///     { "category": { "kind": "NeverSeen" }, "percent": 50 },
@@ -31,6 +30,15 @@ using System.Text.Json.Serialization;
 ///   ]
 /// }
 /// </code>
+///
+/// <para>
+/// <b>Version 1 still reads, under its own contract.</b> Its documents carry
+/// the retired random-order toggle, <c>"randomOrder"</c>: required there and
+/// boolean, and dropped on read (SPEC-filtering.md §5, 2026-10-14), so two
+/// version-1 documents differing only in it read as equal mixes. Under
+/// version 2 the name is an unknown property like any other. A read is never
+/// written back as version 1.
+/// </para>
 ///
 /// <para>
 /// <c>kind</c> is the exact <see cref="QuizCategoryKind"/> declaration name
@@ -44,10 +52,11 @@ using System.Text.Json.Serialization;
 ///
 /// <para>
 /// <b>Reads are fail-loud.</b> A schema version other than
-/// <see cref="QuizMix.CurrentSchemaVersion"/> (with a distinguished
-/// "newer than this library supports" message — a version bump is the
-/// format's only evolution mechanism), a missing required property, an
-/// unknown property at any level, an invalid kind or value, an out-of-range
+/// <see cref="QuizMix.CurrentSchemaVersion"/> or 1 (with a distinguished
+/// "newer than this library supports" message above the current one — a
+/// version bump is the format's only evolution mechanism), a missing required
+/// property, an unknown property at any level (the toggle under version 2
+/// included), an invalid kind or value, an out-of-range
 /// percent or length, a duplicate category, or percents not summing to 100
 /// all throw <see cref="JsonException"/> — a corrupt or foreign mix must
 /// never load as a quietly-different composition.
@@ -80,7 +89,7 @@ public sealed class QuizMixJsonConverter : JsonConverter<QuizMix>
             throw new JsonException($"Expected object for QuizMix, got {reader.TokenType}.");
 
         int? schemaVersion = null;
-        bool? randomOrder = null;
+        JsonTokenType? retiredToggle = null;
         int? quizLength = null;
         bool quizLengthSeen = false;
         List<QuizMixEntry>? entries = null;
@@ -94,11 +103,11 @@ public sealed class QuizMixJsonConverter : JsonConverter<QuizMix>
                 case "schemaVersion":
                     schemaVersion = ReadSchemaVersion(ref reader);
                     break;
-                case "randomOrder":
-                    if (reader.TokenType is not (JsonTokenType.True or JsonTokenType.False))
-                        throw new JsonException(
-                            $"Expected boolean for 'randomOrder', got {reader.TokenType}.");
-                    randomOrder = reader.GetBoolean();
+                case RetiredToggleProperty:
+                    // Judged once the version is known — properties may come
+                    // in any order, and the two versions disagree about it.
+                    retiredToggle = reader.TokenType;
+                    reader.Skip();
                     break;
                 case "quizLength":
                     quizLength = ReadQuizLength(ref reader);
@@ -114,8 +123,7 @@ public sealed class QuizMixJsonConverter : JsonConverter<QuizMix>
 
         if (schemaVersion is null)
             throw new JsonException("Missing required property 'schemaVersion'.");
-        if (randomOrder is null)
-            throw new JsonException("Missing required property 'randomOrder'.");
+        RequireRetiredToggleContract(schemaVersion.Value, retiredToggle);
         if (!quizLengthSeen)
             throw new JsonException("Missing required property 'quizLength'.");
         if (entries is null)
@@ -123,7 +131,7 @@ public sealed class QuizMixJsonConverter : JsonConverter<QuizMix>
 
         try
         {
-            return new QuizMix(entries, quizLength, randomOrder.Value);
+            return new QuizMix(entries, quizLength);
         }
         catch (ArgumentException ex)
         {
@@ -144,12 +152,46 @@ public sealed class QuizMixJsonConverter : JsonConverter<QuizMix>
             throw new JsonException(
                 $"Quiz mix has schema version {version}, newer than the highest " +
                 $"version this library supports ({QuizMix.CurrentSchemaVersion}).");
-        if (version != QuizMix.CurrentSchemaVersion)
+        if (version < RetiredToggleSchemaVersion)
             throw new JsonException(
-                $"Quiz mix has unsupported schema version {version}; " +
-                $"expected {QuizMix.CurrentSchemaVersion}.");
+                $"Quiz mix has unsupported schema version {version}; this library reads " +
+                $"versions {RetiredToggleSchemaVersion} through {QuizMix.CurrentSchemaVersion}.");
 
         return version;
+    }
+
+    /// <summary>
+    /// The one schema version whose documents carry the retired random-order
+    /// toggle, and the oldest this reader accepts. The toggle was retired on
+    /// 2026-10-14 (SPEC-filtering.md §5): the mix selects, the run's
+    /// <see cref="ProblemOrder"/> presents.
+    /// </summary>
+    private const int RetiredToggleSchemaVersion = 1;
+
+    /// <summary>The retired toggle's property name.</summary>
+    private const string RetiredToggleProperty = "randomOrder";
+
+    /// <summary>
+    /// The retired toggle under each version's own contract, given the token
+    /// its value began with (<see langword="null"/> when the property is
+    /// absent). Version 1 requires it and requires a boolean, whose value is
+    /// then dropped; under any later version the name is an unknown property
+    /// like any other.
+    /// </summary>
+    private static void RequireRetiredToggleContract(int schemaVersion, JsonTokenType? token)
+    {
+        if (schemaVersion == RetiredToggleSchemaVersion)
+        {
+            if (token is null)
+                throw new JsonException($"Missing required property '{RetiredToggleProperty}'.");
+            if (token is not (JsonTokenType.True or JsonTokenType.False))
+                throw new JsonException(
+                    $"Expected boolean for '{RetiredToggleProperty}', got {token}.");
+        }
+        else if (token is not null)
+        {
+            throw new JsonException($"Unknown QuizMix property '{RetiredToggleProperty}'.");
+        }
     }
 
     private static int? ReadQuizLength(ref Utf8JsonReader reader)
@@ -311,7 +353,6 @@ public sealed class QuizMixJsonConverter : JsonConverter<QuizMix>
     {
         writer.WriteStartObject();
         writer.WriteNumber("schemaVersion", QuizMix.CurrentSchemaVersion);
-        writer.WriteBoolean("randomOrder", value.RandomOrder);
         if (value.QuizLength is int length)
             writer.WriteNumber("quizLength", length);
         else

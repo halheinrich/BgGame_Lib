@@ -7,8 +7,11 @@ using BgDataTypes_Lib;
 /// <summary>
 /// The order a run presents its problems in — the one definition of the four
 /// orders (SPEC-filtering.md §7). A consumer holds the user's choice and
-/// passes it in; this library applies it
-/// (<see cref="OrderedProblemSetSource"/>).
+/// passes it in; this library applies it, exactly once, and decides which
+/// application it gets: <see cref="MixedProblemSetSource"/> takes the order
+/// with the mix and applies it by the mixed key when the mix is active, and
+/// by the plain key — as <see cref="OrderedProblemSetSource"/>, the plain
+/// decorator — when the mix is blank.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -18,12 +21,23 @@ using BgDataTypes_Lib;
 /// them.
 /// </para>
 /// <para>
-/// <b>The by-error key.</b> The error XG recorded for the move actually
-/// played, under the run's <see cref="PlayRanking"/>, exactly as the
-/// filter's error facet reads it (<see cref="PlayerResult.TryGetError"/> on
+/// <b>By error has one key, in two contexts.</b> Without a mix it is the
+/// error XG recorded for the move actually played, under the run's
+/// <see cref="PlayRanking"/>, exactly as the filter's error facet reads it
+/// (<see cref="PlayerResult.TryGetError"/> on
 /// <see cref="BgDecisionData.ViewFor"/>): a correct decision's is 0, and an
-/// unstated move's is the analyser's. A decision with no error counts as
-/// 0.0.
+/// unstated move's is the analyser's. With an active mix it is the player's
+/// lifetime loss per answer where the decision's record holds submissions —
+/// the record the composition classified against, a cube's two halves summed
+/// (SPEC-scoring.md, amended 2026-10-14) — and XG's error otherwise. A
+/// decision with no error from either source counts as 0.0.
+/// </para>
+/// <para>
+/// <b>With an active mix, the order works twice in one application.</b> Each
+/// row's eligible set is put in the order and the row's quota is filled from
+/// its front; the whole selection is then sorted again in the same order. So
+/// <see cref="Shuffled"/> draws each row uniformly and shuffles the
+/// presentation, and <see cref="AsRead"/> draws and presents in source order.
 /// </para>
 /// <para>
 /// <b>The names are the wire tokens, and stable.</b> A consumer persists the

@@ -101,7 +101,12 @@ public sealed class OrderedProblemSetSource : IProblemSetSource
     {
     }
 
-    private OrderedProblemSetSource(IProblemSetSource inner, ProblemOrder order, PlayRanking ranking, Random random)
+    /// <summary>
+    /// The construction both public forms share, and the composer's door: a
+    /// blank-mix <see cref="MixedProblemSetSource"/> hands in its own
+    /// generator, so its seeded form reproduces the plain order too.
+    /// </summary>
+    internal OrderedProblemSetSource(IProblemSetSource inner, ProblemOrder order, PlayRanking ranking, Random random)
     {
         ArgumentNullException.ThrowIfNull(inner);
         ProblemOrdering.RequireDefined(order, ranking);
@@ -139,7 +144,7 @@ public sealed class OrderedProblemSetSource : IProblemSetSource
         }
 
         var positions = Enumerable.Range(0, items.Count).ToList();
-        ProblemOrdering.Over(items, _order, _ranking, _random).Arrange(positions);
+        ProblemOrdering.Over(items, _order, _ranking, records: null, _random).Arrange(positions);
 
         // Cooperative yielding is time-budgeted, not per-item: a per-item
         // Task.Yield() over a large materialized set pays tens of thousands of
