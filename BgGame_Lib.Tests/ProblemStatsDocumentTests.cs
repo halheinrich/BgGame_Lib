@@ -211,9 +211,11 @@ public class ProblemStatsDocumentTests
     }
 
     // A cube record's count is a whole number of answers: every cube fold
-    // adds its two halves. A record admitted with an odd count would have no
-    // whole sighting to divide its loss by, so the document refuses it where
-    // the record enters.
+    // adds its two halves. A record admitted with an odd count would have
+    // integer sightings that drop the half answer: none at a count of 1 (an
+    // infinite or NaN loss per answer), one too few above it (a finite,
+    // wrong one). The document refuses every odd count where the record
+    // enters; 1 and 3 pin both cases.
 
     [Theory]
     [InlineData(1)]

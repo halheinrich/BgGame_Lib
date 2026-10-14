@@ -66,9 +66,9 @@ internal static class QuizStatsMeasures
     /// The one definition of the measure: the average-loss category
     /// (<see cref="AvgEquityLossOverPredicate"/>) and the by-error order's
     /// key under an active mix (<see cref="ProblemOrdering.ErrorKey"/>) both
-    /// read it. A seen record in
-    /// a document always has a whole sighting to divide by, since a document
-    /// refuses a cube record whose count is not a whole number of answers
+    /// read it. A seen record in a document has exactly as many sightings as
+    /// answers, at least one, since a document refuses a cube record whose
+    /// count is not a whole number of answers
     /// (<see cref="ProblemStats.HoldsWholeAnswers"/>); the session score's
     /// per-submission average (<see cref="ScoreSegment.AverageEquityLoss"/>)
     /// is a different measure and stays as it is.

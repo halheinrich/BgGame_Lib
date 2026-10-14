@@ -774,8 +774,11 @@ document by (the readers build through it), refuses a cube record with an
 odd count with `ArgumentException` — which a read surfaces as
 `JsonException`, like any other impossible tally. The rule is stated once,
 on the record (the internal `ProblemStats.HoldsWholeAnswers`, read off the
-key's grammar). A record with an odd count would have no whole sighting to
-divide its loss by, so it is refused, never given a fractional one. The
+key's grammar). A record with an odd count would have integer sightings
+that drop the half answer: none at a count of 1, so the loss per answer
+would be infinite or NaN; one too few above it (a count of 3 is one sighting,
+not 1.5), so the loss per answer would be finite but wrong. Every odd count
+is therefore refused, never given a fractional sighting. The
 static `From` factories are defined as an empty
 seed plus `Plus`, so the fold rule has one definition. Skips never reach a
 fold: an off-list play and a play the ranking does not score yield no

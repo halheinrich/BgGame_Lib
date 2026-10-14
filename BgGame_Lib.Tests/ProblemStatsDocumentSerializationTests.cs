@@ -811,8 +811,8 @@ public class ProblemStatsDocumentSerializationTests
     // ------------------------------------------------------------------
     //  A cube record's count is a whole number of answers — two halves per
     //  answer, since v2. Both readers refuse an odd one, as they refuse any
-    //  other impossible tally: such a record has no whole sighting to divide
-    //  its loss by.
+    //  other impossible tally: its integer sightings would drop the half
+    //  answer — none at 1, a wrong count above it.
     // ------------------------------------------------------------------
 
     private static string RecordOf(int submitted) =>

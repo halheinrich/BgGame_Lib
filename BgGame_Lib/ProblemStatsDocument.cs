@@ -119,8 +119,10 @@ public sealed class ProblemStatsDocument
     /// their documents through it too — so it is where a record no fold could
     /// have written is refused: a cube problem's record whose count is not a
     /// whole number of answers (<see cref="ProblemStats.HoldsWholeAnswers"/>).
-    /// Such a record has no whole sighting to divide its loss by, and is
-    /// refused rather than given a fractional one.
+    /// Its sightings would drop the half answer — none at a count of 1, so
+    /// its loss per answer would be infinite or NaN, and one too few above
+    /// it, so the measure would be finite but wrong — so it is refused, at
+    /// every odd count, rather than given a fractional sighting.
     /// </remarks>
     /// <param name="stats">The records; each problem may appear at most once.</param>
     /// <exception cref="ArgumentNullException">

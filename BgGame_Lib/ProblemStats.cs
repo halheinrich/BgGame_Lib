@@ -90,8 +90,11 @@ public sealed record ProblemStats(ProblemKey Key, ScoreSegment Tally, DateTimeOf
     /// The folds keep this true of every record that starts true, and
     /// <see cref="ProblemStatsDocument.FromStats"/> — the door every whole
     /// record enters a document by, the readers' included — refuses a record
-    /// for which it is false. So a seen record in a document always has a
-    /// whole sighting to divide its loss by, and a measure over it is finite.
+    /// for which it is false. So a seen record's sightings in a document are
+    /// exactly its answers, and its loss per answer is exact: an odd cube
+    /// count would leave a half answer that the integer sightings drop —
+    /// zero sightings at a count of 1, an infinite or NaN measure; one too
+    /// few above it, a finite measure that is wrong.
     /// </remarks>
     internal bool HoldsWholeAnswers => !Key.IsCubeDecision || int.IsEvenInteger(Tally.Submitted);
 
