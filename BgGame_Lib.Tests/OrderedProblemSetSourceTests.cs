@@ -423,6 +423,22 @@ public class OrderedProblemSetSourceTests
     }
 
     [Fact]
+    public async Task ByMoveNumber_ANonStandardStartsNumber_IsUsedAsRecorded()
+    {
+        // A game from a non-standard start numbers its moves as recorded; the
+        // order neither renumbers nor sets such a game apart.
+        var nonStandard = TestRecords.CheckerPlay(
+            id: new XgDecisionId("a.xg", Game: 1, MoveNumber: 4, IsCube: false),
+            descriptive: TestRecords.Descriptive(isStandardStart: false));
+        var three = Play("b.xg", move: 3);
+        var five = Play("c.xg", move: 5);
+
+        Assert.Equal(
+            [three.Id, nonStandard.Id, five.Id],
+            await OrderOfAsync([five, nonStandard, three], ProblemOrder.ByMoveNumberAscending));
+    }
+
+    [Fact]
     public async Task ByMoveNumber_ADecisionWithNoMoveNumber_GoesLast_InSourceOrder()
     {
         // A position file's decision has no move number.
