@@ -42,7 +42,10 @@ using BgDataTypes_Lib;
 /// rides on the play key), so the key-match guard on <c>Plus</c> makes a
 /// mixed-kind fold unrepresentable — which is what keeps per-kind
 /// derivations over the tally (e.g. <c>QuizStatsMeasures.Sightings</c>'
-/// divide-by-two for cubes) exact.
+/// divide-by-two for cubes) exact. The other half of that exactness is that
+/// a cube record's count is a whole number of answers
+/// (<see cref="HoldsWholeAnswers"/>): every fold keeps it so, and a document
+/// refuses a record that is not (<see cref="ProblemStatsDocument.FromStats"/>).
 /// </para>
 ///
 /// <para>
@@ -72,6 +75,25 @@ public sealed record ProblemStats(ProblemKey Key, ScoreSegment Tally, DateTimeOf
     /// drift from the tally.
     /// </summary>
     public int Wrong => Tally.Submitted - Tally.Correct;
+
+    /// <summary>
+    /// Whether <see cref="Tally"/> counts a whole number of answers to this
+    /// record's problem: always for a checker play, which folds one
+    /// submission per answer; for a cube problem, only an even count, since
+    /// every answer folds its two halves
+    /// (<see cref="Plus(SubmittedCubeAnswer, DateTimeOffset)"/>, and every
+    /// cube fold since the stats document's version 2). The kind is read off
+    /// the key's grammar (<see cref="ProblemKey.IsCubeDecision"/>), the one
+    /// statement of it a record carries.
+    /// </summary>
+    /// <remarks>
+    /// The folds keep this true of every record that starts true, and
+    /// <see cref="ProblemStatsDocument.FromStats"/> — the door every whole
+    /// record enters a document by, the readers' included — refuses a record
+    /// for which it is false. So a seen record in a document always has a
+    /// whole sighting to divide its loss by, and a measure over it is finite.
+    /// </remarks>
+    internal bool HoldsWholeAnswers => !Key.IsCubeDecision || int.IsEvenInteger(Tally.Submitted);
 
     /// <summary>
     /// Create the first-ever record for <paramref name="play"/>'s problem,

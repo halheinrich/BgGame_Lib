@@ -44,11 +44,22 @@ public class ProblemStatsDocumentSerializationTests
     private static ProblemStats TallyRecordAs(ProblemKey key) =>
         new(key, new ScoreSegment(1, 1, 0.0), T1);
 
+    /// <summary>
+    /// A cube problem's bare record: one answer, its two halves — the
+    /// smallest count a cube record holds, since every cube fold adds two.
+    /// </summary>
+    private const string CubeTallyRecord =
+        """{"tally":{"submitted":2,"correct":2,"totalEquityLoss":0},"lastQuizzed":"2026-07-18T19:04:11+00:00"}""";
+
+    /// <summary>The record <see cref="CubeTallyRecord"/> spells, for read-back assertions.</summary>
+    private static ProblemStats CubeTallyRecordAs(ProblemKey key) =>
+        new(key, new ScoreSegment(2, 2, 0.0), T1);
+
     /// <summary>A well-formed v4 checker-play problem value: the record under its kind wrapper.</summary>
     private const string V4PlayValue = $$"""{"checkerPlay":{{TallyRecord}}}""";
 
     /// <summary>A well-formed v4 cube-pair problem value.</summary>
-    private const string V4CubeValue = $$"""{"cubePair":{{TallyRecord}}}""";
+    private const string V4CubeValue = $$"""{"cubePair":{{CubeTallyRecord}}}""";
 
     private static ProblemStatsDocument PopulatedDocument() =>
         ProblemStatsDocument.FromStats(
@@ -675,7 +686,8 @@ public class ProblemStatsDocumentSerializationTests
             $$$"""{"schemaVersion":4,"problems":{"{{{keyText}}}":{{{value}}}}}""");
 
         var key = ProblemKey.Parse(keyText);
-        Assert.Equal(TallyRecordAs(key), Assert.Contains(key, doc.Problems));
+        var expected = key.IsCubeDecision ? CubeTallyRecordAs(key) : TallyRecordAs(key);
+        Assert.Equal(expected, Assert.Contains(key, doc.Problems));
     }
 
     [Fact]
@@ -794,6 +806,50 @@ public class ProblemStatsDocumentSerializationTests
         // The mirror of the play-key mismatch row above: kind-vs-key
         // agreement is checked per polarity, not just one way round.
         ReadFoldableThrows($$$"""{"schemaVersion":4,"problems":{"{{{CubeKeyText}}}":{{{V4PlayValue}}}}}""");
+    }
+
+    // ------------------------------------------------------------------
+    //  A cube record's count is a whole number of answers — two halves per
+    //  answer, since v2. Both readers refuse an odd one, as they refuse any
+    //  other impossible tally: such a record has no whole sighting to divide
+    //  its loss by.
+    // ------------------------------------------------------------------
+
+    private static string RecordOf(int submitted) =>
+        $$"""{"tally":{"submitted":{{submitted}},"correct":0,"totalEquityLoss":0.1},"lastQuizzed":"2026-07-18T19:04:11+00:00"}""";
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    public void Deserialize_ACubeRecordWithAnOddCount_Throws(int submitted)
+    {
+        var ex = DeserializeThrows(
+            $$$"""{"schemaVersion":3,"problems":{"{{{CubeKeyText}}}":{{{RecordOf(submitted)}}}}}""");
+
+        Assert.Contains(CubeKeyText, ex.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    public void ReadFoldable_ACubeRecordWithAnOddCount_Throws(int submitted)
+    {
+        var value = $$"""{"cubePair":{{RecordOf(submitted)}}}""";
+
+        var ex = ReadFoldableThrows(
+            $$$"""{"schemaVersion":4,"problems":{"{{{CubeKeyText}}}":{{{value}}}}}""");
+
+        Assert.Contains(CubeKeyText, ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Deserialize_ACubeRecordOfWholeAnswers_AndAPlayRecordOfAnyCount_Read()
+    {
+        var doc = JsonSerializer.Deserialize<ProblemStatsDocument>(
+            $$$$"""{"schemaVersion":3,"problems":{"{{{{CubeKeyText}}}}":{{{{RecordOf(4)}}}},"{{{{PlayKeyText}}}}":{{{{RecordOf(3)}}}}}}""")!;
+
+        Assert.Equal(4, doc.Problems[CubeKey].Tally.Submitted);
+        Assert.Equal(3, doc.Problems[PlayKey].Tally.Submitted);
     }
 
     [Theory]

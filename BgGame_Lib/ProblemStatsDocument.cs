@@ -114,13 +114,22 @@ public sealed class ProblemStatsDocument
     /// <summary>
     /// Create a document holding the given per-problem records.
     /// </summary>
+    /// <remarks>
+    /// This is where a whole record enters a document — the readers build
+    /// their documents through it too — so it is where a record no fold could
+    /// have written is refused: a cube problem's record whose count is not a
+    /// whole number of answers (<see cref="ProblemStats.HoldsWholeAnswers"/>).
+    /// Such a record has no whole sighting to divide its loss by, and is
+    /// refused rather than given a fractional one.
+    /// </remarks>
     /// <param name="stats">The records; each problem may appear at most once.</param>
     /// <exception cref="ArgumentNullException">
     /// Thrown when <paramref name="stats"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
     /// Thrown when <paramref name="stats"/> contains a <see langword="null"/>
-    /// element or two records with the same <see cref="ProblemStats.Key"/>.
+    /// element, two records with the same <see cref="ProblemStats.Key"/>, or
+    /// a cube problem's record with an odd count.
     /// </exception>
     public static ProblemStatsDocument FromStats(IEnumerable<ProblemStats> stats)
     {
@@ -130,6 +139,11 @@ public sealed class ProblemStatsDocument
         {
             if (s is null)
                 throw new ArgumentException("Stats collection contains a null element.", nameof(stats));
+            if (!s.HoldsWholeAnswers)
+                throw new ArgumentException(
+                    $"Cube problem '{s.Key}' has {s.Tally.Submitted} submissions; every cube " +
+                    "answer folds two halves, so a cube record's count is even.",
+                    nameof(stats));
             if (builder.ContainsKey(s.Key))
                 throw new ArgumentException($"Duplicate ProblemKey '{s.Key}'.", nameof(stats));
             builder.Add(s.Key, s);
@@ -159,9 +173,10 @@ public sealed class ProblemStatsDocument
     /// <see cref="JsonSerializer"/> path's), a malformed answer-kind layer
     /// (no kind record, a second one, an unknown or reserved token, a token
     /// disagreeing with its key's grammar, v3's bare record under a v4
-    /// version), any malformed record, invalid or duplicate keys, or
-    /// trailing content. Never the retired or foldable signals: this reader
-    /// is the fold, not the dispatcher.
+    /// version), any malformed record (a cube problem's record with an odd
+    /// count among them), invalid or duplicate keys, or trailing content.
+    /// Never the retired or foldable signals: this reader is the fold, not
+    /// the dispatcher.
     /// </exception>
     public static ProblemStatsDocument ReadFoldable(string json)
     {

@@ -110,8 +110,10 @@ using BgDataTypes_Lib;
 /// or unrecognised schema version, a missing required property, an unknown
 /// or duplicate property at any level, an invalid or duplicate key, a
 /// malformed date, or an impossible tally (negative counts, correct &gt;
-/// submitted, negative equity loss) — corrupt or foreign stats must never
-/// load as quietly-wrong lifetime data.
+/// submitted, negative equity loss, or an odd count on a cube problem's
+/// record, which no fold writes — the last refused where the record enters
+/// the document, <see cref="ProblemStatsDocument.FromStats"/>) — corrupt or
+/// foreign stats must never load as quietly-wrong lifetime data.
 /// </para>
 ///
 /// <para>
@@ -416,8 +418,19 @@ public sealed class ProblemStatsDocumentJsonConverter : JsonConverter<ProblemSta
         if (problems is null)
             throw new JsonException("Missing required property 'problems'.");
 
-        // Duplicate keys were rejected in ReadProblems, so FromStats cannot throw.
-        return ProblemStatsDocument.FromStats(problems);
+        // The records enter the document through FromStats, the one door a
+        // whole record is admitted by, so its refusals are this reader's too:
+        // a cube record whose count is not a whole number of answers reads as
+        // corrupt, as every other impossible tally does. (Duplicate keys were
+        // already refused in ReadProblems.)
+        try
+        {
+            return ProblemStatsDocument.FromStats(problems);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new JsonException(ex.Message, ex);
+        }
     }
 
     private static List<ProblemStats> ReadProblems(ref Utf8JsonReader reader, ProblemValueShape shape)

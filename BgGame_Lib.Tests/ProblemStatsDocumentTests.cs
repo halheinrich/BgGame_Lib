@@ -210,6 +210,36 @@ public class ProblemStatsDocumentTests
         Assert.Throws<ArgumentException>(() => ProblemStatsDocument.FromStats([null!]));
     }
 
+    // A cube record's count is a whole number of answers: every cube fold
+    // adds its two halves. A record admitted with an odd count would have no
+    // whole sighting to divide its loss by, so the document refuses it where
+    // the record enters.
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(3)]
+    public void FromStats_ACubeRecordWithAnOddCount_Throws(int submitted)
+    {
+        var odd = new ProblemStats(KeyB, new ScoreSegment(submitted, 0, 0.1), T1);
+
+        var ex = Assert.Throws<ArgumentException>(() => ProblemStatsDocument.FromStats([odd]));
+
+        Assert.Equal("stats", ex.ParamName);
+        Assert.Contains(KeyB.ToString(), ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FromStats_AdmitsAPlayRecordOfAnyCount_AndACubeRecordOfWholeAnswers()
+    {
+        var play = new ProblemStats(KeyA, new ScoreSegment(3, 2, 0.125), T1);
+        var cube = new ProblemStats(KeyB, new ScoreSegment(4, 3, 0.25), T1);
+
+        var doc = ProblemStatsDocument.FromStats([play, cube]);
+
+        Assert.Equal(play, doc.Problems[KeyA]);
+        Assert.Equal(cube, doc.Problems[KeyB]);
+    }
+
     // =====================================================================
     //  Merge — the document algebra behind the v4 fold
     //  (SPEC-stats-identity.md §3, amended 2026-09-02; halheinrich/backgammon#187)
@@ -309,7 +339,7 @@ public class ProblemStatsDocumentTests
         var a = Doc(new ProblemStats(KeyA, new ScoreSegment(1, 1, 0.125), T1));
         var b = Doc(
             new ProblemStats(KeyA, new ScoreSegment(2, 0, 0.25), T2),
-            new ProblemStats(KeyB, new ScoreSegment(1, 1, 0.0), T1));
+            new ProblemStats(KeyB, new ScoreSegment(2, 2, 0.0), T1));
         var c = Doc(
             new ProblemStats(KeyA, new ScoreSegment(4, 4, 0.5), T1),
             new ProblemStats(KeyC, new ScoreSegment(3, 1, 0.125), T2));

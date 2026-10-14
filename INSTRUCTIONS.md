@@ -711,7 +711,17 @@ still be handed to another problem's record), as does merging two problems'
 records — and since a play key and a cube key are distinct by grammar (the dice
 discriminant), **kind purity is structural**: a record only ever folds one
 decision kind, which keeps per-kind tally derivations (sightings' cube
-divide-by-two) exact. The static `From` factories are defined as an empty
+divide-by-two) exact. **A cube record's count is a whole number of
+answers** — the other half of that exactness. Every fold keeps it even (each
+answer adds two, as every cube fold has since v2), and
+`ProblemStatsDocument.FromStats`, the door every whole record enters a
+document by (the readers build through it), refuses a cube record with an
+odd count with `ArgumentException` — which a read surfaces as
+`JsonException`, like any other impossible tally. The rule is stated once,
+on the record (the internal `ProblemStats.HoldsWholeAnswers`, read off the
+key's grammar). A record with an odd count would have no whole sighting to
+divide its loss by, so it is refused, never given a fractional one. The
+static `From` factories are defined as an empty
 seed plus `Plus`, so the fold rule has one definition. Skips never reach a
 fold: an off-list play and a play the ranking does not score yield no
 `SubmittedPlay` to fold (see "Quiz-result records"), and a Skip-button skip
@@ -815,8 +825,9 @@ the one version above current that is not refused as newer. The file dance
 or unrecognised schema versions (distinguished "newer than this library
 supports" message), unknown or duplicate properties, missing required
 properties, invalid or duplicate or non-canonically-spelled keys (a v2
-money key is now one of these), malformed dates, impossible tallies, a v4
-kind wrapper under the current version — throws plain `JsonException`; a
+money key is now one of these), malformed dates, impossible tallies (an
+odd count on a cube record among them), a v4 kind wrapper under the current
+version — throws plain `JsonException`; a
 schema-version bump is the format's only evolution mechanism beyond the
 additive optional fields reserved above.
 
@@ -1478,7 +1489,7 @@ public sealed class ProblemStatsDocument                      // immutable; refe
     public const int CurrentSchemaVersion = 3;   // every recognised version below it is retired
     public const int FoldableSchemaVersion = 4;  // the one version above it that folds instead of being refused
     public static ProblemStatsDocument Empty { get; }
-    public static ProblemStatsDocument FromStats(IEnumerable<ProblemStats> stats);   // ArgumentException on duplicate key
+    public static ProblemStatsDocument FromStats(IEnumerable<ProblemStats> stats);   // ArgumentException on duplicate key or an odd cube count
     public static ProblemStatsDocument ReadFoldable(string json);   // a well-formed v4 → the current shape; anything else JsonException
     public int Count { get; }
     public IReadOnlyDictionary<ProblemKey, ProblemStats> Problems { get; }
