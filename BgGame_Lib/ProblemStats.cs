@@ -169,8 +169,9 @@ public sealed record ProblemStats(ProblemKey Key, ScoreSegment Tally, DateTimeOf
     /// Every answer adds both halves, No double included: its implied take is
     /// never charged, so its take part is 0 and its take half a correct zero.
     /// That keeps the unit at two per cube answer, which the record has always
-    /// had, so a cube record's sightings stay its count ÷ 2 and its wrong rate
-    /// and average loss stay per half.
+    /// had, so a cube record's sightings stay its count ÷ 2, its wrong rate
+    /// stays per half, and its loss per answer sums the two halves
+    /// (<c>QuizStatsMeasures.LossPerAnswer</c>).
     /// </para>
     /// <para>
     /// The halves are judged one by one. An answer whose two parts each count

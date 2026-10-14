@@ -35,10 +35,11 @@ public enum QuizCategoryKind
     NotSeenInDays,
 
     /// <summary>
-    /// The decision's lifetime average equity loss per submission exceeds the
-    /// parameter. Per-half for cubes with no adjustment needed: both halves'
-    /// losses and both half-counts enter the average, so it is already the
-    /// per-half figure, directly comparable across decision kinds.
+    /// The decision's lifetime average equity loss per answer exceeds the
+    /// parameter: the record's total loss over its sightings, so a cube
+    /// answer's two halves count as the one answer they make, and one
+    /// threshold compares across decision kinds (SPEC-scoring.md, amended
+    /// 2026-10-14).
     /// </summary>
     AvgEquityLossOver,
 

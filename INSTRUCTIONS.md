@@ -861,14 +861,22 @@ composes quizzes from them (BgQuiz Phase 2+ selection).
   folds one kind (kind purity is structural — see the stats section). No
   stats-schema change; "seen fewer than n" means sightings, not raw
   submissions.
-- **Per-half measures need no cube adjustment.** `AvgEquityLossOver` compares
-  `Tally.AverageEquityLoss`, whose numerator (both halves' losses) and
-  denominator (2 per sighting) both count per-half — `Total/Submitted` is
-  already the per-half average, comparable across decision kinds under one
-  threshold. `WrongRateOver` likewise compares the per-half wrong fraction
-  (`1 − Accuracy`, in [0, 1]): a half-right cube reads 0.5, consistent with
-  the ratified 1-of-2 fold. Thresholds are fractions — percentage rendering
-  stays a display concern, per the `ScoreSegment.Accuracy` convention.
+- **The average loss is per answer; the wrong rate is per half.**
+  `AvgEquityLossOver` compares the player's lifetime **loss per answer** —
+  the internal `QuizStatsMeasures.LossPerAnswer`: the record's total loss
+  over its sightings, so a cube answer's two halves are summed into the one
+  answer they make (SPEC-scoring.md, amended 2026-10-14). It is the one
+  definition of the measure; nothing else restates it. Unseen (no record, or
+  no submissions) is "none", which never matches, and a real record with no
+  loss reads 0.0. A saved threshold keeps its value, so a cube problem needs
+  its per-answer loss — not its old per-half average, `Tally.AverageEquityLoss`
+  — above it. The divisor is exact because a document admits only a cube
+  record of whole answers (see the stats section). `ScoreSegment.AverageEquityLoss`
+  itself is untouched: it is per submission, and the session score reads it.
+  `WrongRateOver` compares the per-half wrong fraction (`1 − Accuracy`, in
+  [0, 1]): a half-right cube reads 0.5, consistent with the ratified 1-of-2
+  fold. Thresholds are fractions — percentage rendering stays a display
+  concern, per the `ScoreSegment.Accuracy` convention.
 - **EverythingElse is residual, not a predicate.** It matches exactly the
   decisions matched by no other entry selected in the same mix — contextual
   by definition. `BuildPredicate()` throws for it; composers gate on
@@ -1531,7 +1539,7 @@ public sealed record QuizCategory   // immutable DTO; value equality; factory-on
     public static QuizCategory EverythingElse { get; }
     public static QuizCategory SeenFewerThan(int times);           // times ≥ 1; sightings, not submissions
     public static QuizCategory NotSeenInDays(int days);            // days ≥ 1; never-seen matches too
-    public static QuizCategory AvgEquityLossOver(double loss);     // finite, ≥ 0.0; per-half average
+    public static QuizCategory AvgEquityLossOver(double loss);     // finite, ≥ 0.0; loss per answer (a cube's halves summed)
     public static QuizCategory WrongRateOver(double rate);         // fraction in [0.0, 1.0); per-half
 }
 
@@ -1707,7 +1715,8 @@ public sealed record AnswerTypeDistribution(
   Total, judged on the whole cost. The lifetime record adds **two**
   decisions for every answer — No double's take half a correct zero — each
   half judged on its own part: the unit v3 has always had, which the quiz
-  mix's sightings (count ÷ 2) and per-half measures rest on. So a document's
+  mix's sightings (count ÷ 2), its per-half wrong rate and its per-answer
+  loss (the halves summed) rest on. So a document's
   cube tallies do not reconcile with a session's Total or rows over the same
   answers, and an answer whose parts each count as zero but whose whole does
   not is wrong in the Total and two right halves in the record. Neither is
@@ -1769,19 +1778,23 @@ public sealed record AnswerTypeDistribution(
   cube scoring, and new folds add to them; nothing is re-scored or restarted
   (SPEC-stats-identity.md §3, kept 2026-10-01). Do not try to tell the two
   apart in a stored tally — it holds totals, not answers — and do not
-  "migrate" one. The quiz mix's thresholds keep their units and saved
-  values, though the new costs and the zero rule can change which problems
-  meet them.
-- **`QuizCategory` measures are per-half and its thresholds are fractions;
-  "seen" means sightings.** `SeenFewerThan` counts sightings derived from the
-  tally (`Submitted / 2` for a cube decision — the two-half fold), so the
-  predicate needs the live decision's kind, not stats alone.
-  `AvgEquityLossOver` and `WrongRateOver` compare per-half measures
-  (`AverageEquityLoss` is already per-half for cubes — no adjustment) and
-  their thresholds are fractions in line with `ScoreSegment.Accuracy`, not
-  0–100 points. `EverythingElse` has no standalone predicate — the internal
-  `BuildPredicate()` throws for it; gate on `IsResidual` (it means "matched by
-  no other selected entry", computable only with the whole mix in hand).
+  "migrate" one. The quiz mix's thresholds keep their saved values, though
+  the new costs and the zero rule can change which problems meet them — and
+  so, since 2026-10-14, does the average-loss category's reading of a cube's
+  loss per answer rather than per half.
+- **`QuizCategory`'s average loss is per answer, its wrong rate per half,
+  and its thresholds are fractions; "seen" means sightings.** `SeenFewerThan`
+  counts sightings derived from the tally (`Submitted / 2` for a cube
+  decision — the two-half fold), so the predicate needs the live decision's
+  kind, not stats alone. `AvgEquityLossOver` compares the loss per answer
+  (`QuizStatsMeasures.LossPerAnswer`: total loss over sightings) — do not
+  "simplify" it to `Tally.AverageEquityLoss`, which is per half for a cube
+  and was retired as this measure on 2026-10-14. `WrongRateOver` compares the
+  per-half wrong fraction. Thresholds are fractions in line with
+  `ScoreSegment.Accuracy`, not 0–100 points. `EverythingElse` has no
+  standalone predicate — the internal `BuildPredicate()` throws for it; gate
+  on `IsResidual` (it means "matched by no other selected entry", computable
+  only with the whole mix in hand).
 - **`QuizMix` entry order is semantically meaningful — and participates in
   equality.** Under overlapping categories, composition draws entries in
   declared order — contested decisions go to the earlier entry — so reordering

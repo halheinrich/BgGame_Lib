@@ -223,15 +223,54 @@ public class QuizCategoryTests
         Assert.False(Matches(QuizCategory.AvgEquityLossOver(0.0), Play, stats: null));
 
     [Fact]
-    public void AvgEquityLossOver_NeedsNoCubeAdjustment()
+    public void AvgEquityLossOver_ReadsACubesLossPerAnswer()
     {
-        // One cube sighting: both halves' losses over both half-counts is
-        // already the per-half average — the same 0.15 as the play case above,
-        // matched against the same threshold.
+        // One cube answer, its two halves 0.30 lost in all: 0.15 per half,
+        // at the threshold and not over it; 0.30 per answer, over it. The
+        // category reads the loss per answer (SPEC-scoring.md, amended
+        // 2026-10-14), and the saved threshold keeps its value.
         var stats = Stats(2, 1, 0.3, Now);
-        Assert.True(Matches(QuizCategory.AvgEquityLossOver(0.1), Cube, stats));
-        Assert.False(Matches(QuizCategory.AvgEquityLossOver(0.15), Cube, stats));
+        Assert.True(Matches(QuizCategory.AvgEquityLossOver(0.15), Cube, stats));
+        Assert.True(Matches(QuizCategory.AvgEquityLossOver(0.29), Cube, stats));
+        Assert.False(Matches(QuizCategory.AvgEquityLossOver(0.3), Cube, stats));
     }
+
+    [Fact]
+    public void AvgEquityLossOver_DoesNotMatchARecordWithNoSubmissions() =>
+        Assert.False(Matches(QuizCategory.AvgEquityLossOver(0.0), Play, Stats(0, 0, 0.0, Now)));
+
+    // -----------------------------------------------------------------------
+    //  The loss per answer — one producer-owned measure (SPEC-scoring.md,
+    //  amended 2026-10-14)
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void LossPerAnswer_WithNoHistory_IsNone() =>
+        Assert.Null(QuizStatsMeasures.LossPerAnswer(Play, stats: null));
+
+    [Fact]
+    public void LossPerAnswer_OfARecordWithNoSubmissions_IsNone()
+    {
+        Assert.Null(QuizStatsMeasures.LossPerAnswer(Play, Stats(0, 0, 0.0, Now)));
+        Assert.Null(QuizStatsMeasures.LossPerAnswer(Cube, Stats(0, 0, 0.0, Now)));
+    }
+
+    [Fact]
+    public void LossPerAnswer_OfARealRecordWithNoLoss_IsZero_NotNone()
+    {
+        Assert.Equal(0.0, QuizStatsMeasures.LossPerAnswer(Play, Stats(3, 3, 0.0, Now)));
+        Assert.Equal(0.0, QuizStatsMeasures.LossPerAnswer(Cube, Stats(2, 2, 0.0, Now)));
+    }
+
+    [Fact]
+    public void LossPerAnswer_OfAPlay_IsItsLossPerSubmission() =>
+        // A checker play folds one submission per answer.
+        Assert.Equal(0.125, QuizStatsMeasures.LossPerAnswer(Play, Stats(4, 1, 0.5, Now)));
+
+    [Fact]
+    public void LossPerAnswer_OfACube_SumsItsTwoHalves() =>
+        // Two answers, four halves, 0.5 lost: 0.25 an answer (0.125 a half).
+        Assert.Equal(0.25, QuizStatsMeasures.LossPerAnswer(Cube, Stats(4, 1, 0.5, Now)));
 
     // -----------------------------------------------------------------------
     //  WrongRateOver
@@ -263,9 +302,10 @@ public class QuizCategoryTests
     // -----------------------------------------------------------------------
     //
     // The new cube costs keep the lifetime record's unit, two decisions per
-    // cube answer, so the mix's measures keep their units and meaning:
-    // sightings are the count ÷ 2, and the wrong rate and the average loss
-    // are per half — No double included, whose take half is a correct zero.
+    // cube answer, so the mix's measures keep their units: sightings are the
+    // count ÷ 2, the wrong rate is per half — No double included, whose take
+    // half is a correct zero — and the average loss is per answer, the two
+    // halves summed (SPEC-scoring.md, amended 2026-10-14).
 
     /// <summary>The cube decision the folds below answer: a Double / Take truth (N +0.30, T +0.60).</summary>
     private static CubeDecision DoubleTakeCube => TestSubmissions.CubeRecord(0.30, 0.60);
@@ -308,16 +348,26 @@ public class QuizCategoryTests
     public void FoldedCube_NoDouble_ReadsPerHalf_ItsTakeHalfACorrectZero()
     {
         // No double misses the double, 0.30, and its take half is a correct
-        // zero: one of two halves wrong — a wrong rate of 0.5 — and an average
-        // loss of 0.15 per half.
+        // zero: one of two halves wrong — a wrong rate of 0.5 — and a loss of
+        // 0.30 for the one answer.
         var stats = Folded(CubeAnswer.NoDouble);
 
         Assert.Equal(new ScoreSegment(2, 1, 0.30), stats.Tally);
         Assert.True(Matches(QuizCategory.GotWrong, DoubleTakeCube, stats));
         Assert.True(Matches(QuizCategory.WrongRateOver(0.49), DoubleTakeCube, stats));
         Assert.False(Matches(QuizCategory.WrongRateOver(0.5), DoubleTakeCube, stats));
-        Assert.True(Matches(QuizCategory.AvgEquityLossOver(0.14), DoubleTakeCube, stats));
-        Assert.False(Matches(QuizCategory.AvgEquityLossOver(0.15), DoubleTakeCube, stats));
+        Assert.True(Matches(QuizCategory.AvgEquityLossOver(0.29), DoubleTakeCube, stats));
+        Assert.False(Matches(QuizCategory.AvgEquityLossOver(0.30), DoubleTakeCube, stats));
+    }
+
+    [Fact]
+    public void FoldedCube_TwoAnswers_LosePerAnswerTheirTotalOverTwo()
+    {
+        // No double (0.30) then Double / Pass (0.40): 0.70 over two answers.
+        var stats = Folded(CubeAnswer.NoDouble, CubeAnswer.DoublePass);
+
+        Assert.Equal(4, stats.Tally.Submitted);
+        Assert.Equal(0.35, QuizStatsMeasures.LossPerAnswer(DoubleTakeCube, stats)!.Value, precision: 12);
     }
 
     [Fact]

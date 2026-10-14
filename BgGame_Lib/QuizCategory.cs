@@ -21,9 +21,11 @@ namespace BgGame_Lib;
 /// (null when never quizzed) — because sightings are derived per decision
 /// kind: a cube position folds two halves per sighting, so its sightings are
 /// <c>Tally.Submitted / 2</c> (always exact — one id only ever folds one
-/// kind). The per-half measures (<see cref="QuizCategoryKind.AvgEquityLossOver"/>,
-/// <see cref="QuizCategoryKind.WrongRateOver"/>) need no such adjustment and
-/// compare directly across decision kinds.
+/// kind, and a document admits only a cube record of whole answers). The
+/// average loss (<see cref="QuizCategoryKind.AvgEquityLossOver"/>) is per
+/// answer — the record's loss over its sightings, a cube's two halves summed —
+/// and the wrong rate (<see cref="QuizCategoryKind.WrongRateOver"/>) is per
+/// half; each compares directly across decision kinds.
 /// </para>
 ///
 /// <para>
@@ -111,12 +113,16 @@ public sealed record QuizCategory
     }
 
     /// <summary>
-    /// Decisions whose lifetime average equity loss per submission strictly
-    /// exceeds <paramref name="loss"/>. Per-half for cubes with no adjustment
-    /// (numerator and denominator both count per-half), so one threshold
-    /// compares across decision kinds. Never-seen decisions do not match.
+    /// Decisions whose lifetime average equity loss per answer strictly
+    /// exceeds <paramref name="loss"/>: the record's total loss divided by its
+    /// sightings, so a cube answer's two halves are summed into the one answer
+    /// they make, and one threshold compares across decision kinds
+    /// (SPEC-scoring.md, amended 2026-10-14). A saved threshold keeps its
+    /// value, so a cube
+    /// problem now needs its loss per answer — not its per-half average —
+    /// above it. Never-seen decisions do not match.
     /// </summary>
-    /// <param name="loss">Exclusive lower bound on average equity loss; finite and non-negative.</param>
+    /// <param name="loss">Exclusive lower bound on the average equity loss per answer; finite and non-negative.</param>
     /// <exception cref="ArgumentOutOfRangeException">
     /// Thrown when <paramref name="loss"/> is negative, NaN, or infinite.
     /// </exception>

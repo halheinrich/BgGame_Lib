@@ -548,6 +548,20 @@ public class MixedProblemSetSourceTests
     }
 
     [Fact]
+    public async Task AverageLoss_JudgesACubeProblemByItsLossPerAnswer()
+    {
+        // Cube problem 5 was answered once and lost 0.30 over its two halves:
+        // 0.15 per half, 0.30 per answer. At a 0.15 threshold it is drawn —
+        // its loss per answer is over it, though its per-half average is not.
+        var cube = TestRecords.Cube(id: Id(5), position: PositionOf(5));
+        var doc = Doc(new ProblemStats(ProblemKey.From(cube), new ScoreSegment(2, 1, 0.30), Now));
+        var mix = new QuizMix([Entry(QuizCategory.AvgEquityLossOver(0.15), 100)], randomOrder: false);
+        var source = Source([cube, Decision(2)], doc, mix);
+
+        Assert.Equal([5], await IdsAsync(source));
+    }
+
+    [Fact]
     public async Task ContentEqualCopies_AreDistinctRecordsHere_BothClassified()
     {
         // The enumeration dedupe is record identity (DecisionId), not content

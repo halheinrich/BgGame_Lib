@@ -30,7 +30,8 @@ internal interface IQuizCategoryPredicate
 
 /// <summary>
 /// Shared derivations over a decision's lifetime record — single-sourced so
-/// every predicate agrees on what "unseen" and "sightings" mean.
+/// every reader agrees on what "unseen", "sightings" and "loss per answer"
+/// mean.
 /// </summary>
 internal static class QuizStatsMeasures
 {
@@ -52,6 +53,26 @@ internal static class QuizStatsMeasures
     /// </summary>
     internal static int Sightings(BgDecisionData decision, ProblemStats? stats) =>
         IsUnseen(stats) ? 0 : stats.Tally.Submitted / SubmissionsPerSighting(decision);
+
+    /// <summary>
+    /// The player's lifetime loss per answer on the decision's problem: the
+    /// record's total loss divided by its <see cref="Sightings"/>, a cube's
+    /// two halves summed into the one answer they make (SPEC-scoring.md,
+    /// lifetime stats, amended 2026-10-14). <see langword="null"/> when the
+    /// problem is unseen — no record, or one with no submissions — so a
+    /// caller tells "no history" from a real record whose loss is 0.0.
+    /// </summary>
+    /// <remarks>
+    /// The one definition of the measure, which the average-loss category
+    /// reads (<see cref="AvgEquityLossOverPredicate"/>). A seen record in
+    /// a document always has a whole sighting to divide by, since a document
+    /// refuses a cube record whose count is not a whole number of answers
+    /// (<see cref="ProblemStats.HoldsWholeAnswers"/>); the session score's
+    /// per-submission average (<see cref="ScoreSegment.AverageEquityLoss"/>)
+    /// is a different measure and stays as it is.
+    /// </remarks>
+    internal static double? LossPerAnswer(BgDecisionData decision, ProblemStats? stats) =>
+        IsUnseen(stats) ? null : stats.Tally.TotalEquityLoss / Sightings(decision, stats);
 
     /// <summary>
     /// How many submissions one sighting of <paramref name="decision"/> folds:
@@ -123,16 +144,17 @@ internal sealed class NotSeenInDaysPredicate(int days) : IQuizCategoryPredicate
 }
 
 /// <summary>
-/// Matches decisions whose lifetime average equity loss per submission
-/// strictly exceeds <paramref name="loss"/> (per-half; never-seen does not
-/// match). See <see cref="QuizCategory.AvgEquityLossOver"/>.
+/// Matches decisions whose lifetime loss per answer
+/// (<see cref="QuizStatsMeasures.LossPerAnswer"/>, a cube's two halves summed)
+/// strictly exceeds <paramref name="loss"/>; never-seen does not match. See
+/// <see cref="QuizCategory.AvgEquityLossOver"/>.
 /// </summary>
-/// <param name="loss">Exclusive lower bound on average loss; validated by the factory.</param>
+/// <param name="loss">Exclusive lower bound on the loss per answer; validated by the factory.</param>
 internal sealed class AvgEquityLossOverPredicate(double loss) : IQuizCategoryPredicate
 {
     /// <inheritdoc/>
     public bool Matches(BgDecisionData decision, ProblemStats? stats, DateTimeOffset asOf) =>
-        !QuizStatsMeasures.IsUnseen(stats) && stats.Tally.AverageEquityLoss > loss;
+        QuizStatsMeasures.LossPerAnswer(decision, stats) is double perAnswer && perAnswer > loss;
 }
 
 /// <summary>
