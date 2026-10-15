@@ -53,6 +53,21 @@ using BgDataTypes_Lib;
 /// </para>
 ///
 /// <para>
+/// <b>Releasing never misreports</b> (SPEC-quiz-history.md §8). The inner
+/// stream is released once, where it always was: when the drain runs out,
+/// which is before the first item, or at the fault that ends the drain. A
+/// failure of that release never replaces the drain's outcome: a fault is
+/// thrown as itself, and a drain that ran out goes on to present. The
+/// release's failure is thrown instead by this stream's own
+/// <c>DisposeAsync</c>, whenever the consumer releases it: after a fault,
+/// after the end, or early. So release every stream drawn from this source,
+/// and treat a release failure as §8 does. A plain <c>await foreach</c>
+/// releases in its own <c>finally</c>, where the failure would replace the
+/// loop's outcome; a consumer that needs the draw's outcome to win guards
+/// its release explicitly.
+/// </para>
+///
+/// <para>
 /// <b>Name / Count.</b> <see cref="Name"/> passes through — dedupe doesn't
 /// rename the set. <see cref="Count"/> is always null: the
 /// <see cref="IProblemSetSource"/> contract requires a non-null count to
@@ -109,8 +124,16 @@ public sealed class DistinctPositionProblemSetSource : IProblemSetSource
     public IReadOnlyList<DuplicatePositionClass>? LastDuplicateClasses { get; private set; }
 
     /// <inheritdoc/>
-    public async IAsyncEnumerable<BgDecisionData> EnumerateAsync(
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    public IAsyncEnumerable<BgDecisionData> EnumerateAsync(CancellationToken cancellationToken = default) =>
+        InnerReleases.ReportedOnRelease(EnumerateCoreAsync, cancellationToken);
+
+    /// <summary>
+    /// One enumeration: drain the inner source, drawn through
+    /// <paramref name="releases"/> so that its release never replaces the
+    /// drain's outcome, then present the survivors.
+    /// </summary>
+    private async IAsyncEnumerable<BgDecisionData> EnumerateCoreAsync(
+        InnerReleases releases, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         // Survivors in first-content-occurrence order. Duplicate classes are
         // materialized lazily, keyed by survivor slot: a class exists only
@@ -120,7 +143,7 @@ public sealed class DistinctPositionProblemSetSource : IProblemSetSource
         var indexByKey = new Dictionary<ProblemKey, int>();
         var classesBySlot = new Dictionary<int, (ProblemKey Key, List<DecisionId> Members)>();
 
-        await foreach (var item in _inner.EnumerateAsync(cancellationToken))
+        await foreach (var item in releases.Draw(_inner.EnumerateAsync(cancellationToken)))
         {
             cancellationToken.ThrowIfCancellationRequested();
 

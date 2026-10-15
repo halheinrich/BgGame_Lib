@@ -29,6 +29,22 @@ using BgDataTypes_Lib;
 /// </para>
 ///
 /// <para>
+/// <b>Releasing never misreports</b> (SPEC-quiz-history.md §8), on both
+/// paths. The inner stream is released once, where it always was: as read,
+/// when it runs out, at a fault, or when this stream is released early;
+/// under any other order, when the drain runs out, which is before the
+/// first item, or at the fault that ends the drain. A failure of that
+/// release never replaces a draw's outcome: a fault is thrown as itself, and
+/// a stream that ran out reports its end. The release's failure is thrown
+/// instead by this stream's own <c>DisposeAsync</c>, whenever the consumer
+/// releases it: after a fault, after the end, or early. So release every
+/// stream drawn from this source, and treat a release failure as §8 does. A
+/// plain <c>await foreach</c> releases in its own <c>finally</c>, where the
+/// failure would replace the loop's outcome; a consumer that needs the
+/// draw's outcome to win guards its release explicitly.
+/// </para>
+///
+/// <para>
 /// <b>Name / Count passthrough.</b> An order changes presentation only; it
 /// neither changes cardinality nor knows more or less about the inner
 /// source's size than the inner source itself. Both properties pass through
@@ -127,12 +143,21 @@ public sealed class OrderedProblemSetSource : IProblemSetSource
     public int? Count => _inner.Count;
 
     /// <inheritdoc/>
-    public async IAsyncEnumerable<BgDecisionData> EnumerateAsync(
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    public IAsyncEnumerable<BgDecisionData> EnumerateAsync(CancellationToken cancellationToken = default) =>
+        InnerReleases.ReportedOnRelease(EnumerateCoreAsync, cancellationToken);
+
+    /// <summary>
+    /// One enumeration: stream the inner source through as read, or order it
+    /// and present the ordering. Either way the inner source is drawn through
+    /// <paramref name="releases"/>, so that its release never replaces a
+    /// draw's outcome.
+    /// </summary>
+    private async IAsyncEnumerable<BgDecisionData> EnumerateCoreAsync(
+        InnerReleases releases, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         if (_order == ProblemOrder.AsRead)
         {
-            await foreach (var item in _inner.EnumerateAsync(cancellationToken))
+            await foreach (var item in releases.Draw(_inner.EnumerateAsync(cancellationToken)))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 yield return item;
@@ -146,7 +171,7 @@ public sealed class OrderedProblemSetSource : IProblemSetSource
         // yielder paces the whole path — the key pass and the presentation.
         // See CooperativeYielder.
         var yielder = new CooperativeYielder(TimeProvider.System);
-        var ordered = await OrderAsync(yielder, cancellationToken);
+        var ordered = await OrderAsync(releases, yielder, cancellationToken);
 
         foreach (var item in ordered)
         {
@@ -157,7 +182,8 @@ public sealed class OrderedProblemSetSource : IProblemSetSource
     }
 
     /// <summary>
-    /// One enumeration's ordering: drain the inner source, read every
+    /// One enumeration's ordering: drain the inner source (drawn through
+    /// <paramref name="releases"/>, and released once drained), read every
     /// decision's key once (paced and cancellable — see
     /// <see cref="ProblemOrdering"/>), and arrange. A method of its own so
     /// that what it builds — the source-ordered list, the positions, the keys
@@ -165,10 +191,10 @@ public sealed class OrderedProblemSetSource : IProblemSetSource
     /// ordered decisions and nothing else per decision.
     /// </summary>
     private async ValueTask<List<BgDecisionData>> OrderAsync(
-        CooperativeYielder yielder, CancellationToken cancellationToken)
+        InnerReleases releases, CooperativeYielder yielder, CancellationToken cancellationToken)
     {
         var items = new List<BgDecisionData>();
-        await foreach (var item in _inner.EnumerateAsync(cancellationToken))
+        await foreach (var item in releases.Draw(_inner.EnumerateAsync(cancellationToken)))
         {
             cancellationToken.ThrowIfCancellationRequested();
             items.Add(item);

@@ -62,6 +62,26 @@ using BgDataTypes_Lib;
 /// </para>
 ///
 /// <para>
+/// <b>Releasing never misreports</b> (SPEC-quiz-history.md §8), on both
+/// paths. A blank mix draws from the plain order's stream, releasing it when
+/// it runs out, at a fault, or when this stream is released early (the plain
+/// order releases the inner source as <see cref="OrderedProblemSetSource"/>
+/// states); an active mix drains the inner source, releasing it when the
+/// drain runs out, which is before the first decision, or at the fault that
+/// ends the drain. Each is released once. A failure of that release —
+/// or one the plain order reports from its own release — never replaces a
+/// draw's outcome: a fault is thrown as itself, and a stream that ran out
+/// reports its end. The failure is thrown instead by this stream's own
+/// <c>DisposeAsync</c>, whenever the consumer releases it: after a fault,
+/// after the end, or early. So in a stack of these decorators a release
+/// failure at any depth reaches the outermost consumer's release. Release
+/// every stream drawn from this source, and treat a release failure as §8
+/// does. A plain <c>await foreach</c> releases in its own <c>finally</c>,
+/// where the failure would replace the loop's outcome; a consumer that needs
+/// the draw's outcome to win guards its release explicitly.
+/// </para>
+///
+/// <para>
 /// <b>The mix selects; the order presents.</b> Each row's eligible set is
 /// put in the order and the row's quota is filled from its front, an already
 /// drawn decision skipped without consuming quota; then the whole selection
@@ -259,13 +279,23 @@ public sealed class MixedProblemSetSource : IProblemSetSource
     public MixComposition? LastComposition { get; private set; }
 
     /// <inheritdoc/>
-    public async IAsyncEnumerable<BgDecisionData> EnumerateAsync(
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    public IAsyncEnumerable<BgDecisionData> EnumerateAsync(CancellationToken cancellationToken = default) =>
+        InnerReleases.ReportedOnRelease(EnumerateCoreAsync, cancellationToken);
+
+    /// <summary>
+    /// One enumeration: the plain order's stream for a blank mix, or a
+    /// composition presented. The stream drawn from — the plain order's, or
+    /// the inner source's — is drawn through <paramref name="releases"/>, so
+    /// that its release, and any failure the plain order reports from its
+    /// own, never replaces a draw's outcome.
+    /// </summary>
+    private async IAsyncEnumerable<BgDecisionData> EnumerateCoreAsync(
+        InnerReleases releases, [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         if (_plain is not null)
         {
             LastComposition = null;
-            await foreach (var item in _plain.EnumerateAsync(cancellationToken))
+            await foreach (var item in releases.Draw(_plain.EnumerateAsync(cancellationToken)))
                 yield return item;
             yield break;
         }
@@ -277,7 +307,7 @@ public sealed class MixedProblemSetSource : IProblemSetSource
         // not _clock: _clock is the semantic classification timestamp and reusing
         // it here would couple yield pacing to a fixed test clock.
         var yielder = new CooperativeYielder(TimeProvider.System);
-        var (drawn, composition) = await ComposeAsync(yielder, cancellationToken);
+        var (drawn, composition) = await ComposeAsync(releases, yielder, cancellationToken);
         LastComposition = composition;
 
         foreach (var item in drawn)
@@ -296,13 +326,15 @@ public sealed class MixedProblemSetSource : IProblemSetSource
     /// through twice, while content dedupe (<see cref="ProblemKey"/>) is
     /// <see cref="DistinctPositionProblemSetSource"/>'s concern and the
     /// consumer's wiring choice. A method of its own so the identity set is
-    /// released before composition begins.
+    /// released before composition begins. The inner source is drawn through
+    /// <paramref name="releases"/>, and released once drained.
     /// </summary>
-    private async ValueTask<List<BgDecisionData>> MaterializeAsync(CancellationToken cancellationToken)
+    private async ValueTask<List<BgDecisionData>> MaterializeAsync(
+        InnerReleases releases, CancellationToken cancellationToken)
     {
         var items = new List<BgDecisionData>();
         var seenIds = new HashSet<DecisionId>();
-        await foreach (var item in _inner.EnumerateAsync(cancellationToken))
+        await foreach (var item in releases.Draw(_inner.EnumerateAsync(cancellationToken)))
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (seenIds.Add(item.Id))
@@ -338,7 +370,7 @@ public sealed class MixedProblemSetSource : IProblemSetSource
     /// </para>
     /// </remarks>
     private async ValueTask<(List<BgDecisionData> Drawn, MixComposition Composition)> ComposeAsync(
-        CooperativeYielder yielder, CancellationToken cancellationToken)
+        InnerReleases releases, CooperativeYielder yielder, CancellationToken cancellationToken)
     {
         // An active mix was given a provider at construction.
         var stats = _statsProvider!()
@@ -349,7 +381,7 @@ public sealed class MixedProblemSetSource : IProblemSetSource
                 "no provider, which only a blank mix allows.");
         var now = _clock.GetUtcNow();
 
-        var items = await MaterializeAsync(cancellationToken);
+        var items = await MaterializeAsync(releases, cancellationToken);
 
         var entries = _mix.Entries;
         int n = entries.Count;
