@@ -2,7 +2,7 @@ namespace BgGame_Lib;
 
 /// <summary>
 /// Per-entry composition telemetry: how one <see cref="QuizMixEntry"/> fared
-/// in a <see cref="MixedProblemSetSource"/> enumeration. Part of
+/// in a <see cref="ProblemSequence"/> build. Part of
 /// <see cref="MixComposition"/>; exists so the consumer can render an honest
 /// notice when an entry could not fill its share.
 /// </summary>

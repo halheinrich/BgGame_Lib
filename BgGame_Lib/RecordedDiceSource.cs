@@ -11,8 +11,8 @@ namespace BgGame_Lib;
 /// pair fails fast at the call site that recorded it, not mid-match. When the
 /// sequence is exhausted, <see cref="Roll"/> throws rather than wrapping around
 /// or repeating: silently recycled dice would corrupt the very determinism the
-/// source exists to provide (parallel to the <see cref="IProblemSetSource"/>
-/// stance that a consumed one-shot resource must throw, not yield empty).
+/// source exists to provide (the same stance a consumed one-shot problem
+/// pool takes: it must throw, not yield empty).
 ///
 /// Not thread-safe — use one instance per driver.
 /// </summary>

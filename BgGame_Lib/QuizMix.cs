@@ -9,7 +9,7 @@ using BgDataTypes_Lib;
 /// <summary>
 /// The stats-weighted quiz composition config: an ordered set of
 /// <see cref="QuizMixEntry"/> lines (category + percentage) and an optional
-/// quiz length. Immutable; <see cref="MixedProblemSetSource"/> reads it to
+/// quiz length. Immutable; <see cref="ProblemSequence"/> reads it to
 /// decide <i>which</i> decisions form a quiz, and nothing else — the mix
 /// selects, and the run's <see cref="ProblemOrder"/> presents
 /// (SPEC-filtering.md §5). Its random-order toggle was retired on 2026-10-14

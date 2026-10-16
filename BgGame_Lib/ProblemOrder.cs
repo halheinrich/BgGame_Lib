@@ -8,10 +8,9 @@ using BgDataTypes_Lib;
 /// The order a run presents its problems in — the one definition of the four
 /// orders (SPEC-filtering.md §7). A consumer holds the user's choice and
 /// passes it in; this library applies it, exactly once, and decides which
-/// application it gets: <see cref="MixedProblemSetSource"/> takes the order
+/// application it gets: <see cref="ProblemSequence.BuildAsync"/> takes the order
 /// with the mix and applies it by the mixed key when the mix is active, and
-/// by the plain key — as <see cref="OrderedProblemSetSource"/>, the plain
-/// decorator — when the mix is blank.
+/// by the plain key when the mix is blank.
 /// </summary>
 /// <remarks>
 /// <para>

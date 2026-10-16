@@ -1,12 +1,11 @@
 namespace BgGame_Lib;
 
 /// <summary>
-/// Composition telemetry for one <see cref="MixedProblemSetSource"/>
-/// enumeration: what the mix asked for and what the pools could actually
-/// supply, overall and per entry. Exposed as
-/// <see cref="MixedProblemSetSource.LastComposition"/> — assigned before the
-/// first decision is yielded, so a consumer can render an honest shortfall
-/// notice ("wanted 10 never-seen, only 4 exist") as soon as the quiz starts.
+/// Composition telemetry for one <see cref="ProblemSequence"/> build: what the
+/// mix asked for and what the pools could actually supply, overall and per
+/// entry. Exposed as <see cref="ProblemSequence.Composition"/>, so a consumer
+/// can render an honest shortfall notice ("wanted 10 never-seen, only 4
+/// exist") as soon as the quiz starts.
 ///
 /// <para>
 /// <see cref="DrawnCount"/> below <see cref="TargetCount"/> means the

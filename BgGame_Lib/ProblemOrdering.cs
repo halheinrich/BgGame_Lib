@@ -5,12 +5,11 @@ using BgDataTypes_Lib;
 /// <summary>
 /// The one application of a <see cref="ProblemOrder"/>: puts a set of
 /// decisions — named by their positions in one enumeration's materialized
-/// list — in the order. Built once per enumeration over that list, so each
-/// decision's key is read once however many sets it is then put in. Its two
-/// hosts share it: <see cref="OrderedProblemSetSource"/> puts a whole
-/// enumeration in the order; <see cref="MixedProblemSetSource"/> puts each
-/// row's eligible set in it before filling the row's quota from the front,
-/// then the whole selection again.
+/// list — in the order. Built once per build over that list, so each
+/// decision's key is read once however many sets it is then put in.
+/// <see cref="ProblemSequence"/> is its one host: a blank mix puts the whole
+/// pool in the order; an active mix puts each row's eligible set in it before
+/// filling the row's quota from the front, then the whole selection again.
 /// </summary>
 /// <remarks>
 /// <para>

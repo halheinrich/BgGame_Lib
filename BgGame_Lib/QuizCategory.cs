@@ -33,7 +33,7 @@ namespace BgGame_Lib;
 /// it matches the decisions matched by no other entry selected in the same
 /// mix, so it is contextual rather than a standalone predicate —
 /// <see cref="BuildPredicate"/> throws for it, and the composer
-/// (<see cref="MixedProblemSetSource"/>) gates on <see cref="IsResidual"/>
+/// (<see cref="ProblemSequence"/>) gates on <see cref="IsResidual"/>
 /// instead.
 /// </para>
 /// </summary>

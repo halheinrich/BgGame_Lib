@@ -3,13 +3,12 @@ namespace BgGame_Lib;
 using BgDataTypes_Lib;
 
 /// <summary>
-/// One content-equivalence class observed by a
-/// <see cref="DistinctPositionProblemSetSource"/> enumeration: a
+/// One content-equivalence class <see cref="DistinctProblems"/> observed: a
 /// <see cref="ProblemKey"/> that more than one enumerated record rendered,
 /// with the file-relative identities of every copy. Produced only for genuine
 /// duplicates (<see cref="Members"/> always holds at least two ids —
 /// singleton classes would just re-list the corpus) via
-/// <see cref="DistinctPositionProblemSetSource.LastDuplicateClasses"/>.
+/// <see cref="DistinctProblems.DuplicateClasses"/>.
 ///
 /// <para>
 /// This is the producer-side telemetry seam ruled to ride the halheinrich/backgammon#95 identity

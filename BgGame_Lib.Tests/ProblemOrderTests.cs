@@ -10,8 +10,8 @@ using System.Text.Json;
 /// and the persisted token — each member's declared name, string-exact, on
 /// the reflection path and through <see cref="BgGameJsonContext"/> alike.
 /// How each order arranges a source is pinned in
-/// <see cref="OrderedProblemSetSourceTests"/> and
-/// <see cref="MixedProblemSetSourceTests"/>.
+/// <see cref="ProblemSequenceTests"/> and
+/// <see cref="DistinctProblemsTests"/>.
 /// </summary>
 public class ProblemOrderTests
 {

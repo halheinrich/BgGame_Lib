@@ -127,19 +127,17 @@ public class ReadOnlyCollectionTests
     }
 
     [Fact]
-    public async Task LastDuplicateClasses_AndTheirMembers_CannotBeWrittenThroughACast()
+    public async Task DistinctProblems_ItsClassesAndTheirMembers_CannotBeWrittenThroughACast()
     {
-        var source = new DistinctPositionProblemSetSource(new FixedSource(
+        var distinct = await DistinctProblems.OfAsync(
         [
             TestRecords.CheckerPlay(id: new XgpDecisionId("a.xgp")),
             TestRecords.CheckerPlay(id: new XgpDecisionId("b.xgp")),
-        ]));
+        ], new CooperativeYielder(TimeProvider.System));
 
-        await foreach (var _ in source.EnumerateAsync()) { }
-
-        var classes = source.LastDuplicateClasses!;
-        AssertNotWritable(classes);
-        AssertNotWritable(classes[0].Members);
+        AssertNotWritable(distinct.Problems);
+        AssertNotWritable(distinct.DuplicateClasses);
+        AssertNotWritable(distinct.DuplicateClasses[0].Members);
     }
 
     // -----------------------------------------------------------------------
@@ -161,33 +159,14 @@ public class ReadOnlyCollectionTests
     }
 
     [Fact]
-    public async Task MixCompositionEntries_FromTheSource_CannotBeWrittenThroughACast()
+    public async Task ProblemSequence_ItsProblemsAndCompositionEntries_CannotBeWrittenThroughACast()
     {
         var mix = new QuizMix([new QuizMixEntry(QuizCategory.NeverSeen, 100)]);
-        var source = new MixedProblemSetSource(
-            new FixedSource([TestRecords.CheckerPlay()]),
-            ProblemOrder.Shuffled, PlayRanking.Equity, mix, () => ProblemStatsDocument.Empty, TimeProvider.System, seed: 1);
+        var sequence = await ProblemSequence.BuildAsync(
+            [TestRecords.CheckerPlay()], mix, ProblemOrder.Shuffled, PlayRanking.Equity,
+            ProblemStatsDocument.Empty, DateTimeOffset.UnixEpoch, new Random(1), new CooperativeYielder(TimeProvider.System));
 
-        await foreach (var _ in source.EnumerateAsync()) { }
-
-        AssertNotWritable(source.LastComposition!.Entries);
-    }
-
-    /// <summary>A re-iterable source over a fixed list.</summary>
-    private sealed class FixedSource(IReadOnlyList<BgDecisionData> items) : IProblemSetSource
-    {
-        public string Name => "Fixed";
-        public int? Count => items.Count;
-
-        public async IAsyncEnumerable<BgDecisionData> EnumerateAsync(
-            [EnumeratorCancellation] CancellationToken cancellationToken = default)
-        {
-            foreach (var item in items)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                yield return item;
-                await Task.Yield();
-            }
-        }
+        AssertNotWritable(sequence.Problems);
+        AssertNotWritable(sequence.Composition!.Entries);
     }
 }

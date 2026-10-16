@@ -12,7 +12,7 @@ public class QuizCategoryTests
     private static BgDecisionData Cube => TestRecords.Cube();
 
     // Predicates take the (decision, stats) pair as given — the by-key lookup
-    // lives in MixedProblemSetSource — so one representative canonical key
+    // lives in ProblemSequence — so one representative canonical key
     // serves every stats fixture here.
     private static readonly ProblemKey Key =
         ProblemKey.Parse("0,-2,0,0,0,0,5,0,3,0,0,0,-5,5,0,0,0,-3,0,-5,0,0,0,0,2,0/7a7/1c/31");
