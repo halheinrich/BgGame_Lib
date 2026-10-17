@@ -144,11 +144,35 @@ public class ProblemSequenceTests
             decision: TestRecords.CheckerPlayData(userPlayIndex: userPlayIndex, unlistedPlayError: unlistedPlayError));
 
     private static async Task<List<DecisionId>> OrderOfAsync(
-        IReadOnlyList<BgDecisionData> items, ProblemOrder order, PlayRanking ranking = PlayRanking.Equity)
+        IReadOnlyList<BgDecisionData> items, ProblemOrder order, PlayRanking ranking = PlayRanking.Equity, int seed = 1)
     {
         var sequence = await ProblemSequence.BuildAsync(
-            items, QuizMix.Empty, order, ranking, stats: null, Now, new Random(1), Yielder);
+            items, QuizMix.Empty, order, ranking, stats: null, Now, new Random(seed), Yielder);
         return sequence.Problems.Select(item => item.Id).ToList();
+    }
+
+    /// <summary>
+    /// The tie rule (SPEC-filtering.md §7, ruled 2026-10-15): over twelve fixed seeds, the
+    /// keyed prefix is always <paramref name="sorted"/>, the rest is always the whole
+    /// <paramref name="tied"/> group, the same seed gives the same order, and the group's
+    /// order is not the same every time. Twelve seeds over a group of two or more leave a
+    /// one-in-two-thousand chance of a false "never varied" for a correct implementation
+    /// at worst, and the seeds are fixed, so the verdict is the same on every run.
+    /// </summary>
+    private static async Task AssertTiesFallRandomlyAsync(
+        IReadOnlyList<BgDecisionData> pool, ProblemOrder order, DecisionId[] sorted, DecisionId[] tied)
+    {
+        var tieOrders = new HashSet<string>();
+        for (int seed = 1; seed <= 12; seed++)
+        {
+            var ids = await OrderOfAsync(pool, order, seed: seed);
+            Assert.Equal(sorted, ids.Take(sorted.Length));
+            Assert.True(tied.ToHashSet().SetEquals(ids.Skip(sorted.Length)), "the tie group is not whole");
+            Assert.Equal(ids, await OrderOfAsync(pool, order, seed: seed));
+            tieOrders.Add(string.Join(",", ids.Skip(sorted.Length)));
+        }
+
+        Assert.True(tieOrders.Count > 1, "equal keys never varied across twelve seeds");
     }
 
     [Fact]
@@ -174,15 +198,15 @@ public class ProblemSequenceTests
     }
 
     [Fact]
-    public async Task ByError_NoErrorCountsAsZero_AndEqualErrorsKeepSourceOrder()
+    public async Task ByError_NoErrorCountsAsZero_AndEqualErrorsFallInARandomOrder_FreshPerBuild()
     {
         var correctFirst = Play("a.xg", userPlayIndex: 0);
         var notRecorded = Play("b.xg", userPlayIndex: null);
         var erred = Play("c.xg", userPlayIndex: 1);
         var correctLast = Play("d.xg", userPlayIndex: 0);
-        Assert.Equal(
-            [erred.Id, correctFirst.Id, notRecorded.Id, correctLast.Id],
-            await OrderOfAsync([correctFirst, notRecorded, erred, correctLast], ProblemOrder.ByErrorLargestFirst));
+        await AssertTiesFallRandomlyAsync(
+            [correctFirst, notRecorded, erred, correctLast], ProblemOrder.ByErrorLargestFirst,
+            sorted: [erred.Id], tied: [correctFirst.Id, notRecorded.Id, correctLast.Id]);
     }
 
     [Fact]
@@ -230,14 +254,14 @@ public class ProblemSequenceTests
     }
 
     [Fact]
-    public async Task ByMoveNumber_EqualNumbersKeepSourceOrder()
+    public async Task ByMoveNumber_EqualNumbersFallInARandomOrder_AfterTheSmallerNumber()
     {
         var first = Play("b.xg", game: 2, move: 3);
         var second = Play("a.xg", game: 1, move: 3);
         var earlier = Play("c.xg", game: 1, move: 1);
-        Assert.Equal(
-            [earlier.Id, first.Id, second.Id],
-            await OrderOfAsync([first, second, earlier], ProblemOrder.ByMoveNumberAscending));
+        await AssertTiesFallRandomlyAsync(
+            [first, second, earlier], ProblemOrder.ByMoveNumberAscending,
+            sorted: [earlier.Id], tied: [first.Id, second.Id]);
     }
 
     [Fact]
@@ -254,15 +278,15 @@ public class ProblemSequenceTests
     }
 
     [Fact]
-    public async Task ByMoveNumber_ADecisionWithNoMoveNumber_GoesLast_InSourceOrder()
+    public async Task ByMoveNumber_DecisionsWithNoMoveNumber_GoLast_InARandomOrderAmongThemselves()
     {
         var positionB = TestRecords.CheckerPlay(id: new XgpDecisionId("b.xgp"));
         var late = Play("a.xg", move: 9);
         var positionA = TestRecords.CheckerPlay(id: new XgpDecisionId("a.xgp"));
         var early = Play("c.xg", move: 2);
-        Assert.Equal(
-            [early.Id, late.Id, positionB.Id, positionA.Id],
-            await OrderOfAsync([positionB, late, positionA, early], ProblemOrder.ByMoveNumberAscending));
+        await AssertTiesFallRandomlyAsync(
+            [positionB, late, positionA, early], ProblemOrder.ByMoveNumberAscending,
+            sorted: [early.Id, late.Id], tied: [positionB.Id, positionA.Id]);
     }
 
     // ── Active mix: composition ──────────────────────────────────────────────────
@@ -543,9 +567,9 @@ public class ProblemSequenceTests
             new ProblemStats(ProblemKey.From(played4), ScoreSegment.Empty, Now),
             RecordOf(played5, 3, 0.0),
             RecordOf(cube7, 4, 0.44));
-        Assert.Equal(
-            [2, 4, 7, 3, 1, 5, 6],
-            await NumbersAsync([played1, played2, played3, played4, played5, played6, cube7], Everything, doc, order: ProblemOrder.ByErrorLargestFirst));
+        var numbers = await NumbersAsync([played1, played2, played3, played4, played5, played6, cube7], Everything, doc, order: ProblemOrder.ByErrorLargestFirst);
+        Assert.Equal([2, 4, 7, 3, 1], numbers.Take(5));
+        Assert.Equal([5, 6], numbers.Skip(5).Order());   // the 0.0 tie group, in whichever order the seed gave
     }
 
     [Fact]
@@ -571,10 +595,32 @@ public class ProblemSequenceTests
     }
 
     [Fact]
-    public async Task ActiveMix_ByMoveNumber_ADecisionWithNoMoveNumberGoesLast_InSourceOrder()
+    public async Task ActiveMix_ByMoveNumber_DecisionsWithNoMoveNumberGoLast_InARandomOrder()
     {
         var items = new[] { PlayOf(1), PlayOf(2, move: 6), PlayOf(3), PlayOf(4, move: 2) };
-        Assert.Equal([4, 2, 1, 3], await NumbersAsync(items, Everything, ProblemStatsDocument.Empty, order: ProblemOrder.ByMoveNumberAscending));
+        var numbers = await NumbersAsync(items, Everything, ProblemStatsDocument.Empty, order: ProblemOrder.ByMoveNumberAscending);
+        Assert.Equal([4, 2], numbers.Take(2));
+        Assert.Equal([1, 3], numbers.Skip(2).Order());
+    }
+
+    [Fact]
+    public async Task ActiveMix_ARowsQuotaFromATieGroup_IsARandomChoice_NotTheEarliestFiles()
+    {
+        // Four got-wrong decisions with one loss each: one tie group under By error, a quota
+        // of two. Over twelve seeds the pair drawn is not always the same (SPEC-filtering.md
+        // §7, ruled 2026-10-15: the quota from a tie group is a uniform random choice).
+        var items = new[] { PlayOf(1), PlayOf(2), PlayOf(3), PlayOf(4) };
+        var doc = Doc(items.Select(d => RecordOf(d, 1, 0.1)).ToArray());
+        var mix = new QuizMix([Entry(QuizCategory.GotWrong, 100)], quizLength: 2);
+        var pairs = new HashSet<string>();
+        for (int seed = 1; seed <= 12; seed++)
+        {
+            var numbers = await NumbersAsync(items, mix, doc, seed, ProblemOrder.ByErrorLargestFirst);
+            Assert.Equal(2, numbers.Count);
+            pairs.Add(string.Join(",", numbers.Order()));
+        }
+
+        Assert.True(pairs.Count > 1, "the quota always took the earliest files");
     }
 
     // ── Arguments, cancellation, retention ──────────────────────────────────────

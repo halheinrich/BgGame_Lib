@@ -15,15 +15,20 @@ using BgDataTypes_Lib;
 /// <para>
 /// <b>Positions, not decisions.</b> A position is a decision's index in the
 /// source-ordered list the ordering was built over, so position order
-/// <i>is</i> source order. Every deterministic order breaks a tie by position,
-/// ascending, which is what keeps equal keys in source order whatever
-/// arrangement the positions arrive in — and what makes each sort a total
-/// order, so its result is fully determined even though
-/// <see cref="List{T}.Sort(Comparison{T})"/> is not itself stable.
+/// <i>is</i> source order, which <see cref="ProblemOrder.AsRead"/> presents.
+/// The keyed orders break a tie by a rank drawn for each keyed position when
+/// the ordering is built — one uniform random permutation from the host's
+/// <see cref="Random"/> (SPEC-filtering.md §7, ruled 2026-10-15,
+/// halheinrich/backgammon#418) — so equal keys come in a fresh random order
+/// on every build, and in the same order wherever this one ordering arranges
+/// them: a mix row's fill and the whole selection's sort agree. Each
+/// comparison is still a total order, so its result is fully determined even
+/// though <see cref="List{T}.Sort(Comparison{T})"/> is not itself stable.
 /// </para>
 /// <para>
 /// <b>Shuffled</b> is a Fisher–Yates pass with the host's
-/// <see cref="Random"/>: uniform, and fresh on every call. Every other order
+/// <see cref="Random"/>: uniform, and fresh on every call. The keyed orders
+/// draw their ranks once, at the build; <see cref="ProblemOrder.AsRead"/>
 /// consumes no randomness at all.
 /// </para>
 /// <para>
@@ -114,7 +119,7 @@ internal sealed class ProblemOrdering
                     keys[position] = ErrorKey(decisions[position], ranking, records?[position]);
                     await yielder.YieldIfDueAsync();
                 }
-                return new(random, LargestFirst(keys));
+                return new(random, LargestFirst(keys, RanksOf(keyed, decisions.Count, random)));
             }
 
             case ProblemOrder.ByMoveNumberAscending:
@@ -127,7 +132,7 @@ internal sealed class ProblemOrdering
                     numbers[position] = decisions[position].MoveNumber;
                     await yielder.YieldIfDueAsync();
                 }
-                return new(random, AscendingNoneLast(numbers));
+                return new(random, AscendingNoneLast(numbers, RanksOf(keyed, decisions.Count, random)));
             }
 
             default:
@@ -171,11 +176,30 @@ internal sealed class ProblemOrdering
             return;
         }
 
-        // Fisher–Yates: for each index from the end, swap with a uniformly
-        // chosen earlier-or-equal index.
+        Shuffle(positions, _random);
+    }
+
+    /// <summary>
+    /// A uniform random rank per keyed position: the tie-break the keyed orders
+    /// compare by, drawn once at the build so every arrangement this ordering
+    /// makes agrees on it. Positions outside <paramref name="keyed"/> are never
+    /// compared and keep a rank of zero.
+    /// </summary>
+    private static int[] RanksOf(IReadOnlyList<int> keyed, int count, Random random)
+    {
+        var shuffled = new List<int>(keyed);
+        Shuffle(shuffled, random);
+        var ranks = new int[count];
+        for (int i = 0; i < shuffled.Count; i++) ranks[shuffled[i]] = i;
+        return ranks;
+    }
+
+    /// <summary>Fisher–Yates: for each index from the end, swap with a uniformly chosen earlier-or-equal index.</summary>
+    private static void Shuffle(List<int> positions, Random random)
+    {
         for (int i = positions.Count - 1; i > 0; i--)
         {
-            int j = _random.Next(i + 1);
+            int j = random.Next(i + 1);
             (positions[i], positions[j]) = (positions[j], positions[i]);
         }
     }
@@ -196,14 +220,14 @@ internal sealed class ProblemOrdering
     }
 
     /// <summary>Largest key first; equal keys by position.</summary>
-    private static Comparison<int> LargestFirst(double[] keys) => (a, b) =>
+    private static Comparison<int> LargestFirst(double[] keys, int[] ranks) => (a, b) =>
     {
         int byKey = keys[b].CompareTo(keys[a]);
-        return byKey != 0 ? byKey : a.CompareTo(b);
+        return byKey != 0 ? byKey : ranks[a].CompareTo(ranks[b]);
     };
 
     /// <summary>Smallest number first, no number last; equal numbers, and the numberless, by position.</summary>
-    private static Comparison<int> AscendingNoneLast(int?[] numbers) => (a, b) =>
+    private static Comparison<int> AscendingNoneLast(int?[] numbers, int[] ranks) => (a, b) =>
     {
         int byNumber = (numbers[a], numbers[b]) switch
         {
@@ -212,6 +236,6 @@ internal sealed class ProblemOrdering
             (null, _) => 1,
             (_, null) => -1,
         };
-        return byNumber != 0 ? byNumber : a.CompareTo(b);
+        return byNumber != 0 ? byNumber : ranks[a].CompareTo(ranks[b]);
     };
 }

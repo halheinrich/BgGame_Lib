@@ -14,10 +14,13 @@ using BgDataTypes_Lib;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Equal keys keep source order.</b> Every order but
-/// <see cref="Shuffled"/> is a stable order over the inner stream: two
-/// decisions with the same key are presented in the order the source yielded
-/// them.
+/// <b>Equal keys fall in a random order, fresh on every Start and Restart</b>
+/// (SPEC-filtering.md §7, ruled 2026-10-15, halheinrich/backgammon#418).
+/// <see cref="ByErrorLargestFirst"/> and <see cref="ByMoveNumberAscending"/>
+/// break a tie by a uniform random rank drawn when the run is prepared, so a
+/// Restart never repeats the previous run's order among equal keys, and a
+/// mix row's quota taken from a tie group is a uniform random choice from it.
+/// <see cref="AsRead"/> alone presents source order.
 /// </para>
 /// <para>
 /// <b>By error has one key, in two contexts.</b> Without a mix it is the
@@ -64,7 +67,7 @@ public enum ProblemOrder
 
     /// <summary>
     /// By the decision's error, largest first (see the type remarks for the
-    /// key); equal errors keep source order.
+    /// key); equal errors fall in a fresh random order.
     /// </summary>
     [Description("By error, largest first")]
     ByErrorLargestFirst,
@@ -72,8 +75,8 @@ public enum ProblemOrder
     /// <summary>
     /// By move number alone, ascending, across games and files; a
     /// non-standard start's number is used as recorded. A decision with no
-    /// move number — a position file's — goes last, in source order; equal
-    /// numbers keep source order.
+    /// move number — a position file's — goes last, in a fresh random order
+    /// among such decisions; equal numbers fall in a fresh random order.
     /// </summary>
     [Description("By move number, ascending")]
     ByMoveNumberAscending,
