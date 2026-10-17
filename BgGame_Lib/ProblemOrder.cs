@@ -18,8 +18,9 @@ using BgDataTypes_Lib;
 /// (SPEC-filtering.md §7, ruled 2026-10-15, halheinrich/backgammon#418).
 /// <see cref="ByErrorLargestFirst"/> and <see cref="ByMoveNumberAscending"/>
 /// break a tie by a uniform random rank drawn when the run is prepared, so a
-/// Restart never repeats the previous run's order among equal keys, and a
-/// mix row's quota taken from a tie group is a uniform random choice from it.
+/// Restart draws its order among equal keys afresh (which can coincide with
+/// the previous run's only by chance), and a mix row's quota taken from a tie
+/// group is a uniform random choice from it.
 /// <see cref="AsRead"/> alone presents source order.
 /// </para>
 /// <para>
