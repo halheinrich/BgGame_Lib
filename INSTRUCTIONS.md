@@ -34,11 +34,12 @@ public surface carries XML docs; this file says only what the docs cannot.
 
 ## How the quiz substrate fits together
 
-A consumer parses its files once, filters the decisions under the run's
-ranking, deduplicates with `DistinctProblems.OfAsync` (filter first: copies
-are not interchangeable to a filter), and composes the run's sequence with
-`ProblemSequence.BuildAsync`: a blank mix presents the whole pool in the
-order and reads no stats; an active mix selects by category against the
+A consumer parses its files once, filters the decisions, deduplicates with
+`DistinctProblems.OfAsync` (filter first: copies are not interchangeable to
+a filter), and composes the run's sequence with
+`ProblemSequence.BuildAsync`, handing it the filter's reading of XG's error
+as a function for the by-error order: a blank mix presents the whole pool
+in the order and reads no stats; an active mix selects by category against the
 stats document as of a given instant, apportions by largest remainder,
 redistributes shortfall, arranges each row and then the selection in the
 order, and reports `Composition`. Both functions take the caller's
@@ -107,8 +108,11 @@ read-only lists. The run then indexes the sequence; nothing streams.
   XGIDs can collapse (same-away across lengths, mirror turn); first
   occurrence survives, full stop.
 - **One spelling of each order key, in `ProblemOrdering`**; the by-error key
-  reads the filter facet's error under the run's ranking. Keys are read once
-  per build, paced by the yielder, never inside a comparison.
+  reads the host's `recordedError`, never a view of its own: whose half of a
+  cube decision it is belongs to the filter layer (SPEC-filtering §8). A
+  NaN or infinite reading throws. Keys are read once per build, only for
+  decisions a set can reach, paced by the yielder, never inside a
+  comparison.
 - **`Match` is aggregation, not ownership**: `GameState.Match` outlives the
   game.
 - **Cube responders see their own frame** (`GameState.OpponentView()`, a

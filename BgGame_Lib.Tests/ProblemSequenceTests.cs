@@ -49,14 +49,15 @@ public class ProblemSequenceTests
         ProblemStatsDocument? doc,
         int seed = 7,
         ProblemOrder order = ProblemOrder.Shuffled,
-        PlayRanking ranking = PlayRanking.Equity,
+        Func<BgDecisionData, double?>? recordedError = null,
         CancellationToken cancellationToken = default) =>
-        ProblemSequence.BuildAsync(pool, mix, order, ranking, doc, Now, new Random(seed), Yielder, cancellationToken);
+        ProblemSequence.BuildAsync(
+            pool, mix, order, recordedError ?? TestReadings.DoublersError(), doc, Now, new Random(seed), Yielder, cancellationToken);
 
     private static async Task<List<int>> NumbersAsync(
         IReadOnlyList<BgDecisionData> pool, QuizMix mix, ProblemStatsDocument? doc,
-        int seed = 7, ProblemOrder order = ProblemOrder.Shuffled) =>
-        (await Build(pool, mix, doc, seed, order)).Problems.Select(NumberOf).ToList();
+        int seed = 7, ProblemOrder order = ProblemOrder.Shuffled, Func<BgDecisionData, double?>? recordedError = null) =>
+        (await Build(pool, mix, doc, seed, order, recordedError)).Problems.Select(NumberOf).ToList();
 
     // ── Blank mix: the pool in the order, the stats document never read ─────────
 
@@ -144,12 +145,16 @@ public class ProblemSequenceTests
             decision: TestRecords.CheckerPlayData(userPlayIndex: userPlayIndex, unlistedPlayError: unlistedPlayError));
 
     private static async Task<List<DecisionId>> OrderOfAsync(
-        IReadOnlyList<BgDecisionData> items, ProblemOrder order, PlayRanking ranking = PlayRanking.Equity, int seed = 1)
+        IReadOnlyList<BgDecisionData> items, ProblemOrder order, Func<BgDecisionData, double?>? recordedError = null, int seed = 1)
     {
         var sequence = await ProblemSequence.BuildAsync(
-            items, QuizMix.Empty, order, ranking, stats: null, Now, new Random(seed), Yielder);
+            items, QuizMix.Empty, order, recordedError ?? TestReadings.DoublersError(), stats: null, Now, new Random(seed), Yielder);
         return sequence.Problems.Select(item => item.Id).ToList();
     }
+
+    /// <summary>A reading that answers from a table by decision id, <see langword="null"/> for any decision not in it.</summary>
+    private static Func<BgDecisionData, double?> Reading(params (BgDecisionData Decision, double? Error)[] table) =>
+        decision => table.FirstOrDefault(entry => entry.Decision.Id == decision.Id).Error;
 
     /// <summary>
     /// The tie rule (SPEC-filtering.md §7, ruled 2026-10-15): over twelve fixed seeds, the
@@ -223,25 +228,106 @@ public class ProblemSequenceTests
             await OrderOfAsync([below, cube, above], ProblemOrder.ByErrorLargestFirst));
     }
 
+    // ByError_ReadsTheErrorUnderTheGivenRanking stood here. The ranking left this API
+    // (halheinrich/backgammon#440, leg 5e): the order sorts the host's reading, and that the
+    // reading is taken under the run's ranking is the host's fact, pinned in BgQuiz (leg 5f).
+
+    private static CubeDecision DoubledCube(string file, double noDoubleEquity, double takersError) =>
+        TestRecords.Cube(
+            id: new XgDecisionId(file, Game: 1, MoveNumber: 4, IsCube: true),
+            decision: TestRecords.CubeData(
+                noDoubleEquity: noDoubleEquity,
+                userDoublerAction: CubeAction.Double, userTakerAction: null, unstatedTakerActionError: takersError));
+
     [Fact]
-    public async Task ByError_ReadsTheErrorUnderTheGivenRanking()
+    public async Task ByError_SortsTheHostsReading_NotAViewOfItsOwn()
     {
-        var rankingDependent = TestRecords.CheckerPlay(
-            id: new XgDecisionId("a.xg", Game: 1, MoveNumber: 1, IsCube: false),
-            decision: TestRecords.CheckerPlayData(
-                plays:
-                [
-                    TestRecords.Candidate(analysisLevel: AnalysisLevel.Ply2, equity: 0.10),
-                    TestRecords.Candidate(play: [new(13, 10), new(6, 5)], analysisLevel: AnalysisLevel.Ply3, equity: 0.05),
-                ],
-                userPlayIndex: 1));
-        var unstated = Play("b.xg", userPlayIndex: null, unlistedPlayError: 0.03);
+        // The doubler's halves order these two one way and the takers' the other: a host whose
+        // name facet lists the taker hands in the taker's half, and the order follows it.
+        var doublersMistake = DoubledCube("a.xg", noDoubleEquity: 0.80, takersError: 0.01);
+        var takersMistake = DoubledCube("b.xg", noDoubleEquity: 0.512, takersError: 0.30);
+        var doublers = TestReadings.DoublersError();
+        Assert.True(doublers(doublersMistake) > doublers(takersMistake), "the fixture's doubler halves");
+        Assert.True(TestReadings.TakersError(takersMistake) > TestReadings.TakersError(doublersMistake), "the fixture's taker halves");
+
         Assert.Equal(
-            [rankingDependent.Id, unstated.Id],
-            await OrderOfAsync([rankingDependent, unstated], ProblemOrder.ByErrorLargestFirst, PlayRanking.Equity));
+            [takersMistake.Id, doublersMistake.Id],
+            await OrderOfAsync([doublersMistake, takersMistake], ProblemOrder.ByErrorLargestFirst, TestReadings.TakersError));
         Assert.Equal(
-            [unstated.Id, rankingDependent.Id],
-            await OrderOfAsync([rankingDependent, unstated], ProblemOrder.ByErrorLargestFirst, PlayRanking.DepthFirst));
+            [doublersMistake.Id, takersMistake.Id],
+            await OrderOfAsync([doublersMistake, takersMistake], ProblemOrder.ByErrorLargestFirst, doublers));
+    }
+
+    [Fact]
+    public async Task ByError_ANullReading_CountsAsZero_TiedRandomlyWithAZeroReading()
+    {
+        var unread = Play("a.xg");
+        var zero = Play("b.xg");
+        var alsoUnread = Play("c.xg");
+        var erred = Play("d.xg");
+        var reading = Reading((zero, 0.0), (erred, 0.2));
+        var zerosPlaces = new HashSet<int>();
+        for (int seed = 1; seed <= 12; seed++)
+        {
+            var ids = await OrderOfAsync([unread, zero, alsoUnread, erred], ProblemOrder.ByErrorLargestFirst, reading, seed);
+            Assert.Equal(erred.Id, ids[0]);
+            Assert.True(new[] { unread.Id, zero.Id, alsoUnread.Id }.ToHashSet().SetEquals(ids.Skip(1)), "the tie group is not whole");
+            zerosPlaces.Add(ids.IndexOf(zero.Id));
+        }
+
+        // Were null read as anything but 0.0, the zero reading would sit on one side of both
+        // unread decisions on every seed.
+        Assert.True(zerosPlaces.Count > 1, "the zero reading never shared a tie group with the null ones");
+    }
+
+    [Fact]
+    public async Task ByError_ANegativeFiniteReading_IsOrdered_NotRefused()
+    {
+        var negative = Play("a.xg");
+        var zero = Play("b.xg");
+        var positive = Play("c.xg");
+        Assert.Equal(
+            [positive.Id, zero.Id, negative.Id],
+            await OrderOfAsync(
+                [negative, zero, positive], ProblemOrder.ByErrorLargestFirst,
+                Reading((negative, -0.05), (zero, 0.0), (positive, 0.05))));
+    }
+
+    public static TheoryData<double> NonFinite => new(double.NaN, double.PositiveInfinity, double.NegativeInfinity);
+
+    [Theory]
+    [MemberData(nameof(NonFinite))]
+    public async Task ByError_ANonFiniteReading_IsRefused_NamingTheDecision(double reading)
+    {
+        var fine = Play("a.xg");
+        var broken = Play("b.xg");
+        var blank = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await OrderOfAsync([fine, broken], ProblemOrder.ByErrorLargestFirst, Reading((fine, 0.1), (broken, reading))));
+        Assert.Contains(broken.Id.ToString(), blank.Message, StringComparison.Ordinal);
+
+        var active = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            await Build([PlayOf(1), PlayOf(2)], Everything, ProblemStatsDocument.Empty,
+                order: ProblemOrder.ByErrorLargestFirst, recordedError: d => NumberOf(d) == 2 ? reading : 0.1));
+        Assert.Contains(PlayOf(2).Id.ToString(), active.Message, StringComparison.Ordinal);
+    }
+
+    public static TheoryData<ProblemOrder, bool> EveryOtherOrder_BlankAndActive => new()
+    {
+        { ProblemOrder.AsRead, false }, { ProblemOrder.AsRead, true },
+        { ProblemOrder.Shuffled, false }, { ProblemOrder.Shuffled, true },
+        { ProblemOrder.ByMoveNumberAscending, false }, { ProblemOrder.ByMoveNumberAscending, true },
+    };
+
+    [Theory]
+    [MemberData(nameof(EveryOtherOrder_BlankAndActive))]
+    public async Task NoOtherOrder_InvokesTheReading(ProblemOrder order, bool activeMix)
+    {
+        var reading = new CountingReading(_ => double.NaN);
+        var sequence = await Build(
+            Varied(), activeMix ? Everything : QuizMix.Empty, ProblemStatsDocument.Empty,
+            order: order, recordedError: reading.Read);
+        Assert.Equal(6, sequence.Problems.Count);
+        Assert.Empty(reading.Reads);
     }
 
     [Fact]
@@ -462,8 +548,8 @@ public class ProblemSequenceTests
     {
         var doc = Doc(SeenCorrect(0), SeenCorrect(2), SeenCorrect(4));
         var mix = new QuizMix([Entry(QuizCategory.NeverSeen, 100)]);
-        var first = await ProblemSequence.BuildAsync(Decisions(6), mix, ProblemOrder.AsRead, PlayRanking.Equity, doc, Now, new Random(), Yielder);
-        var second = await ProblemSequence.BuildAsync(Decisions(6), mix, ProblemOrder.AsRead, PlayRanking.Equity, doc, Now, new Random(), Yielder);
+        var first = await ProblemSequence.BuildAsync(Decisions(6), mix, ProblemOrder.AsRead, TestReadings.DoublersError(), doc, Now, new Random(), Yielder);
+        var second = await ProblemSequence.BuildAsync(Decisions(6), mix, ProblemOrder.AsRead, TestReadings.DoublersError(), doc, Now, new Random(), Yielder);
         Assert.Equal([1, 3, 5], first.Problems.Select(NumberOf));
         Assert.Equal([1, 3, 5], second.Problems.Select(NumberOf));
     }
@@ -573,6 +659,50 @@ public class ProblemSequenceTests
     }
 
     [Fact]
+    public async Task ActiveMix_ByError_TheLifetimeLossWins_AndTheReadingIsNotConsultedForIt()
+    {
+        // The reading orders these 1, 2, 3; the records' losses put 2 (0.30 an answer) above
+        // 3's reading (0.2) above 1 (0.05 an answer). Reading first would give 1, 2, 3.
+        var played1 = PlayOf(1);
+        var played2 = PlayOf(2);
+        var played3 = PlayOf(3);
+        var doc = Doc(RecordOf(played1, 2, 0.10), RecordOf(played2, 1, 0.30));
+        var reading = new CountingReading(Reading((played1, 0.9), (played2, 0.5), (played3, 0.2)));
+        Assert.Equal(
+            [2, 3, 1],
+            await NumbersAsync([played1, played2, played3], Everything, doc, order: ProblemOrder.ByErrorLargestFirst, recordedError: reading.Read));
+        Assert.Equal([played3.Id], reading.Reads);
+    }
+
+    [Fact]
+    public async Task ActiveMix_ByError_ReadsOncePerKeyedDecision_AndNeverOneNoRowCanReach()
+    {
+        var unseen = new[] { PlayOf(1), PlayOf(2), PlayOf(3) };
+        var wrong = new[] { PlayOf(4), PlayOf(5) };
+        var doc = Doc(wrong.Select(d => RecordOf(d, 1, 0.1)).ToArray());
+        BgDecisionData[] pool = [.. unseen, .. wrong];
+
+        // Only got-wrong decisions are reachable, and their records supply their keys: the
+        // never-seen three, which no row reaches, are never read.
+        var unreachable = new CountingReading(_ => 0.5);
+        await NumbersAsync(pool, new QuizMix([Entry(QuizCategory.GotWrong, 100)]), doc,
+            order: ProblemOrder.ByErrorLargestFirst, recordedError: unreachable.Read);
+        Assert.Empty(unreachable.Reads);
+
+        // Each never-seen decision is read exactly once, though the order arranges the row and
+        // then the whole selection; the got-wrong ones are reached, and keyed by their records.
+        var reachable = new CountingReading(d => (NumberOf(d) / 10.0) + 0.05);   // 0.15, 0.25, 0.35
+        var numbers = await NumbersAsync(
+            pool, new QuizMix([Entry(QuizCategory.NeverSeen, 50), Entry(QuizCategory.GotWrong, 50)]), doc,
+            order: ProblemOrder.ByErrorLargestFirst, recordedError: reachable.Read);
+        Assert.Equal([3, 2, 1], numbers.Take(3));
+        Assert.Equal([4, 5], numbers.Skip(3).Order());   // 0.1 an answer each: a tie
+        Assert.Equal(
+            unseen.Select(d => d.Id.ToString()).Order(),
+            reachable.Reads.Select(id => id.ToString()).Order());
+    }
+
+    [Fact]
     public async Task ActiveMix_ByError_FillsEachRowFromTheFrontOfItsOrderedSet()
     {
         var items = new[] { PlayOf(1), PlayOf(2), PlayOf(3), PlayOf(4) };
@@ -630,26 +760,35 @@ public class ProblemSequenceTests
     {
         var pool = Decisions(1);
         var random = new Random(1);
+        var reading = TestReadings.DoublersError();
         await Assert.ThrowsAsync<ArgumentNullException>(async () =>
-            await ProblemSequence.BuildAsync(null!, QuizMix.Empty, ProblemOrder.AsRead, PlayRanking.Equity, null, Now, random, Yielder));
+            await ProblemSequence.BuildAsync(null!, QuizMix.Empty, ProblemOrder.AsRead, reading, null, Now, random, Yielder));
         await Assert.ThrowsAsync<ArgumentNullException>(async () =>
-            await ProblemSequence.BuildAsync(pool, null!, ProblemOrder.AsRead, PlayRanking.Equity, null, Now, random, Yielder));
+            await ProblemSequence.BuildAsync(pool, null!, ProblemOrder.AsRead, reading, null, Now, random, Yielder));
         await Assert.ThrowsAsync<ArgumentNullException>(async () =>
-            await ProblemSequence.BuildAsync(pool, QuizMix.Empty, ProblemOrder.AsRead, PlayRanking.Equity, null, Now, null!, Yielder));
+            await ProblemSequence.BuildAsync(pool, QuizMix.Empty, ProblemOrder.AsRead, reading, null, Now, null!, Yielder));
         await Assert.ThrowsAsync<ArgumentNullException>(async () =>
-            await ProblemSequence.BuildAsync(pool, QuizMix.Empty, ProblemOrder.AsRead, PlayRanking.Equity, null, Now, random, null!));
+            await ProblemSequence.BuildAsync(pool, QuizMix.Empty, ProblemOrder.AsRead, reading, null, Now, random, null!));
     }
 
-    [Fact]
-    public async Task BuildAsync_RejectsAnUndefinedOrderOrRanking()
+    [Theory]
+    [MemberData(nameof(EveryOrder))]
+    public async Task BuildAsync_RejectsANullReading_UnderEveryOrder(ProblemOrder order)
     {
-        var pool = Decisions(1);
+        // Checked at the edge, so an order that never reads it refuses it all the same.
+        var ex = await Assert.ThrowsAsync<ArgumentNullException>(async () =>
+            await ProblemSequence.BuildAsync(Decisions(1), QuizMix.Empty, order, null!, null, Now, new Random(1), Yielder));
+        Assert.Equal("recordedError", ex.ParamName);
+    }
+
+    // BuildAsync_RejectsAnUndefinedOrderOrRanking stood here; the ranking left this API
+    // (halheinrich/backgammon#440, leg 5e), and the order's half of it stays.
+    [Fact]
+    public async Task BuildAsync_RejectsAnUndefinedOrder()
+    {
         var order = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(async () =>
-            await Build(pool, QuizMix.Empty, null, order: (ProblemOrder)99));
+            await Build(Decisions(1), QuizMix.Empty, null, order: (ProblemOrder)99));
         Assert.Equal("order", order.ParamName);
-        var ranking = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(async () =>
-            await Build(pool, QuizMix.Empty, null, ranking: (PlayRanking)99));
-        Assert.Equal("ranking", ranking.ParamName);
     }
 
     [Theory]
@@ -689,17 +828,22 @@ public class ProblemSequenceTests
         var decision = Play("a.xg", userPlayIndex: 2);   // XG 0.1813
         var key = ProblemKey.From(decision);
         double xg = TestRecords.Row(decision).Error!.Value;
+        var reading = TestReadings.DoublersError();
         Assert.Equal(0.125, ProblemOrdering.ErrorKey(
-            decision, PlayRanking.Equity, new ProblemStats(key, new ScoreSegment(4, 1, 0.5), default)));
+            decision, reading, new ProblemStats(key, new ScoreSegment(4, 1, 0.5), default)));
         Assert.Equal(0.0, ProblemOrdering.ErrorKey(
-            decision, PlayRanking.Equity, new ProblemStats(key, new ScoreSegment(2, 2, 0.0), default)));
+            decision, reading, new ProblemStats(key, new ScoreSegment(2, 2, 0.0), default)));
         Assert.Equal(xg, ProblemOrdering.ErrorKey(
-            decision, PlayRanking.Equity, new ProblemStats(key, ScoreSegment.Empty, default)));
-        Assert.Equal(xg, ProblemOrdering.ErrorKey(decision, PlayRanking.Equity, record: null));
+            decision, reading, new ProblemStats(key, ScoreSegment.Empty, default)));
+        Assert.Equal(xg, ProblemOrdering.ErrorKey(decision, reading, record: null));
     }
 
+    /// <summary>
+    /// With no record, the key is the host's reading or 0.0; through the reading a host with no
+    /// name facet passes, that is the filter facet's error under each ranking, as the row reads it.
+    /// </summary>
     [Fact]
-    public void ErrorKey_IsTheFilterFacetsError_OrZero()
+    public void ErrorKey_WithoutARecord_IsTheHostsReading_OrZero()
     {
         BgDecisionData[] decisions =
         [
@@ -715,7 +859,7 @@ public class ProblemSequenceTests
             {
                 Assert.Equal(
                     TestRecords.Row(decision, ranking).Error ?? 0.0,
-                    ProblemOrdering.ErrorKey(decision, ranking, record: null));
+                    ProblemOrdering.ErrorKey(decision, TestReadings.DoublersError(ranking), record: null));
             }
         }
     }

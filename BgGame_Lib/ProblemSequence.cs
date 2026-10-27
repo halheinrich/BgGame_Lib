@@ -30,16 +30,36 @@ public sealed class ProblemSequence
     /// draws, so a seeded instance makes the result reproducible. The work yields to the
     /// caller's thread on <paramref name="yielder"/>'s budget.
     /// </summary>
+    /// <param name="pool">The decisions the run draws from, filtered by the host.</param>
+    /// <param name="mix">The mix; a blank one presents the whole pool.</param>
+    /// <param name="order">The order the sequence is presented in.</param>
+    /// <param name="recordedError">
+    /// XG's error for a decision as the host's filter layer reads it, or
+    /// <see langword="null"/> where it read none — which half of a cube decision
+    /// is read is the filter layer's rule (SPEC-filtering.md §8). Read only by
+    /// <see cref="ProblemOrder.ByErrorLargestFirst"/>, once per decision a set can
+    /// reach and only where the decision's lifetime loss supplies no key; it may
+    /// be costly. Its number is sorted as read; <see langword="null"/> counts as 0.0.
+    /// </param>
+    /// <param name="stats">The stats document an active mix composes against; unread by a blank mix.</param>
+    /// <param name="now">The instant an active mix judges records as of.</param>
+    /// <param name="random">Decides shuffles, draws and tie orders.</param>
+    /// <param name="yielder">Paces the work on the caller's thread.</param>
+    /// <param name="cancellationToken">Observed throughout the build.</param>
     /// <exception cref="ArgumentNullException">
     /// An argument is null, or <paramref name="stats"/> is null while the mix is active.
     /// </exception>
-    /// <exception cref="ArgumentOutOfRangeException">The order or the ranking is not a defined value.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The order is not a defined value.</exception>
+    /// <exception cref="InvalidOperationException">
+    /// A reading the by-error order took from <paramref name="recordedError"/> was NaN or an
+    /// infinity; the message names the decision.
+    /// </exception>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled.</exception>
     public static async ValueTask<ProblemSequence> BuildAsync(
         IReadOnlyList<BgDecisionData> pool,
         QuizMix mix,
         ProblemOrder order,
-        PlayRanking ranking,
+        Func<BgDecisionData, double?> recordedError,
         ProblemStatsDocument? stats,
         DateTimeOffset now,
         Random random,
@@ -48,9 +68,10 @@ public sealed class ProblemSequence
     {
         ArgumentNullException.ThrowIfNull(pool);
         ArgumentNullException.ThrowIfNull(mix);
+        ArgumentNullException.ThrowIfNull(recordedError);
         ArgumentNullException.ThrowIfNull(random);
         ArgumentNullException.ThrowIfNull(yielder);
-        ProblemOrdering.RequireDefined(order, ranking);
+        ProblemOrdering.RequireDefined(order);
         if (stats is null && !mix.IsPassthrough)
         {
             throw new ArgumentNullException(
@@ -63,14 +84,14 @@ public sealed class ProblemSequence
         {
             var positions = Enumerable.Range(0, pool.Count).ToList();
             var ordering = await ProblemOrdering.OverAsync(
-                pool, positions, order, ranking, records: null, random, yielder, cancellationToken);
+                pool, positions, order, recordedError, records: null, random, yielder, cancellationToken);
             ordering.Arrange(positions);
             return new ProblemSequence(
                 ImmutableCopy.Of(positions.Select(position => pool[position]), nameof(Problems)), composition: null);
         }
 
         var (drawn, composition) = await ComposeAsync(
-            pool, mix, order, ranking, stats!, now, random, yielder, cancellationToken);
+            pool, mix, order, recordedError, stats!, now, random, yielder, cancellationToken);
         return new ProblemSequence(ImmutableCopy.Of(drawn, nameof(Problems)), composition);
     }
 
@@ -78,7 +99,7 @@ public sealed class ProblemSequence
         IReadOnlyList<BgDecisionData> pool,
         QuizMix mix,
         ProblemOrder order,
-        PlayRanking ranking,
+        Func<BgDecisionData, double?> recordedError,
         ProblemStatsDocument stats,
         DateTimeOffset now,
         Random random,
@@ -163,7 +184,7 @@ public sealed class ProblemSequence
 
         // Each pool is arranged in the order, so a quota is filled from the front of its ordered set.
         var ordering = await ProblemOrdering.OverAsync(
-            items, reachablePositions, order, ranking, records, random, yielder, cancellationToken);
+            items, reachablePositions, order, recordedError, records, random, yielder, cancellationToken);
         foreach (var categoryPool in pools)
             ordering.Arrange(categoryPool);
 

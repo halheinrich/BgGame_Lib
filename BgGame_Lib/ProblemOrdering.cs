@@ -33,19 +33,21 @@ using BgDataTypes_Lib;
 /// </para>
 /// <para>
 /// <b>What a key costs, and where it is paid.</b> The by-error key reads XG's
-/// error through a filter view (<see cref="BgDecisionData.ViewFor"/>), which
-/// reads the ranked plays and computes after-play boards each time one is
-/// built — and the order runs inside a run's prepare, beside the current
-/// run's own parse, on a WebAssembly heap that a large sample already fills
-/// to about half its limit. So <see cref="OverAsync"/> reads each key once,
-/// into an array indexed by position, for the positions the ordering will
-/// arrange and no others; a comparison only reads the array. The pass is
-/// paced by the host's <see cref="CooperativeYielder"/> and honours
-/// cancellation, decision by decision, like the rest of the enumeration
-/// path; the sorts in <see cref="Arrange"/> stay synchronous. The view is
-/// dropped as soon as its error is read: what outlives the pass, per
-/// decision, is the key alone, held by this ordering, which its host drops
-/// with the enumeration's composition.
+/// error through the host's reading (<c>recordedError</c>), which this
+/// library does not own and cannot price: the host's filter layer decides
+/// whose half of a cube decision is read (SPEC-filtering.md §8), and
+/// BgQuiz's reading builds a filter view, which reads the ranked plays and
+/// computes after-play boards — and the order runs inside a run's prepare,
+/// beside the current run's own parse, on a WebAssembly heap that a large
+/// sample already fills to about half its limit. So <see cref="OverAsync"/>
+/// reads each key once, into an array indexed by position, for the positions
+/// the ordering will arrange and no others, and consults the reading only
+/// where the lifetime loss supplies no key; a comparison only reads the
+/// array. The pass is paced by the host's <see cref="CooperativeYielder"/>
+/// and honours cancellation, decision by decision, like the rest of the
+/// enumeration path; the sorts in <see cref="Arrange"/> stay synchronous.
+/// What outlives the pass, per decision, is the key alone, held by this
+/// ordering, which its host drops with the enumeration's composition.
 /// </para>
 /// <para>
 /// Not thread-safe: <see cref="Arrange"/> may advance the host's
@@ -80,7 +82,12 @@ internal sealed class ProblemOrdering
     /// so a decision no set can reach costs nothing.
     /// </param>
     /// <param name="order">The order; a defined value (see <see cref="RequireDefined"/>).</param>
-    /// <param name="ranking">The ranking the by-error key reads XG's error under.</param>
+    /// <param name="recordedError">
+    /// XG's error for a decision as the host's filter layer reads it, or
+    /// <see langword="null"/> where it read none: the by-error key's reading
+    /// where no lifetime loss supplies it (<see cref="ErrorKey"/>). Never
+    /// invoked by another order.
+    /// </param>
     /// <param name="records">
     /// The by-error key's context. With an active mix: each decision's
     /// lifetime record, by position, as the composition looked it up in the
@@ -91,11 +98,12 @@ internal sealed class ProblemOrdering
     /// <param name="yielder">The host's enumeration-path pacer, consulted once per keyed decision.</param>
     /// <param name="cancellationToken">Observed once per keyed decision.</param>
     /// <exception cref="OperationCanceledException"><paramref name="cancellationToken"/> was cancelled during the pass.</exception>
+    /// <exception cref="InvalidOperationException">A reading the by-error key took from <paramref name="recordedError"/> was NaN or an infinity.</exception>
     internal static async ValueTask<ProblemOrdering> OverAsync(
         IReadOnlyList<BgDecisionData> decisions,
         IReadOnlyList<int> keyed,
         ProblemOrder order,
-        PlayRanking ranking,
+        Func<BgDecisionData, double?> recordedError,
         IReadOnlyList<ProblemStats?>? records,
         Random random,
         CooperativeYielder yielder,
@@ -116,7 +124,7 @@ internal sealed class ProblemOrdering
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                     int position = keyed[k];
-                    keys[position] = ErrorKey(decisions[position], ranking, records?[position]);
+                    keys[position] = ErrorKey(decisions[position], recordedError, records?[position]);
                     await yielder.YieldIfDueAsync();
                 }
                 return new(random, LargestFirst(keys, RanksOf(keyed, decisions.Count, random)));
@@ -144,23 +152,31 @@ internal sealed class ProblemOrdering
     /// The by-error key — one definition, in two contexts (SPEC-filtering.md
     /// §7). Where <paramref name="record"/> holds submissions, the player's
     /// lifetime loss per answer (<see cref="QuizStatsMeasures.LossPerAnswer"/>;
-    /// a real record with no loss reads 0.0). Otherwise the error XG recorded
-    /// for the move actually played, under <paramref name="ranking"/>, exactly
-    /// as the filter's error facet reads it
-    /// (<see cref="PlayerResult.TryGetError"/>): a correct decision's is 0, and
-    /// an unstated move's is the analyser's. A decision with no error from
-    /// either source counts as 0.0.
+    /// a real record with no loss reads 0.0), and
+    /// <paramref name="recordedError"/> is not invoked. Otherwise XG's error
+    /// as the host's filter layer reads it — which half of a cube decision is
+    /// the host's rule (SPEC-filtering.md §8), not this library's — sorted as
+    /// read, with no sign rule. A decision with no error from either source
+    /// counts as 0.0.
     /// </summary>
     /// <param name="decision">The decision.</param>
-    /// <param name="ranking">The run's ranking.</param>
+    /// <param name="recordedError">The host's reading of XG's error, or <see langword="null"/> where it read none.</param>
     /// <param name="record">
     /// The problem's lifetime record, read from the stats document an active
     /// mix's composition classified against; <see langword="null"/> when it
     /// has none, and always without a mix, where no document is consulted.
     /// </param>
-    internal static double ErrorKey(BgDecisionData decision, PlayRanking ranking, ProblemStats? record) =>
-        QuizStatsMeasures.LossPerAnswer(decision, record)
-        ?? (decision.ViewFor(ranking).PlayerResult.TryGetError(out double error) ? error : 0.0);
+    /// <exception cref="InvalidOperationException">The reading taken was NaN or an infinity.</exception>
+    internal static double ErrorKey(
+        BgDecisionData decision, Func<BgDecisionData, double?> recordedError, ProblemStats? record) =>
+        QuizStatsMeasures.LossPerAnswer(decision, record) ?? Finite(recordedError(decision), decision) ?? 0.0;
+
+    /// <summary>A reading the key takes is a number to sort by; NaN or an infinity would sort silently wrong.</summary>
+    private static double? Finite(double? reading, BgDecisionData decision) =>
+        reading is double value && !double.IsFinite(value)
+            ? throw new InvalidOperationException(
+                $"The recorded-error reading for decision {decision.Id} is {value}, not a finite number.")
+            : reading;
 
     /// <summary>
     /// Put <paramref name="positions"/> in the order, in place: positions
@@ -205,18 +221,15 @@ internal sealed class ProblemOrdering
     }
 
     /// <summary>
-    /// Refuses an undefined <paramref name="order"/> or
-    /// <paramref name="ranking"/> — the hosts' construction-time check, so a
-    /// bad value fails where it is passed rather than at the first
-    /// enumeration.
+    /// Refuses an undefined <paramref name="order"/> — the hosts'
+    /// construction-time check, so a bad value fails where it is passed
+    /// rather than at the first enumeration.
     /// </summary>
-    /// <exception cref="ArgumentOutOfRangeException">Either value is not a defined member.</exception>
-    internal static void RequireDefined(ProblemOrder order, PlayRanking ranking)
+    /// <exception cref="ArgumentOutOfRangeException">The order is not a defined member.</exception>
+    internal static void RequireDefined(ProblemOrder order)
     {
         if (!Enum.IsDefined(order))
             throw new ArgumentOutOfRangeException(nameof(order), order, "Not a defined problem order.");
-        if (!Enum.IsDefined(ranking))
-            throw new ArgumentOutOfRangeException(nameof(ranking), ranking, "Not a defined play ranking.");
     }
 
     /// <summary>Largest key first; equal keys by position.</summary>

@@ -163,7 +163,7 @@ public class ReadOnlyCollectionTests
     {
         var mix = new QuizMix([new QuizMixEntry(QuizCategory.NeverSeen, 100)]);
         var sequence = await ProblemSequence.BuildAsync(
-            [TestRecords.CheckerPlay()], mix, ProblemOrder.Shuffled, PlayRanking.Equity,
+            [TestRecords.CheckerPlay()], mix, ProblemOrder.Shuffled, TestReadings.DoublersError(),
             ProblemStatsDocument.Empty, DateTimeOffset.UnixEpoch, new Random(1), new CooperativeYielder(TimeProvider.System));
 
         AssertNotWritable(sequence.Problems);

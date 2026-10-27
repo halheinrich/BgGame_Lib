@@ -62,7 +62,7 @@ public class ProblemOrderingTests
         IReadOnlyList<BgDecisionData> decisions, IReadOnlyList<int> keyed, ProblemOrder order,
         CooperativeYielder yielder, CancellationToken cancellationToken = default) =>
         ProblemOrdering.OverAsync(
-            decisions, keyed, order, PlayRanking.Equity, records: null, new Random(1), yielder, cancellationToken);
+            decisions, keyed, order, TestReadings.DoublersError(), records: null, new Random(1), yielder, cancellationToken);
 
     private static List<int> All(IReadOnlyList<BgDecisionData> decisions) =>
         Enumerable.Range(0, decisions.Count).ToList();

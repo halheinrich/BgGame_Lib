@@ -24,16 +24,18 @@ using BgDataTypes_Lib;
 /// <see cref="AsRead"/> alone presents source order.
 /// </para>
 /// <para>
-/// <b>By error has one key, in two contexts.</b> Without a mix it is the
-/// error XG recorded for the move actually played, under the run's
-/// <see cref="PlayRanking"/>, exactly as the filter's error facet reads it
-/// (<see cref="PlayerResult.TryGetError"/> on
-/// <see cref="BgDecisionData.ViewFor"/>): a correct decision's is 0, and an
-/// unstated move's is the analyser's. With an active mix it is the player's
+/// <b>By error has one key, in two contexts.</b> Without a mix it is XG's
+/// error for the decision as the host's filter layer reads it, handed in as
+/// a function (<see cref="ProblemSequence.BuildAsync"/>'s
+/// <c>recordedError</c>): whose error that is — for a cube decision, the
+/// doubler's half or the taker's — is the filter layer's rule
+/// (SPEC-filtering.md §8), and this library sorts the number it is given.
+/// With an active mix it is the player's
 /// lifetime loss per answer where the decision's record holds submissions —
 /// the record the composition classified against, a cube's two halves summed
-/// (SPEC-scoring.md, amended 2026-10-14) — and XG's error otherwise. A
-/// decision with no error from either source counts as 0.0.
+/// (SPEC-scoring.md, amended 2026-10-14) — and the host's reading of XG's
+/// error otherwise. A decision with no error from either source counts as
+/// 0.0.
 /// </para>
 /// <para>
 /// <b>With an active mix, the order works twice in one application.</b> Each
