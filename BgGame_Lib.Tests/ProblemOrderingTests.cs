@@ -4,12 +4,12 @@ using BgDataTypes_Lib;
 using BgDataTypes_Lib.TestSupport;
 
 /// <summary>
-/// The order's key pass (<see cref="ProblemOrdering.OverAsync"/>), shared by
-/// the plain decorator and the composer: one key per keyed decision, read
-/// before any sort, paced by the host's <see cref="CooperativeYielder"/> and
-/// cancellable decision by decision. What the orders do with the keys is
-/// pinned in <see cref="OrderedProblemSetSourceTests"/> and
-/// <see cref="MixedProblemSetSourceTests"/>.
+/// The order's key pass (<see cref="ProblemOrdering.OverAsync"/>), which
+/// <see cref="ProblemSequence"/> runs for a blank mix and an active one alike:
+/// one key per keyed decision, read before any sort, paced by the host's
+/// <see cref="CooperativeYielder"/> and cancellable decision by decision. What
+/// the orders do with the keys is pinned in
+/// <see cref="ProblemSequenceTests"/>.
 /// </summary>
 public class ProblemOrderingTests
 {

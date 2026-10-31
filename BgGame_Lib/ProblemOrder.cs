@@ -46,10 +46,10 @@ using BgDataTypes_Lib;
 /// </para>
 /// <para>
 /// <b>The names are the wire tokens, and stable.</b> A consumer persists the
-/// user's choice, so each member's declared name is its token, string-exact
-/// in both directions (<see cref="StrictJsonStringEnumConverter{TEnum}"/>,
-/// the convention of every enum on a wire here), and the numbering is not
-/// contractual. <see cref="AsRead"/> is the default and deliberately the
+/// user's choice, so each member's declared name is its token, and the
+/// numbering is not contractual. How a token is matched on read is
+/// <see cref="StrictJsonStringEnumConverter{TEnum}"/>'s to say, as for every
+/// enum on a wire here. <see cref="AsRead"/> is the default and deliberately the
 /// zero value. Every member carries a <see cref="DescriptionAttribute"/> —
 /// the UI-facing label, which belongs to the type owner.
 /// </para>
@@ -64,7 +64,7 @@ public enum ProblemOrder
     [Description("As read")]
     AsRead = 0,
 
-    /// <summary>A fresh uniform random order on every enumeration.</summary>
+    /// <summary>A fresh uniform random order on every build, drawn from the caller's <see cref="Random"/>.</summary>
     [Description("Shuffled")]
     Shuffled,
 

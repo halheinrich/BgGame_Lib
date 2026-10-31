@@ -7,11 +7,12 @@ using System.Text.Json;
 
 /// <summary>
 /// The four orders as a type (SPEC-filtering.md §7): the default, the labels,
-/// and the persisted token — each member's declared name, string-exact, on
-/// the reflection path and through <see cref="BgGameJsonContext"/> alike.
-/// How each order arranges a source is pinned in
-/// <see cref="ProblemSequenceTests"/> and
-/// <see cref="DistinctProblemsTests"/>.
+/// and the persisted token — each member's declared name — on the reflection
+/// path and through <see cref="BgGameJsonContext"/> alike. How a token is
+/// matched on read is the converter's, stated and pinned in BgDataTypes_Lib
+/// (<c>StrictJsonStringEnumConverter</c>, <c>EnumTokenStrictnessTests</c>).
+/// How each order arranges a pool is pinned in
+/// <see cref="ProblemSequenceTests"/>.
 /// </summary>
 public class ProblemOrderTests
 {

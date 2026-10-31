@@ -232,14 +232,14 @@ internal sealed class ProblemOrdering
             throw new ArgumentOutOfRangeException(nameof(order), order, "Not a defined problem order.");
     }
 
-    /// <summary>Largest key first; equal keys by position.</summary>
+    /// <summary>Largest key first; equal keys by their drawn rank.</summary>
     private static Comparison<int> LargestFirst(double[] keys, int[] ranks) => (a, b) =>
     {
         int byKey = keys[b].CompareTo(keys[a]);
         return byKey != 0 ? byKey : ranks[a].CompareTo(ranks[b]);
     };
 
-    /// <summary>Smallest number first, no number last; equal numbers, and the numberless, by position.</summary>
+    /// <summary>Smallest number first, no number last; equal numbers, and the numberless, by their drawn rank.</summary>
     private static Comparison<int> AscendingNoneLast(int?[] numbers, int[] ranks) => (a, b) =>
     {
         int byNumber = (numbers[a], numbers[b]) switch
