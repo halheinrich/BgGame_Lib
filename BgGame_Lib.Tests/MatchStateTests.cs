@@ -239,6 +239,67 @@ public class MatchStateTests
         Assert.True(snap.IsCrawford);
     }
 
+    // ── The away counts: what each side still needs (#533) ────────
+
+    [Theory]
+    [InlineData(5, 0, 0)]
+    [InlineData(7, 2, 2)]
+    public void Snapshot_EquivalentScores_ReadTheSameAwayCounts(int matchLength, int onRoll, int opponent)
+    {
+        // 0–0 in a 5-point match and 2–2 in a 7-point match: 5-away each.
+        var snap = MatchState.FromScores(matchLength, onRoll, opponent, isCrawford: false).Snapshot();
+
+        Assert.Equal(5, snap.OnRollNeeds);
+        Assert.Equal(5, snap.OpponentNeeds);
+    }
+
+    [Fact]
+    public void Snapshot_UnequalScores_KeepTheirOrientation()
+    {
+        var snap = MatchState.FromScores(matchLength: 7, onRollScore: 3, opponentScore: 2, isCrawford: false).Snapshot();
+
+        Assert.Equal(4, snap.OnRollNeeds);
+        Assert.Equal(5, snap.OpponentNeeds);
+
+        // The captured scores stay what they were.
+        Assert.Equal((3, 2), (snap.OnRollScore, snap.OpponentScore));
+    }
+
+    [Fact]
+    public void Snapshot_AwayCountsFollowTheTurnBoundaryFlip()
+    {
+        var match = MatchState.FromScores(matchLength: 7, onRollScore: 3, opponentScore: 2, isCrawford: false);
+        match.SwapPerspective();
+
+        var snap = match.Snapshot();
+
+        Assert.Equal(5, snap.OnRollNeeds);
+        Assert.Equal(4, snap.OpponentNeeds);
+    }
+
+    [Fact]
+    public void Snapshot_MoneyGame_HasNoAwayCount()
+    {
+        var match = MatchState.FromScores(matchLength: 0, onRollScore: 4, opponentScore: 9, isCrawford: false);
+
+        var snap = match.Snapshot();
+
+        Assert.Null(snap.OnRollNeeds);
+        Assert.Null(snap.OpponentNeeds);
+        Assert.Equal((4, 9), (snap.OnRollScore, snap.OpponentScore));
+    }
+
+    [Fact]
+    public void Snapshot_AwayCountsAreDerived_NotPartOfEquality()
+    {
+        // Two captures of one standing are one value; the away counts add no state.
+        var first = new MatchSnapshot(7, 3, 2, IsCrawford: false);
+        var second = MatchState.FromScores(7, 3, 2, isCrawford: false).Snapshot();
+
+        Assert.Equal(first, second);
+        Assert.Equal(first.GetHashCode(), second.GetHashCode());
+    }
+
     [Theory]
     [InlineData(0, true)]   // money game: cube in play
     [InlineData(1, false)]  // 1-point match: no cube, ever

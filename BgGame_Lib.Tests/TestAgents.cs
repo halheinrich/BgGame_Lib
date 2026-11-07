@@ -12,9 +12,9 @@ internal sealed class RandomPlayAgent(int seed) : IPlayAgent
     private readonly Random _random = new(seed);
 
     public ValueTask<Play> ChoosePlayAsync(
-        GameState state, int die1, int die2, CancellationToken cancellationToken = default)
+        GameSnapshot state, int die1, int die2, CancellationToken cancellationToken = default)
     {
-        var plays = MoveGenerator.GeneratePlays(state.Board, die1, die2);
+        var plays = MoveGenerator.GeneratePlays(new BoardState(state.Board), die1, die2);
         return ValueTask.FromResult(plays[_random.Next(plays.Count)]);
     }
 }
@@ -23,32 +23,32 @@ internal sealed class RandomPlayAgent(int seed) : IPlayAgent
 internal sealed class FirstPlayAgent : IPlayAgent
 {
     public ValueTask<Play> ChoosePlayAsync(
-        GameState state, int die1, int die2, CancellationToken cancellationToken = default)
+        GameSnapshot state, int die1, int die2, CancellationToken cancellationToken = default)
     {
-        var plays = MoveGenerator.GeneratePlays(state.Board, die1, die2);
+        var plays = MoveGenerator.GeneratePlays(new BoardState(state.Board), die1, die2);
         return ValueTask.FromResult(plays[0]);
     }
 }
 
 /// <summary>Delegates the choice to a lambda — for spies, bad agents, and cancellation triggers.</summary>
-internal sealed class DelegatePlayAgent(Func<GameState, int, int, Play> choose) : IPlayAgent
+internal sealed class DelegatePlayAgent(Func<GameSnapshot, int, int, Play> choose) : IPlayAgent
 {
     public ValueTask<Play> ChoosePlayAsync(
-        GameState state, int die1, int die2, CancellationToken cancellationToken = default) =>
+        GameSnapshot state, int die1, int die2, CancellationToken cancellationToken = default) =>
         ValueTask.FromResult(choose(state, die1, die2));
 }
 
 /// <summary>Delegates both cube decisions to lambdas.</summary>
 internal sealed class DelegateCubeAgent(
-    Func<GameState, CubeAction> offer,
-    Func<GameState, CubeAction> response) : ICubeAgent
+    Func<GameSnapshot, CubeAction> offer,
+    Func<GameSnapshot, CubeAction> response) : ICubeAgent
 {
     public ValueTask<CubeAction> ChooseOfferAsync(
-        GameState state, CancellationToken cancellationToken = default) =>
+        GameSnapshot state, CancellationToken cancellationToken = default) =>
         ValueTask.FromResult(offer(state));
 
     public ValueTask<CubeAction> ChooseResponseAsync(
-        GameState state, CancellationToken cancellationToken = default) =>
+        GameSnapshot state, CancellationToken cancellationToken = default) =>
         ValueTask.FromResult(response(state));
 }
 

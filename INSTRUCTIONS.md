@@ -103,23 +103,25 @@ each type named is its XML doc.
   later game is Crawford; resuming before the Crawford game is played, pass
   true. The Crawford standing's rule (exactly one side one-away) is
   BgDataTypes_Lib's `MatchStanding`, and its refusal is that library's.
-- **Cube responders see their own frame.** `ChooseResponseAsync` gets a detached
-  `GameState.OpponentView()`; an `ICubeAgent` written against the offerer's
-  frame inverts silently.
+- **Every agent sees the on-roll frame.** Agents decide on an immutable
+  `GameSnapshot`, and nothing re-expresses it (Hal's ruling,
+  halheinrich/backgammon#533). `ChooseResponseAsync` gets the offer's own
+  snapshot: the responder is the negative side, its score `OpponentScore`, the
+  pre-double cube `Centered` or `OnRoll`. A cube agent that reads the board as
+  its own on a response inverts silently. An agent needing the move generator
+  builds its own board, `new BoardState(snapshot.Board)`.
 - **Read attribution, never derive it.** `TranscriptEntry.OnRollSeat` is the
   frame seat, not the actor: read `CubeTranscriptEntry.ActingSeat` and
   `GameEndedTranscriptEntry.Winner`. `GameResult.OnRollWon` is
   perspective-relative; `GameRecord.Winner` is absolute.
 - **Two play entries are equal only in the same encoding.** Ask
   `BoardState.IsSamePlay` whether they hold the same play.
-- **The match loop enforces less than it documents**
+- **The match record can still be changed or wrong**
   (halheinrich/backgammon#286). Enforced: every play is validated before it
-  applies, and an out-of-contract agent answer aborts the run with
-  `AgentContractViolationException`. Documented only: `IPlayAgent`'s "do not
-  mutate". Agents get the live `GameState` (a cube responder alone gets a
-  detached view), and the runner takes a play's decision snapshot after the
-  agent returns, so a mutation would be recorded as the state it decided in.
-  A finished `GameRecord.Transcript` can still be appended to, and
+  applies, an out-of-contract agent answer aborts the run with
+  `AgentContractViolationException`, and an agent cannot reach the live game
+  (it decides on the snapshot the transcript records, #533). Not yet: a
+  finished `GameRecord.Transcript` can still be appended to, and
   `PlayTranscriptEntry` does not check its play against its own board.
 - **A scripted match still reaches Crawford.** Games ended by cube passes bring
   a match to its Crawford game, where the cube window never opens and the

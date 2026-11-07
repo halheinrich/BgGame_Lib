@@ -16,13 +16,14 @@ using BgMoveGen;
 /// <see cref="BgDataTypes_Lib.CubeOwner.OnRoll"/> / <see cref="BgDataTypes_Lib.CubeOwner.Opponent"/>
 /// likewise label the current on-roll perspective. Board, match scores, and
 /// cube ownership all flip together at a turn boundary — see
-/// <see cref="ApplyPlay(Play, int, int)"/>. To <em>query</em> the position from
-/// the other player's frame without advancing anything, take a detached
-/// <see cref="OpponentView"/>; there is no in-place flip surface.
+/// <see cref="ApplyPlay(Play, int, int)"/>, a state transition and the only
+/// flip there is. Nothing re-expresses the position for the other player:
+/// every reader, an agent answering a cube response included, reads the
+/// on-roll frame through <see cref="Snapshot"/>.
 /// </summary>
 public sealed class GameState
 {
-    /// <summary>The live mutable board. Mutated by BgMoveGen apply/undo and perspective flipping.</summary>
+    /// <summary>The live mutable board. Mutated by <see cref="ApplyPlay(Play, int, int)"/>, which applies the play and flips it to the next mover.</summary>
     public BoardState Board { get; }
 
     /// <summary>The match this game belongs to. Aggregated reference, not owned.</summary>
@@ -144,39 +145,9 @@ public sealed class GameState
     }
 
     /// <summary>
-    /// Return a new <see cref="GameState"/> re-expressing this position from the
-    /// current opponent's frame: the board is a <see cref="BoardState.FlippedCopy"/>,
-    /// the score labels swap (its <see cref="MatchState.OnRollScore"/> is this
-    /// state's <see cref="MatchState.OpponentScore"/>), the cube owner mirrors
-    /// (<see cref="BgDataTypes_Lib.CubeOwner.OnRoll"/> ↔
-    /// <see cref="BgDataTypes_Lib.CubeOwner.Opponent"/>, centered stays), and
-    /// <see cref="CubeSize"/>, <see cref="MatchState.MatchLength"/>, and
-    /// <see cref="MatchState.IsCrawford"/> carry over unchanged. The transform is
-    /// an involution: <c>OpponentView().OpponentView()</c> reproduces the position.
-    ///
-    /// <para>
-    /// This is a detached <em>query view</em>, not a fork of the live game: it
-    /// owns a fresh board and a fresh <see cref="MatchState"/>, so nothing done
-    /// to it affects this state (and vice versa), and it does not track
-    /// subsequent live mutations. Use it to let the non-on-roll player evaluate
-    /// a position in its own frame — the state handed to
-    /// <see cref="ICubeAgent.ChooseResponseAsync"/> — without advancing anything.
-    /// To advance past a turn boundary, use <see cref="ApplyPlay(Play, int, int)"/>
-    /// on the live state; do not play on from a view.
-    /// </para>
-    /// </summary>
-    public GameState OpponentView() =>
-        new(
-            Board.FlippedCopy(),
-            MatchState.FromScores(
-                Match.MatchLength, Match.OpponentScore, Match.OnRollScore, Match.IsCrawford),
-            CubeSize,
-            MirrorOwner(CubeOwner));
-
-    /// <summary>
-    /// The cube-owner half of a perspective change, single-sourced for the
-    /// turn-boundary flip (<see cref="ApplyPlay(Play, int, int)"/>) and the
-    /// detached query view (<see cref="OpponentView"/>).
+    /// The cube-owner half of the turn-boundary flip
+    /// (<see cref="ApplyPlay(Play, int, int)"/>): the owner label follows the
+    /// next mover.
     /// </summary>
     private static CubeOwner MirrorOwner(CubeOwner owner) => owner switch
     {
@@ -187,9 +158,11 @@ public sealed class GameState
     };
 
     /// <summary>
-    /// Take an immutable snapshot of the full game-and-match state: the board
-    /// as a <see cref="BoardPosition"/> value (<see cref="BoardState.ToPosition"/>),
-    /// which later changes of the live board do not reach.
+    /// Take an immutable snapshot of the full game-and-match state, in the
+    /// on-roll player's frame: the board as a <see cref="BoardPosition"/> value
+    /// (<see cref="BoardState.ToPosition"/>), which later changes of the live
+    /// board do not reach. It is what agents decide on and what transcripts
+    /// record.
     /// </summary>
     public GameSnapshot Snapshot() =>
         new(Board.ToPosition(), CubeSize, CubeOwner, Match.Snapshot());

@@ -13,7 +13,7 @@ public class PlayAgentContractTests
         public FixedPlayAgent(Play play) => _play = play;
 
         public ValueTask<Play> ChoosePlayAsync(
-            GameState state, int die1, int die2, CancellationToken cancellationToken = default)
+            GameSnapshot state, int die1, int die2, CancellationToken cancellationToken = default)
         {
             CallCount++;
             cancellationToken.ThrowIfCancellationRequested();
@@ -31,7 +31,7 @@ public class PlayAgentContractTests
         var expected = legal[0];
         var agent = new FixedPlayAgent(expected);
 
-        var actual = await agent.ChoosePlayAsync(game, 3, 1);
+        var actual = await agent.ChoosePlayAsync(game.Snapshot(), 3, 1);
 
         Assert.Equal(expected.Count, actual.Count);
         Assert.Equal(1, agent.CallCount);
@@ -48,7 +48,7 @@ public class PlayAgentContractTests
         cts.Cancel();
 
         await Assert.ThrowsAsync<OperationCanceledException>(
-            async () => await agent.ChoosePlayAsync(game, 3, 1, cts.Token));
+            async () => await agent.ChoosePlayAsync(game.Snapshot(), 3, 1, cts.Token));
     }
 
     [Fact]
@@ -61,7 +61,7 @@ public class PlayAgentContractTests
         var match = MatchState.NewMatch(7);
         var game = GameState.NewGame(match);
 
-        var task = agent.ChoosePlayAsync(game, 3, 1);
+        var task = agent.ChoosePlayAsync(game.Snapshot(), 3, 1);
         Assert.True(task.IsCompletedSuccessfully);
         await task;
     }

@@ -106,13 +106,13 @@ public sealed record PlayTranscriptEntry(
 /// <summary>
 /// A cube decision: an offer side action or a response side action.
 ///
-/// <para>Both the offer entry and its response entry are snapshotted against
-/// the live state, which stays in the <em>offerer's</em> frame across the
-/// responder query — so <see cref="TranscriptEntry.OnRollSeat"/> is the
+/// <para>The offer entry and its response entry record one snapshot, the one
+/// both the offerer and the responder decided on, in the <em>offerer's</em>
+/// (on-roll) frame — so <see cref="TranscriptEntry.OnRollSeat"/> is the
 /// offerer for both and does not flip between them. The decision-maker is
 /// <see cref="ActingSeat"/>.</para>
 /// </summary>
-/// <param name="State">The live state at the decision (offerer's frame for offers and responses alike).</param>
+/// <param name="State">The decision state (offerer's frame for offers and responses alike).</param>
 /// <param name="OnRollSeat">The seat whose perspective <paramref name="State"/> is in — the offerer.</param>
 /// <param name="Action">The cube action taken.</param>
 public sealed record CubeTranscriptEntry(

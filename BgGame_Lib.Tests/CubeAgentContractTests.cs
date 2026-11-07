@@ -10,14 +10,14 @@ public class CubeAgentContractTests
         public CubeAction Response { get; init; } = CubeAction.Take;
 
         public ValueTask<CubeAction> ChooseOfferAsync(
-            GameState state, CancellationToken cancellationToken = default)
+            GameSnapshot state, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             return ValueTask.FromResult(Offer);
         }
 
         public ValueTask<CubeAction> ChooseResponseAsync(
-            GameState state, CancellationToken cancellationToken = default)
+            GameSnapshot state, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
             return ValueTask.FromResult(Response);
@@ -31,7 +31,7 @@ public class CubeAgentContractTests
         var game = GameState.NewGame(match);
         var agent = new FixedCubeAgent { Offer = CubeAction.Double };
 
-        var offer = await agent.ChooseOfferAsync(game);
+        var offer = await agent.ChooseOfferAsync(game.Snapshot());
 
         Assert.Equal(CubeAction.Double, offer);
     }
@@ -43,7 +43,7 @@ public class CubeAgentContractTests
         var game = GameState.NewGame(match);
         var agent = new FixedCubeAgent { Response = CubeAction.Pass };
 
-        var response = await agent.ChooseResponseAsync(game);
+        var response = await agent.ChooseResponseAsync(game.Snapshot());
 
         Assert.Equal(CubeAction.Pass, response);
     }
@@ -59,8 +59,8 @@ public class CubeAgentContractTests
         cts.Cancel();
 
         await Assert.ThrowsAsync<OperationCanceledException>(
-            async () => await agent.ChooseOfferAsync(game, cts.Token));
+            async () => await agent.ChooseOfferAsync(game.Snapshot(), cts.Token));
         await Assert.ThrowsAsync<OperationCanceledException>(
-            async () => await agent.ChooseResponseAsync(game, cts.Token));
+            async () => await agent.ChooseResponseAsync(game.Snapshot(), cts.Token));
     }
 }

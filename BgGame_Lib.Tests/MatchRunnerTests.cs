@@ -213,27 +213,28 @@ public class MatchRunnerTests
         Assert.Equal(0, result.SeatTwoScore);
     }
 
-    // ── Responder-frame cube query (perspective unification) ──────
+    // ── What agents see: the snapshot the transcript records (#533) ──
     //
-    // The queried player always sees its own frame: ChooseResponseAsync
-    // receives a detached GameState.OpponentView of the live state. These pins
-    // compare the responder's captured snapshot against the double-offer
-    // transcript entry — which is captured from the live (offerer-frame) state
-    // immediately before the query.
+    // Every query carries the decision's own GameSnapshot, in the on-roll
+    // player's frame. A cube responder gets the offer's snapshot unchanged and
+    // decides as the negative side; nothing is re-expressed for it.
 
     [Fact]
-    public async Task CubeResponse_QueryStateIsResponderFrame_LiveStateStaysOffererFrame()
+    public async Task CubeQueries_TheOffererAndTheResponderReceiveTheOffersSnapshot_InTheOnRollFrame()
     {
         // Game 1: (6,5) opening → One plays; turn 2 Two doubles, One passes →
         // Two leads 1–0, making game 2's scores asymmetric. Game 2, turn 2:
-        // Two doubles again and One's response spy captures its query state.
-        GameSnapshot? captured = null;
+        // Two doubles again; both of game 2's cube queries are captured.
+        var offered = new List<GameSnapshot>();
+        GameSnapshot? answered = null;
         var dice = new RecordedDiceSource([(6, 5), (6, 5)]);
         var runner = new MatchRunner(dice);
         var one = Participant(new FirstPlayAgent(), new DelegateCubeAgent(
             offer: _ => CubeAction.NoDouble,
-            response: s => { captured = s.Snapshot(); return CubeAction.Pass; }));
-        var two = Participant(new FirstPlayAgent(), CubeAgents.AlwaysDoubleAlwaysPass());
+            response: s => { answered = s; return CubeAction.Pass; }));
+        var two = Participant(new FirstPlayAgent(), new DelegateCubeAgent(
+            offer: s => { offered.Add(s); return CubeAction.Double; },
+            response: _ => CubeAction.Pass));
 
         var result = await runner.RunMatchAsync(one, two, matchLength: 5, maxGames: 2);
 
@@ -241,42 +242,107 @@ public class MatchRunnerTests
         Assert.Equal(0, result.SeatOneScore);
         Assert.Equal(2, result.SeatTwoScore);
 
-        // The live frame at query time: the offer entry's snapshot (offerer =
-        // seat Two on roll, leading 1–0 in its own labels).
+        // The offer entry: offerer seat Two on roll, leading 1–0 in its own
+        // labels, the cube centered before the double.
         var offer = Assert.IsType<CubeTranscriptEntry>(result.Games[1].Transcript.Entries[1]);
         Assert.Equal(CubeAction.Double, offer.Action);
+        Assert.Equal(MatchSeat.Two, offer.OnRollSeat);
         Assert.Equal(1, offer.State.Match.OnRollScore);
         Assert.Equal(0, offer.State.Match.OpponentScore);
+        Assert.Equal(CubeOwner.Centered, offer.State.CubeOwner);
 
-        // The responder saw its own frame: board flipped, scores swapped,
-        // cube size / length / Crawford carried over.
-        Assert.NotNull(captured);
-        for (int i = 0; i < 26; i++)
-            Assert.Equal(-offer.State.Board[25 - i], captured.Board[i]);
-        Assert.Equal(0, captured.Match.OnRollScore);
-        Assert.Equal(1, captured.Match.OpponentScore);
-        Assert.Equal(CubeOwner.Centered, captured.CubeOwner);
-        Assert.Equal(offer.State.CubeSize, captured.CubeSize);
-        Assert.Equal(offer.State.Match.MatchLength, captured.Match.MatchLength);
-        Assert.Equal(offer.State.Match.IsCrawford, captured.Match.IsCrawford);
+        // The offerer decided on the value the offer entry records ...
+        Assert.Equal(offer.State, offered[^1]);
 
-        // The live state stayed in the offerer's frame across the query: the
-        // response entry (snapshotted after it) matches the offer entry.
+        // ... and so did the responder: the on-roll (offerer's) frame, unchanged
+        // — its own score is the opponent's 0, the cube the pre-double one.
+        Assert.Equal(offer.State, answered);
+        Assert.Equal(0, answered!.Match.OpponentScore);
+        Assert.Equal(1, answered.CubeSize);
+
+        // The response entry records the same decision state.
         var response = Assert.IsType<CubeTranscriptEntry>(result.Games[1].Transcript.Entries[2]);
         Assert.Equal(CubeAction.Pass, response.Action);
-        Assert.Equal(offer.State.Board, response.State.Board);
-        Assert.Equal(offer.State.CubeSize, response.State.CubeSize);
-        Assert.Equal(offer.State.CubeOwner, response.State.CubeOwner);
-        Assert.Equal(offer.State.Match, response.State.Match);
+        Assert.Equal(offer.State, response.State);
     }
 
     [Fact]
-    public async Task CubeResponse_RedoubleQuery_ShowsOffererOwnedCubeAsOpponent()
+    public async Task PlayQueries_TheAgentReceivesTheValueEachPlayEntryRecords()
+    {
+        var seen = new List<GameSnapshot>();
+        var spy = new DelegatePlayAgent((state, d1, d2) =>
+        {
+            seen.Add(state);
+            return MoveGenerator.GeneratePlays(new BoardState(state.Board), d1, d2)[0];
+        });
+
+        var runner = new MatchRunner(new SeededDiceSource(3));
+        var result = await runner.RunMatchAsync(
+            Participant(spy, CubeAgents.Never()), Participant(spy, CubeAgents.Never()),
+            matchLength: 0, maxGames: 1);
+
+        // Every queried turn recorded the value the agent was handed, by
+        // equality and in order; a dance turn is applied unqueried.
+        var queried = EntriesOf<PlayTranscriptEntry>(result.Games[0].Transcript)
+            .Where(e => !IsDance(e))
+            .Select(e => e.State)
+            .ToList();
+        Assert.NotEmpty(seen);
+        Assert.Equal(queried, seen);
+    }
+
+    [Fact]
+    public async Task PlayQuery_AnAgentPlayingOnItsOwnBoard_ChangesNothingInTheLiveGame()
+    {
+        // Seat One builds a working board from its snapshot, plays on it and
+        // then empties it before answering. The next query's snapshot is the
+        // live game's — the position the returned play reaches — not the
+        // agent's scratch board.
+        BoardPosition? scratch = null;
+        var vandal = new DelegatePlayAgent((state, d1, d2) =>
+        {
+            var board = new BoardState(state.Board);
+            var plays = MoveGenerator.GeneratePlays(board, d1, d2);
+            board.ApplyPlay(plays[^1]);
+            board.SetPosition(BoardPosition.Empty);
+            scratch = board.ToPosition();
+            return plays[0];
+        });
+        var nextSeen = new List<GameSnapshot>();
+        var two = new DelegatePlayAgent((state, d1, d2) =>
+        {
+            nextSeen.Add(state);
+            return MoveGenerator.GeneratePlays(new BoardState(state.Board), d1, d2)[0];
+        });
+
+        // Seat One wins the opening with 3-1; seat Two rolls 5-2.
+        var runner = new MatchRunner(new ScriptThenSeededDice([(3, 1), (5, 2)], seed: 1));
+        var result = await runner.RunMatchAsync(
+            Participant(vandal, CubeAgents.Never()), Participant(two, CubeAgents.Never()),
+            matchLength: 0, maxGames: 1);
+
+        var first = EntriesOf<PlayTranscriptEntry>(result.Games[0].Transcript)[0];
+        Assert.Equal(MatchSeat.One, first.OnRollSeat);
+        Assert.Equal(BoardPosition.Standard, first.State.Board);
+        Assert.Equal(BoardPosition.Empty, scratch);
+
+        // Seat Two's query is the standard start after the returned play
+        // alone, in the next mover's frame (the board's apply flips it).
+        var expected = new BoardState(first.State.Board);
+        expected.ApplyPlay(first.ChosenPlay);
+        Assert.Equal(expected.ToPosition(), nextSeen[0].Board);
+    }
+
+    private static bool IsDance(PlayTranscriptEntry entry) =>
+        MoveGenerator.GeneratePlays(new BoardState(entry.State.Board), entry.Die1, entry.Die2) is [{ Count: 0 }];
+
+    [Fact]
+    public async Task CubeResponse_RedoubleQuery_ShowsTheOffererOwnedCubeAsOnRoll()
     {
         // Double→take→redouble: turn 2 Two doubles, One takes (cube 2, One
         // owns); turn 3 One redoubles and Two's response spy captures its
-        // query state — the offerer-owned cube must read as Opponent in the
-        // responder's frame, at the pre-redouble size.
+        // query state — the offerer-owned cube reads OnRoll, the offerer being
+        // on roll, at the pre-redouble size; never Opponent.
         GameSnapshot? captured = null;
         var dice = new RecordedDiceSource([(6, 5), (4, 3)]);
         var runner = new MatchRunner(dice);
@@ -284,24 +350,24 @@ public class MatchRunnerTests
             offer: _ => CubeAction.Double, response: _ => CubeAction.Take));
         var two = Participant(new FirstPlayAgent(), new DelegateCubeAgent(
             offer: s => s.CubeSize == 1 ? CubeAction.Double : CubeAction.NoDouble,
-            response: s => { captured = s.Snapshot(); return CubeAction.Pass; }));
+            response: s => { captured = s; return CubeAction.Pass; }));
 
         var result = await runner.RunMatchAsync(one, two, matchLength: 5, maxGames: 1);
 
-        // Behavioral outcome unchanged from the offerer-frame era: One wins
-        // the pre-redouble value 2.
+        // One wins the pre-redouble value 2.
         Assert.Equal(2, result.SeatOneScore);
         Assert.Equal(0, result.SeatTwoScore);
 
         Assert.NotNull(captured);
-        Assert.Equal(CubeOwner.Opponent, captured.CubeOwner);
+        Assert.Equal(CubeOwner.OnRoll, captured.CubeOwner);
         Assert.Equal(2, captured.CubeSize);
 
-        // Live frame at the same moment: offerer One on roll, owning the cube.
+        // The value the redouble entry records: offerer One on roll.
         var game = Assert.Single(result.Games);
         var redouble = Assert.IsType<CubeTranscriptEntry>(game.Transcript.Entries[4]);
         Assert.Equal(CubeAction.Double, redouble.Action);
-        Assert.Equal(CubeOwner.OnRoll, redouble.State.CubeOwner);
+        Assert.Equal(MatchSeat.One, redouble.OnRollSeat);
+        Assert.Equal(redouble.State, captured);
     }
 
     // ── Crawford / post-Crawford (end-to-end through the runner) ──
@@ -425,7 +491,7 @@ public class MatchRunnerTests
                 var inner = new Random(agentSeed);
                 return new DelegatePlayAgent((state, d1, d2) =>
                 {
-                    var plays = MoveGenerator.GeneratePlays(state.Board, d1, d2);
+                    var plays = MoveGenerator.GeneratePlays(new BoardState(state.Board), d1, d2);
                     Assert.False(plays.Count == 1 && plays[0].Count == 0,
                         "agent was queried on a dance turn");
                     return plays[inner.Next(plays.Count)];
@@ -457,7 +523,7 @@ public class MatchRunnerTests
         var cancellingAgent = new DelegatePlayAgent((state, d1, d2) =>
         {
             if (++calls == 10) cts.Cancel();
-            return MoveGenerator.GeneratePlays(state.Board, d1, d2)[0];
+            return MoveGenerator.GeneratePlays(new BoardState(state.Board), d1, d2)[0];
         });
 
         var runner = new MatchRunner(new SeededDiceSource(5));
@@ -485,11 +551,11 @@ public class MatchRunnerTests
     }
 
     /// <summary>An agent playing <paramref name="turns"/> in order, then the generator's first play.</summary>
-    private static DelegatePlayAgent Scripted(params Func<GameState, int, int, Play>[] turns)
+    private static DelegatePlayAgent Scripted(params Func<GameSnapshot, int, int, Play>[] turns)
     {
         int turn = 0;
         return new DelegatePlayAgent((state, d1, d2) =>
-            turn < turns.Length ? turns[turn++](state, d1, d2) : MoveGenerator.GeneratePlays(state.Board, d1, d2)[0]);
+            turn < turns.Length ? turns[turn++](state, d1, d2) : MoveGenerator.GeneratePlays(new BoardState(state.Board), d1, d2)[0]);
     }
 
     /// <summary>
@@ -505,7 +571,7 @@ public class MatchRunnerTests
     /// mark on either checker.
     /// </summary>
     private static (DelegatePlayAgent One, DelegatePlayAgent Two) BlotOnTheTwo(
-        Func<GameState, int, int, Play> onesSecondPlay) =>
+        Func<GameSnapshot, int, int, Play> onesSecondPlay) =>
         (Scripted((_, _, _) => [new(24, 18), new(18, 13)], onesSecondPlay),
          Scripted((_, _, _) => [new(24, 23), new(13, 11)]));
 
@@ -518,8 +584,9 @@ public class MatchRunnerTests
         {
             // The generator's candidate for 8/2* 6/2, and the same play with
             // the hit mark on the other checker.
-            var legal = MoveGenerator.GeneratePlays(state.Board, d1, d2);
-            int index = state.Board.IndexOfSamePlay([new(8, -2), new(6, 2)], legal);
+            var board = new BoardState(state.Board);
+            var legal = MoveGenerator.GeneratePlays(board, d1, d2);
+            int index = board.IndexOfSamePlay([new(8, -2), new(6, 2)], legal);
             Assert.True(index >= 0);
             candidate = legal[index];
             int marked = candidate[0].ToPt == -2 ? candidate[0].FrPt : candidate[1].FrPt;
@@ -553,7 +620,11 @@ public class MatchRunnerTests
         Assert.Equal(MatchSeat.Two, plays[3].OnRollSeat);
     }
 
-    // ── An invalid play is a contract violation: nothing recorded or applied ──
+    // ── An invalid play is a contract violation: nothing recorded ──
+    //
+    // Nothing applied, too, but that is no longer observable here: the live
+    // state is the runner's own, out of every agent's reach, and the throw
+    // before anything mutates is GameState.ApplyPlay's (GameStateTests).
 
     public static TheoryData<string, Play> InvalidOpeningPlays => new()
     {
@@ -564,19 +635,11 @@ public class MatchRunnerTests
 
     [Theory]
     [MemberData(nameof(InvalidOpeningPlays))]
-    public async Task AnInvalidPlay_AbortsAsIllegalPlay_WithNothingRecordedOrApplied(string label, Play invalid)
+    public async Task AnInvalidPlay_AbortsAsIllegalPlay_WithNothingRecorded(string label, Play invalid)
     {
         _ = label;
         var observer = new RecordingObserver();
-        GameState? live = null;
-        (BoardPosition Board, int OnRoll, int Opponent, CubeOwner Owner, int Cube) before = default;
-        var one = new DelegatePlayAgent((state, _, _) =>
-        {
-            live = state;
-            before = (state.Board.ToPosition(), state.Match.OnRollScore, state.Match.OpponentScore,
-                      state.CubeOwner, state.CubeSize);
-            return invalid;
-        });
+        var one = new DelegatePlayAgent((_, _, _) => invalid);
 
         var runner = new MatchRunner(new RecordedDiceSource([(5, 4)]));
         var ex = await Assert.ThrowsAsync<AgentContractViolationException>(() => runner.RunMatchAsync(
@@ -585,24 +648,15 @@ public class MatchRunnerTests
 
         AssertViolation(ex, MatchSeat.One, invalid);
         Assert.Empty(observer.Events.OfType<RecordingObserver.EntryRecorded>());
-        AssertUntouched(live!, before);
     }
 
     [Fact]
-    public async Task ABlotLandedOnWithoutItsHitMark_AbortsAsIllegalPlay_WithNothingRecordedOrApplied()
+    public async Task ABlotLandedOnWithoutItsHitMark_AbortsAsIllegalPlay_WithNothingRecorded()
     {
         // Ruling 2: 8/2 6/2 onto the blot, with no mark on either hop.
         Play unmarked = [new(8, 2), new(6, 2)];
         var observer = new RecordingObserver();
-        GameState? live = null;
-        (BoardPosition Board, int OnRoll, int Opponent, CubeOwner Owner, int Cube) before = default;
-        var (one, two) = BlotOnTheTwo((state, _, _) =>
-        {
-            live = state;
-            before = (state.Board.ToPosition(), state.Match.OnRollScore, state.Match.OpponentScore,
-                      state.CubeOwner, state.CubeSize);
-            return unmarked;
-        });
+        var (one, two) = BlotOnTheTwo((_, _, _) => unmarked);
 
         var runner = new MatchRunner(new RecordedDiceSource(BlotOnTheTwoRolls));
         var ex = await Assert.ThrowsAsync<AgentContractViolationException>(() => runner.RunMatchAsync(
@@ -615,7 +669,6 @@ public class MatchRunnerTests
             .Select(e => Assert.IsType<PlayTranscriptEntry>(e.Entry)).ToList();
         Assert.Equal(2, recorded.Count);
         Assert.DoesNotContain(recorded, e => (e.Die1, e.Die2) == (6, 4));
-        AssertUntouched(live!, before);
     }
 
     private static void AssertViolation(AgentContractViolationException ex, MatchSeat seat, Play offending)
@@ -624,17 +677,6 @@ public class MatchRunnerTests
         Assert.Equal(AgentContractViolationKind.IllegalPlay, ex.Kind);
         Assert.True(ex.OffendingPlay is { } play && play.IsSameEncoding(offending));
         Assert.IsType<ArgumentException>(ex.InnerException);
-    }
-
-    /// <summary>Throw-before-mutate: the live state is as the agent saw it.</summary>
-    private static void AssertUntouched(
-        GameState live, (BoardPosition Board, int OnRoll, int Opponent, CubeOwner Owner, int Cube) before)
-    {
-        Assert.Equal(before.Board, live.Board.ToPosition());
-        Assert.Equal(before.OnRoll, live.Match.OnRollScore);
-        Assert.Equal(before.Opponent, live.Match.OpponentScore);
-        Assert.Equal(before.Owner, live.CubeOwner);
-        Assert.Equal(before.Cube, live.CubeSize);
     }
 
     // ── Agent contract violations ─────────────────────────────────

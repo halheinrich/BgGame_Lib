@@ -4,7 +4,7 @@ using BgDataTypes_Lib;
 using BgMoveGen;
 
 /// <summary>
-/// Decision-maker for play turns: given the current state and dice, choose a Play.
+/// Decision-maker for play turns: given the state and dice, choose a Play.
 ///
 /// Implementations span:
 ///   • Quiz-grader (passive, scores against a fixture) — in BgQuiz_Blazor.
@@ -16,6 +16,13 @@ using BgMoveGen;
 /// don't have to choose between blocking and <c>Task.Run</c>. In-memory agents
 /// pay no measurable overhead — <see cref="ValueTask{TResult}"/> avoids the
 /// Task allocation when the result is available synchronously.
+///
+/// Input: an immutable <see cref="GameSnapshot"/> in the on-roll player's
+/// frame, which is the deciding agent's own on a play query. The agent cannot
+/// reach the live game; one that needs the move generator builds its own
+/// working board, <c>new BoardState(state.Board)</c>, and nothing it does to
+/// that board reaches the match. <see cref="MatchRunner"/> records the very
+/// value it hands the agent as the play's decision state.
 ///
 /// Contract: the returned <see cref="Play"/> must be legal for the supplied
 /// state and dice — the same play, in any encoding, as one of
@@ -30,14 +37,14 @@ using BgMoveGen;
 public interface IPlayAgent
 {
     /// <summary>
-    /// Choose a Play given the current state and dice.
+    /// Choose a Play given the state and dice.
     /// </summary>
-    /// <param name="state">The current game state. Treat as input only — do not mutate.</param>
+    /// <param name="state">The decision state, in the on-roll player's frame (the agent's own).</param>
     /// <param name="die1">First die (1–6).</param>
     /// <param name="die2">Second die (1–6).</param>
     /// <param name="cancellationToken">Cooperative cancellation token.</param>
     ValueTask<Play> ChoosePlayAsync(
-        GameState state,
+        GameSnapshot state,
         int die1,
         int die2,
         CancellationToken cancellationToken = default);

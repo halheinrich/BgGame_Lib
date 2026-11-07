@@ -50,15 +50,17 @@ using BgMoveGen;
 /// <see cref="IMatchObserver"/> for the delivery contract (synchronous,
 /// fail-fast, stream stops on abort).</para>
 ///
-/// <para><b>Perspective note for cube responders.</b> The queried player
-/// always sees its own frame — the unified convention across every agent
-/// query, wire transports included. For
-/// <see cref="ICubeAgent.ChooseResponseAsync"/> the runner therefore passes a
-/// detached <see cref="GameState.OpponentView"/> of the live state: the
-/// responder sees itself as the on-roll-labeled player (board positives,
-/// <see cref="MatchState.OnRollScore"/> are its own). The live
-/// <see cref="GameState"/> remains in the offerer's frame throughout and is
-/// what <see cref="Referee.ApplyCubeResponse"/> applies the response to.</para>
+/// <para><b>What agents see.</b> Every query carries an immutable
+/// <see cref="GameSnapshot"/> of the live state, taken before the query and
+/// recorded as that decision's state: the agent decides on exactly the value
+/// the transcript records, and cannot reach the live game. Every snapshot is
+/// in the on-roll player's frame, wire transports included. A cube responder
+/// is handed the offer's own snapshot and decides as the negative side (see
+/// <see cref="ICubeAgent.ChooseResponseAsync"/>); nothing is re-expressed for
+/// it. The live <see cref="GameState"/> stays the runner's own: it validates
+/// and applies each returned choice there
+/// (<see cref="GameState.ApplyPlay(Play, int, int)"/>,
+/// <see cref="Referee.ApplyCubeResponse"/>).</para>
 ///
 /// <para><b>Failure semantics.</b> An agent returning an out-of-contract
 /// value aborts the run with <see cref="AgentContractViolationException"/>
@@ -274,26 +276,28 @@ public sealed class MatchRunner
         {
             if (!game.CanDouble) return null;
 
+            // One decision state for the whole window: the offer query, the
+            // response query and both entries share it.
+            GameSnapshot decision = game.Snapshot();
+
             CubeAction offer = await ParticipantAt(_onRollSeat).CubeAgent
-                .ChooseOfferAsync(game, cancellationToken).ConfigureAwait(false);
+                .ChooseOfferAsync(decision, cancellationToken).ConfigureAwait(false);
             if (offer == CubeAction.NoDouble) return null;   // implicit in the transcript
             if (offer != CubeAction.Double)
                 throw AgentContractViolationException.ForCubeOffer(_onRollSeat, offer);
 
-            Record(transcript, new CubeTranscriptEntry(game.Snapshot(), _onRollSeat, CubeAction.Double));
+            Record(transcript, new CubeTranscriptEntry(decision, _onRollSeat, CubeAction.Double));
 
-            // The responder is queried in its own frame (detached view); the
-            // live state stays in the offerer's frame for ApplyCubeResponse.
+            // The responder decides on the offer's snapshot, in the offerer's
+            // (on-roll) frame, as the negative side; the entry's frame stamp
+            // stays the offerer's and its ActingSeat derives the responder.
             MatchSeat responderSeat = _onRollSeat.Other();
             CubeAction response = await ParticipantAt(responderSeat).CubeAgent
-                .ChooseResponseAsync(game.OpponentView(), cancellationToken).ConfigureAwait(false);
+                .ChooseResponseAsync(decision, cancellationToken).ConfigureAwait(false);
             if (response is not CubeAction.Take and not CubeAction.Pass)
                 throw AgentContractViolationException.ForCubeResponse(responderSeat, response);
 
-            // Snapshotted against the live state — still the offerer's frame,
-            // so the stamp does not flip; the entry's ActingSeat derives the
-            // responder.
-            Record(transcript, new CubeTranscriptEntry(game.Snapshot(), _onRollSeat, response));
+            Record(transcript, new CubeTranscriptEntry(decision, _onRollSeat, response));
             return referee.ApplyCubeResponse(game, response);
         }
 
@@ -305,6 +309,9 @@ public sealed class MatchRunner
         private async Task<GameResult?> PlayTurnAsync(
             GameState game, Transcript transcript, int die1, int die2)
         {
+            // The decision state, taken before the query: the agent decides on
+            // the value the entry records.
+            GameSnapshot decision = game.Snapshot();
             var legalPlays = MoveGenerator.GeneratePlays(game.Board, die1, die2);
 
             Play chosenPlay;
@@ -317,10 +324,9 @@ public sealed class MatchRunner
             else
             {
                 chosenPlay = await ParticipantAt(_onRollSeat).PlayAgent
-                    .ChoosePlayAsync(game, die1, die2, cancellationToken).ConfigureAwait(false);
+                    .ChoosePlayAsync(decision, die1, die2, cancellationToken).ConfigureAwait(false);
             }
 
-            var decisionSnapshot = game.Snapshot();
             try
             {
                 game.ApplyPlay(chosenPlay, die1, die2);
@@ -330,7 +336,7 @@ public sealed class MatchRunner
                 throw AgentContractViolationException.ForPlay(_onRollSeat, chosenPlay, die1, die2, ex);
             }
 
-            Record(transcript, new PlayTranscriptEntry(decisionSnapshot, _onRollSeat, die1, die2, chosenPlay));
+            Record(transcript, new PlayTranscriptEntry(decision, _onRollSeat, die1, die2, chosenPlay));
             _onRollSeat = _onRollSeat.Other();
 
             return referee.IsGameOver(game);
