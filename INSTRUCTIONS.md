@@ -98,6 +98,11 @@ each type named is its XML doc.
   games Crawford is normalised before `MatchState.FromScores`, which refuses the
   combination. Gate a double on `CanDouble`: `DoubleCube` throws rather than
   declines.
+- **A resume at one-away says which game it is.** `MatchState.FromScores`
+  with the leader one-away and `isCrawford` false is post-Crawford, and no
+  later game is Crawford; resuming before the Crawford game is played, pass
+  true. The Crawford standing's rule (exactly one side one-away) is
+  BgDataTypes_Lib's `MatchStanding`, and its refusal is that library's.
 - **Cube responders see their own frame.** `ChooseResponseAsync` gets a detached
   `GameState.OpponentView()`; an `ICubeAgent` written against the offerer's
   frame inverts silently.

@@ -353,6 +353,32 @@ public class GameStateTests
         Assert.Equal(CubeOwner.Opponent, game.CubeOwner);
     }
 
+    [Fact]
+    public void CanDouble_GamesAfterTheCrawfordGame_TrueLiveAndInTheOpponentView()
+    {
+        // halheinrich/backgammon#532. The live match is advanced the way the
+        // runner advances it; each next game and its detached view (rebuilt
+        // through MatchState.FromScores) are only queried, never played on.
+        var match = MatchState.NewMatch(7);
+        match.AwardGame(new GameResult(GameResultKind.WinBackgammon, OnRollWon: true, CubeSize: 2));
+        Assert.False(GameState.NewGame(match).CanDouble); // 6–0: the Crawford game
+
+        var trailerWinsSingle = new GameResult(GameResultKind.WinSingle, OnRollWon: false, CubeSize: 1);
+        foreach (int trailer in new[] { 1, 2 })
+        {
+            match.AwardGame(trailerWinsSingle);
+            Assert.Equal((6, trailer), (match.OnRollScore, match.OpponentScore));
+
+            var game = GameState.NewGame(match);
+            var view = game.OpponentView();
+
+            Assert.False(game.Match.IsCrawford, $"6–{trailer}: live");
+            Assert.True(game.CanDouble, $"6–{trailer}: live");
+            Assert.False(view.Match.IsCrawford, $"6–{trailer}: view");
+            Assert.True(view.CanDouble, $"6–{trailer}: view");
+        }
+    }
+
     // ── OpponentView: detached responder-frame query view ─────────
 
     /// <summary>

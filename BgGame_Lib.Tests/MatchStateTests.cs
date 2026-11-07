@@ -1,5 +1,7 @@
 namespace BgGame_Lib.Tests;
 
+using BgDataTypes_Lib;
+
 public class MatchStateTests
 {
     [Fact]
@@ -119,6 +121,79 @@ public class MatchStateTests
         Assert.Equal(4, match.OpponentScore);
     }
 
+    // ── The Crawford game is played once (halheinrich/backgammon#532) ──
+    //
+    // The leader stays one-away after the Crawford game until the match ends,
+    // so a flag re-derived from the leader's score alone would come back on
+    // every second post-Crawford game.
+
+    private static readonly GameResult TrailerWinsSingle =
+        new(GameResultKind.WinSingle, OnRollWon: false, CubeSize: 1);
+
+    [Fact]
+    public void AwardGame_EveryGameAfterTheCrawfordGame_IsPostCrawford()
+    {
+        // Live from 0–0: the leader reaches 6 with a doubled backgammon, the
+        // Crawford game follows, then the trailer wins single games through
+        // double match point. Only the 6–0 game is Crawford.
+        var match = MatchState.NewMatch(7);
+        match.AwardGame(new GameResult(GameResultKind.WinBackgammon, OnRollWon: true, CubeSize: 2));
+        Assert.Equal((6, 0), (match.OnRollScore, match.OpponentScore));
+        Assert.True(match.IsCrawford);
+
+        for (int trailer = 1; trailer <= 6; trailer++)
+        {
+            match.AwardGame(TrailerWinsSingle);
+
+            Assert.Equal((6, trailer), (match.OnRollScore, match.OpponentScore));
+            Assert.False(match.IsCrawford, $"6–{trailer} is post-Crawford");
+        }
+    }
+
+    [Fact]
+    public void AwardGame_ResumedPostCrawford_StaysPostCrawford()
+    {
+        // A resumed state with the leader one-away and the flag clear is
+        // post-Crawford: the Crawford game has been played.
+        var match = MatchState.FromScores(matchLength: 7, onRollScore: 6, opponentScore: 1, isCrawford: false);
+
+        match.AwardGame(TrailerWinsSingle);
+
+        Assert.Equal((6, 2), (match.OnRollScore, match.OpponentScore));
+        Assert.False(match.IsCrawford);
+    }
+
+    [Fact]
+    public void AwardGame_PostCrawford_AfterSwapPerspective_StaysPostCrawford()
+    {
+        // The phase is read from both sides' scores, not from the on-roll label:
+        // once the labels swap, the leader is the opponent and the trailer's win
+        // is credited on roll.
+        var match = MatchState.FromScores(matchLength: 7, onRollScore: 6, opponentScore: 0, isCrawford: true);
+        match.AwardGame(TrailerWinsSingle);
+        Assert.False(match.IsCrawford);
+
+        match.SwapPerspective();
+        Assert.Equal((1, 6), (match.OnRollScore, match.OpponentScore));
+        match.AwardGame(new GameResult(GameResultKind.WinSingle, OnRollWon: true, CubeSize: 1));
+
+        Assert.Equal((2, 6), (match.OnRollScore, match.OpponentScore));
+        Assert.False(match.IsCrawford);
+    }
+
+    [Fact]
+    public void AwardGame_DoubleMatchPointReachedPostCrawford_IsNotCrawford()
+    {
+        // Both sides one-away is double match point: provably post-Crawford.
+        var match = MatchState.FromScores(matchLength: 7, onRollScore: 6, opponentScore: 5, isCrawford: false);
+
+        match.AwardGame(TrailerWinsSingle);
+
+        Assert.Equal((6, 6), (match.OnRollScore, match.OpponentScore));
+        Assert.False(match.IsCrawford);
+        Assert.False(match.IsMatchOver);
+    }
+
     [Fact]
     public void AwardGame_MatchEndingWin_ClearsCrawford_FlagsMatchOver()
     {
@@ -210,6 +285,24 @@ public class MatchStateTests
         // post-Crawford, never a Crawford game.
         Assert.Throws<ArgumentException>(
             () => MatchState.FromScores(matchLength: 7, onRollScore: 6, opponentScore: 6, isCrawford: true));
+    }
+
+    [Theory]
+    [InlineData(7, 4, 3)]   // neither side one-away: pre-Crawford
+    [InlineData(7, 6, 6)]   // both one-away: double match point
+    [InlineData(1, 0, 0)]   // 1-point match: both one-away from the start
+    public void FromScores_CrawfordRefusal_IsTheMatchStandingRefusal(int matchLength, int onRoll, int opponent)
+    {
+        // The Crawford standing is BgDataTypes_Lib's rule; FromScores carries
+        // its refusal rather than restating it.
+        Assert.False(MatchStanding.TryCreate(
+            matchLength - onRoll, matchLength - opponent, isCrawford: true, out _, out string? refusal));
+
+        var ex = Assert.Throws<ArgumentException>(
+            () => MatchState.FromScores(matchLength, onRoll, opponent, isCrawford: true));
+
+        Assert.StartsWith(refusal, ex.Message, StringComparison.Ordinal);
+        Assert.Equal("isCrawford", ex.ParamName);
     }
 
     [Fact]

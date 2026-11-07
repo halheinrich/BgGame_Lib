@@ -20,7 +20,7 @@ namespace BgGame_Lib;
 /// <param name="SeatOneScore">Points seat One has entering this game (before any of its awards).</param>
 /// <param name="SeatTwoScore">Points seat Two has entering this game (before any of its awards).</param>
 /// <param name="IsCrawford">
-/// True iff this is the Crawford game — the one game after a side reaches
+/// True iff this is the Crawford game — the one game after a side first reaches
 /// <see cref="MatchState.MatchLength"/> − 1, during which the cube is suspended.
 /// The same value the substrate computes for game construction (see
 /// <see cref="MatchState.IsCrawford"/>); always false in money games and
