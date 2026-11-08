@@ -213,7 +213,7 @@ public class MatchRunnerTests
         Assert.Equal(0, result.SeatTwoScore);
     }
 
-    // ── What agents see: the snapshot the transcript records (#533) ──
+    // ── What agents see: the snapshot the transcript records (halheinrich/backgammon#533) ──
     //
     // Every query carries the decision's own GameSnapshot, in the on-roll
     // player's frame. A cube responder gets the offer's snapshot unchanged and

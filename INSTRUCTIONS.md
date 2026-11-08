@@ -120,8 +120,9 @@ each type named is its XML doc.
   (halheinrich/backgammon#286). Enforced: every play is validated before it
   applies, an out-of-contract agent answer aborts the run with
   `AgentContractViolationException`, and an agent cannot reach the live game
-  (it decides on the snapshot the transcript records, #533). Not yet: a
-  finished `GameRecord.Transcript` can still be appended to, and
+  (it decides on the snapshot the transcript records,
+  halheinrich/backgammon#533). Not yet: a finished `GameRecord.Transcript`
+  can still be appended to, and
   `PlayTranscriptEntry` does not check its play against its own board.
 - **A scripted match still reaches Crawford.** Games ended by cube passes bring
   a match to its Crawford game, where the cube window never opens and the

@@ -239,7 +239,7 @@ public class MatchStateTests
         Assert.True(snap.IsCrawford);
     }
 
-    // ── The away counts: what each side still needs (#533) ────────
+    // ── The away counts: what each side still needs (halheinrich/backgammon#533) ──
 
     [Theory]
     [InlineData(5, 0, 0)]
